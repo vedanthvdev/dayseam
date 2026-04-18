@@ -5,6 +5,7 @@ import { LogDrawer } from "./components/LogDrawer";
 import { ReportPreview } from "./components/ReportPreview";
 import { TitleBar } from "./components/TitleBar";
 import { ToastHost } from "./components/ToastHost";
+import { dismissSplash } from "./splash";
 import { ThemeProvider } from "./theme";
 
 const SOURCE_PLACEHOLDERS = [
@@ -51,6 +52,15 @@ export default function App() {
 
   const toggleLogs = useCallback(() => setLogsOpen((prev) => !prev), []);
   const closeLogs = useCallback(() => setLogsOpen(false), []);
+
+  // Remove the inline splash defined in `index.html` the moment the
+  // app has rendered. Running this in an effect (rather than at
+  // module scope) guarantees the user sees the rendered UI at least
+  // one frame before the splash starts fading, so there's no
+  // "splash gone, nothing in its place" flicker.
+  useEffect(() => {
+    dismissSplash();
+  }, []);
 
   // ⌘L (macOS) / Ctrl+L (Linux/Windows) toggles the log drawer.
   // Tauri already blocks the browser's "focus address bar" default

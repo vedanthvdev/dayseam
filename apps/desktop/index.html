@@ -4,8 +4,144 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Dayseam</title>
+    <!--
+      Apply the saved theme BEFORE any CSS or markup renders.
+      Without this, dark-mode users see a bright-white flash for
+      one frame while the webview has the HTML but React hasn't
+      hydrated yet. The logic here mirrors `readInitialTheme` /
+      `resolveTheme` in apps/desktop/src/theme/ThemeProvider.tsx —
+      if you change one, change the other (the Vitest in
+      `App.test.tsx` covers the resolved state, and a manual dark/
+      light cold-start smoke covers this script).
+    -->
+    <script>
+      (function applyInitialTheme() {
+        try {
+          var stored = window.localStorage.getItem("dayseam:theme");
+          var valid = stored === "light" || stored === "dark" || stored === "system";
+          var theme = valid ? stored : "system";
+          var resolved =
+            theme === "system"
+              ? window.matchMedia("(prefers-color-scheme: dark)").matches
+                ? "dark"
+                : "light"
+              : theme;
+          var root = document.documentElement;
+          root.setAttribute("data-theme", resolved);
+          if (resolved === "dark") root.classList.add("dark");
+        } catch (_err) {
+          // localStorage / matchMedia can throw in restricted
+          // Tauri contexts. Falling through leaves the default
+          // light theme, which matches ThemeProvider's fallback.
+        }
+      })();
+    </script>
+    <style>
+      /*
+        Splash styles live inline so they ship with the HTML — the
+        whole point of the splash is to paint before any CSS bundle
+        or JS bundle has loaded. The selectors are all scoped to
+        `#splash` so they cannot bleed into app CSS.
+
+        The fade-out is driven by a `[data-hidden]` attribute that
+        `App.tsx` sets on mount; `pointer-events: none` kicks in
+        immediately so the splash can't intercept clicks during
+        the fade.
+      */
+      html,
+      body {
+        margin: 0;
+        background: #fafafa;
+        color: #171717;
+      }
+      html.dark,
+      html[data-theme="dark"],
+      html.dark body,
+      html[data-theme="dark"] body {
+        background: #0a0a0a;
+        color: #f5f5f5;
+      }
+
+      #splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background: inherit;
+        color: inherit;
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        opacity: 1;
+        transition:
+          opacity 220ms ease-out,
+          visibility 0s linear 0s;
+        z-index: 9999;
+      }
+      #splash[data-hidden="true"] {
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transition:
+          opacity 220ms ease-out,
+          visibility 0s linear 220ms;
+      }
+      #splash .splash-wordmark {
+        font-size: 20px;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+      }
+      #splash .splash-spinner {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        border: 2px solid rgba(115, 115, 115, 0.25);
+        border-top-color: rgba(115, 115, 115, 0.9);
+        animation: splash-spin 720ms linear infinite;
+      }
+      html.dark #splash .splash-spinner,
+      html[data-theme="dark"] #splash .splash-spinner {
+        border-color: rgba(163, 163, 163, 0.2);
+        border-top-color: rgba(229, 229, 229, 0.9);
+      }
+      #splash .splash-hint {
+        font-size: 12px;
+        color: rgba(115, 115, 115, 0.9);
+      }
+      html.dark #splash .splash-hint,
+      html[data-theme="dark"] #splash .splash-hint {
+        color: rgba(163, 163, 163, 0.9);
+      }
+      @keyframes splash-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        #splash .splash-spinner {
+          animation: none;
+          border-top-color: transparent;
+        }
+        #splash {
+          transition: none;
+        }
+      }
+    </style>
   </head>
   <body class="bg-neutral-50 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
+    <!--
+      Splash is part of the initial HTML so it paints immediately.
+      React's App component removes the `data-hidden` attribute
+      (and then the node itself, after the CSS fade) when it
+      mounts — see `apps/desktop/src/splash.ts`.
+    -->
+    <div id="splash" role="status" aria-live="polite" aria-label="Loading Dayseam">
+      <div class="splash-spinner" aria-hidden="true"></div>
+      <div class="splash-wordmark">Dayseam</div>
+      <div class="splash-hint">Loading your workspace…</div>
+    </div>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

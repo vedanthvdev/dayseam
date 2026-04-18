@@ -63,6 +63,20 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- Startup splash: an inline HTML/CSS loader in `index.html` that
+  paints the instant the webview has the document — before Vite's
+  JS bundle parses or React hydrates — and dismisses itself with a
+  220 ms fade as soon as `App` mounts. A companion inline
+  theme-hydration script reads `dayseam:theme` from `localStorage`
+  and applies the matching `data-theme` + `dark` class to
+  `<html>` before the splash paints, so dark-mode users no longer
+  see a bright-white flash on cold start. Honours
+  `prefers-reduced-motion` by removing the node synchronously and
+  disabling the fade animation. Covered by four new Vitest cases
+  (`splash.test.tsx`) that pin the removal contract, the
+  re-entrancy guard, the reduced-motion path, and the
+  missing-node fallback.
+
 - Initial monorepo scaffold: Cargo workspace with seven crate skeletons, pnpm
   workspace with a Tauri + React + TypeScript + Tailwind desktop app shell,
   CI pipeline (rust, frontend, check-semver-label), PR template, and branch
