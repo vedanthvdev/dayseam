@@ -39,8 +39,8 @@ playwright-report/
 test-results/
 
 # --- Tauri bundle output ---
-src-tauri/target/
-src-tauri/gen/schemas/
+**/src-tauri/target/
+**/src-tauri/gen/schemas/
 
 # --- TypeScript incremental ---
 *.tsbuildinfo
@@ -55,7 +55,9 @@ src-tauri/gen/schemas/
 .DS_Store
 .AppleDouble
 .LSOverride
-Icon?
+# The legacy Finder custom-icon file is literally "Icon\r"; matching it
+# safely without also catching directories like "icons/" is awkward, so
+# we skip it. Modern macOS does not generate this file.
 ._*
 
 # --- Editors / IDEs ---

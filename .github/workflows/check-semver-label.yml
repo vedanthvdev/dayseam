@@ -1,0 +1,33 @@
+name: check-semver-label
+
+on:
+  pull_request:
+    types: [opened, labeled, unlabeled, synchronize, reopened]
+
+jobs:
+  check:
+    name: exactly-one-semver-label
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const allowed = [
+              "semver:major",
+              "semver:minor",
+              "semver:patch",
+              "semver:none",
+            ];
+            const labels = context.payload.pull_request.labels.map((l) => l.name);
+            const semver = labels.filter((l) => l.startsWith("semver:"));
+            if (semver.length !== 1) {
+              core.setFailed(
+                `PR must have exactly one semver:* label. Found: ${JSON.stringify(semver)}.`
+              );
+              return;
+            }
+            if (!allowed.includes(semver[0])) {
+              core.setFailed(
+                `Unknown semver label: ${semver[0]}. Allowed: ${allowed.join(", ")}.`
+              );
+            }

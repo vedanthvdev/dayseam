@@ -1,0 +1,42 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Dayseam",
+  "version": "0.0.0",
+  "identifier": "dev.dayseam.desktop",
+  "build": {
+    "beforeDevCommand": "pnpm dev",
+    "beforeBuildCommand": "pnpm build",
+    "devUrl": "http://localhost:1420",
+    "frontendDist": "../dist"
+  },
+  "app": {
+    "windows": [
+      {
+        "title": "Dayseam",
+        "width": 1000,
+        "height": 700,
+        "minWidth": 800,
+        "minHeight": 560,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.png"
+    ],
+    "category": "Productivity",
+    "copyright": "Copyright (c) Dayseam contributors",
+    "shortDescription": "Local-first automated work reporting.",
+    "longDescription": "Dayseam collects evidence of your day across local git and GitLab, generates an editable report, and saves it to markdown or Obsidian."
+  }
+}

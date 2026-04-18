@@ -1,0 +1,24 @@
+{
+  "name": "dayseam-monorepo",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "lint": "pnpm -r lint",
+    "typecheck": "pnpm -r typecheck",
+    "test": "pnpm -r test",
+    "dev": "pnpm --filter @dayseam/desktop dev",
+    "tauri:dev": "pnpm --filter @dayseam/desktop tauri dev",
+    "tauri:build": "pnpm --filter @dayseam/desktop tauri build"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "esbuild"
+    ]
+  }
+}

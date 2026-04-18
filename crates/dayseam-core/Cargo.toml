@@ -1,0 +1,11 @@
+[package]
+name = "dayseam-core"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Core domain types, error taxonomy, and traits shared across Dayseam crates."
+
+[dependencies]
