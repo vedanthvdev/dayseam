@@ -12,3 +12,11 @@ All notable changes to Dayseam are documented in this file. The format follows
   workspace with a Tauri + React + TypeScript + Tailwind desktop app shell,
   CI pipeline (rust, frontend, check-semver-label), PR template, and branch
   protection setup script.
+- `dayseam-core` domain types, `DayseamError` taxonomy with stable error
+  codes, and ts-rs-generated TypeScript bindings committed to
+  `packages/ipc-types/src/generated/`.
+- `dayseam-db`: SQLite persistence layer with the v1 schema from design
+  §5.2, a `sqlx`-managed migration, and typed repositories for every table
+  (`SourceRepo`, `IdentityRepo`, `LocalRepoRepo`, `ActivityRepo`,
+  `RawPayloadRepo`, `DraftRepo`, `LogRepo`, `SettingsRepo`). `open(path)`
+  enables WAL + foreign keys and is idempotent across re-opens.

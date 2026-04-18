@@ -1,10 +1,26 @@
-//! dayseam-db: SQLite persistence layer. Schema, migrations, and typed
-//! repositories land in a later Phase 1 task.
+//! `dayseam-db` — the single persistence layer used by every other Dayseam
+//! crate. Nothing else in the workspace touches SQLite directly; everything
+//! flows through the typed repositories exposed here so we never sprinkle
+//! ad-hoc SQL across connectors or the report engine.
+//!
+//! The schema is versioned via `sqlx::migrate!("./migrations")`, opening
+//! a pool runs any pending migrations, and every repository round-trip is
+//! covered by integration tests in `tests/repos.rs`.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_compiles_and_tests_run() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+pub mod error;
+pub mod pool;
+pub mod repos;
+
+pub use error::{DbError, DbResult};
+pub use pool::open;
+
+pub use repos::{
+    activity_events::ActivityRepo,
+    drafts::DraftRepo,
+    identities::IdentityRepo,
+    local_repos::LocalRepoRepo,
+    logs::{LogRepo, LogRow},
+    raw_payloads::{RawPayload, RawPayloadRepo},
+    settings::SettingsRepo,
+    sources::SourceRepo,
+};
