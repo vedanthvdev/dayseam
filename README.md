@@ -38,25 +38,29 @@ for you, from the evidence your tools already keep.
 - **Never fail silently.** Every collector streams progress; every
   error carries a clear message and a suggested action.
 
-## Roadmap
+## Roadmap & architecture
 
-- **v0.1 (in design).** Mac desktop app (Tauri). Local git + self-hosted
-  GitLab sources. Markdown + Obsidian sink. Single-day reports.
-- **v0.2+.** OAuth for GitLab, date-range reports, scheduler,
-  additional connectors (GitHub, Jira, Slack, Confluence).
-- **Later.** Optional local LLM rewrite, Windows/Linux builds, team
-  features.
+The canonical, living reference is [`ARCHITECTURE.md`](./ARCHITECTURE.md).
+It covers the system top-to-bottom — principles, repo layout, backend
+and frontend architecture, the connector and sink contracts, and a
+versioned roadmap from v0.1 through v1.0 with the per-version rationale.
 
-## Architecture (sketch)
+Short version:
 
-A TypeScript/React frontend inside a Tauri shell, with a Rust core that
-owns connectors, the SQLite activity store, the report engine, and the
-sink adapters. Every connector and sink implements a small, typed
-interface, so adding a new source (say, Jira) or a new destination
-(say, Notion) is a standalone crate that doesn't touch the core.
+- **Shape.** TypeScript/React frontend inside a Tauri shell, with a
+  Rust core that owns connectors, the SQLite activity store, the report
+  engine, and the sink adapters. Every connector and sink implements a
+  small, typed trait, so adding a new source (Jira, Notion, …) or a new
+  destination is a standalone crate that doesn't touch the core.
+- **v0.1 (in progress).** Mac app. Local git + self-hosted GitLab.
+  Markdown + Obsidian sink. Single-day reports.
+- **v0.2 → v0.5.** More sources (GitHub, Jira, Slack, Confluence),
+  scheduling, optional AI rewrite.
+- **v0.6 → v1.0.** Cross-platform (Windows, Linux), web companion,
+  stable public release.
 
-Full design document will be committed to
-`docs/design/v0.1-design.md` once the design phase completes.
+Deep detail for v0.1 lives in
+[`docs/design/2026-04-17-v0.1-design.md`](./docs/design/2026-04-17-v0.1-design.md).
 
 ## Contributing
 

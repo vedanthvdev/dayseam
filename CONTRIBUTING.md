@@ -75,12 +75,22 @@ CI runs the same commands — if they are green locally they will be green in CI
 
 ## Design and plan documents
 
-- Design: [`docs/design/`](./docs/design/)
-- Plans: [`docs/plan/`](./docs/plan/)
+Before you change something fundamental, read the top-down reference
+document first:
 
-Design docs describe *why*; plans describe *what files in what order, proven
-by what tests*. If a plan step and the design conflict, the design is the
-contract — flag the conflict in the PR.
+- **Architecture & roadmap:** [`ARCHITECTURE.md`](./ARCHITECTURE.md) —
+  the living, top-down view of the system: principles, repo layout,
+  backend/frontend architecture, the connector and sink contracts, and
+  the versioned roadmap. If your PR changes the shape of the system,
+  update this file in the same PR.
+- **Per-version design docs:** [`docs/design/`](./docs/design/) — deep
+  detail for a specific release (schema, templates, error codes).
+- **Per-phase implementation plans:** [`docs/plan/`](./docs/plan/) —
+  the "what files in what order, proven by what tests" level.
+
+Design docs describe *why*; plans describe *what files in what order,
+proven by what tests*. If a plan step and the design conflict, the
+design is the contract — flag the conflict in the PR.
 
 ## License
 
