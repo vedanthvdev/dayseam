@@ -9,3 +9,18 @@ rust-version.workspace = true
 description = "Secret storage abstraction for Dayseam: macOS Keychain wrapper and in-memory test store."
 
 [dependencies]
+thiserror = { workspace = true }
+# `zeroize` gives us `String: Zeroize` (via the default `alloc` feature)
+# and a `#[derive(Zeroize)]` proc-macro behind `zeroize_derive`.
+zeroize = { version = "1", features = ["zeroize_derive"] }
+# `keyring` powers the macOS Keychain backend. Gated behind the
+# `keychain` feature so the crate still builds on CI runners and in
+# tests without pulling in the platform-specific dependency tree.
+keyring = { version = "2", optional = true }
+
+[features]
+default = ["keychain"]
+keychain = ["dep:keyring"]
+
+[dev-dependencies]
+uuid = { workspace = true }

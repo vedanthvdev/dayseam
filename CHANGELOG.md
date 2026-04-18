@@ -20,3 +20,9 @@ All notable changes to Dayseam are documented in this file. The format follows
   (`SourceRepo`, `IdentityRepo`, `LocalRepoRepo`, `ActivityRepo`,
   `RawPayloadRepo`, `DraftRepo`, `LogRepo`, `SettingsRepo`). `open(path)`
   enables WAL + foreign keys and is idempotent across re-opens.
+- `dayseam-secrets`: `Secret<T>` wrapper with redacting `Debug`/`Display`
+  and zeroing `Drop`, a narrow `SecretStore` trait, an `InMemoryStore`
+  for tests, and a feature-gated `KeychainStore` that stores tokens in
+  the macOS Keychain under a `service::account` composite key. Delete is
+  idempotent and the macOS round-trip is covered by an `#[ignore]`d
+  smoke test.
