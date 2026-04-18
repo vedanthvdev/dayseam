@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Phase 1 default capability — the allow-list is intentionally empty. Tauri v2 denies every command that is not explicitly named in `permissions`, and Task 9 is the first PR that appends concrete command identifiers (per-run channels for progress/log streams, `sources.list`, etc.). Keeping an empty capability here from Phase 1 means every command added later has to pass a review that also touches this file.",
+  "windows": ["main"],
+  "permissions": []
+}

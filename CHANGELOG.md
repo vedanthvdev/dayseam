@@ -158,3 +158,28 @@ All notable changes to Dayseam are documented in this file. The format follows
     `no_cross_crate_leak` guard that fails the build if `sinks-sdk`
     ever picks up a dependency on `dayseam-db`, `dayseam-secrets`,
     `dayseam-report`, or `connectors-sdk`.
+- Tauri desktop app shell: a full wireframe-matching window decomposed
+  into `TitleBar`, `ActionBar`, `ReportPreview`, `Footer`, and
+  `ThemeToggle` components, plus an inline Sources row. Every Phase-1
+  interactive element (date picker, Generate report button, source
+  cards) ships visibly disabled and title-hinted so the window never
+  looks broken.
+- Theme system under `apps/desktop/src/theme/` with a `ThemeContext` +
+  `ThemeProvider` + `useTheme` triad, a `light | dark | system`
+  selection persisted to `localStorage` under `dayseam:theme`,
+  `data-theme` + Tailwind `dark` class applied to `<html>`, and a
+  `prefers-color-scheme` media-query listener that live-reconciles the
+  resolved theme when `system` is selected and the OS appearance
+  changes.
+- Tauri v2 capability wiring: `apps/desktop/src-tauri/capabilities/default.json`
+  lands as an explicit empty allow-list, referenced by
+  `tauri.conf.json`'s `app.security.capabilities`. v2's deny-by-default
+  model means no Rust command is callable from the frontend until
+  Task 9 appends its identifier here — every future IPC command now
+  has to pass a review that touches this file.
+- Desktop tests: expanded `App.test.tsx` (landmark coverage, disabled
+  actions with helpful titles, full Light/System/Dark toggle behaviour,
+  persistence round-trip, `aria-checked` marking) and a new
+  `App.snapshot.test.tsx` with inline light-theme and dark-theme DOM
+  snapshots so layout drift is a reviewed event rather than an
+  accidental one.

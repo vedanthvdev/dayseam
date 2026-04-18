@@ -1,68 +1,58 @@
-import { useEffect, useState } from "react";
+import { ActionBar } from "./components/ActionBar";
+import { Footer } from "./components/Footer";
+import { ReportPreview } from "./components/ReportPreview";
+import { TitleBar } from "./components/TitleBar";
+import { ThemeProvider } from "./theme";
 
-type Theme = "light" | "dark" | "system";
+const SOURCE_PLACEHOLDERS = [
+  { id: "local-git", label: "Local git" },
+  { id: "gitlab", label: "GitLab" },
+] as const;
 
-const THEME_STORAGE_KEY = "dayseam:theme";
-
-function applyTheme(theme: Theme) {
-  const root = document.documentElement;
-  const prefersDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
-  const effective = theme === "system" ? (prefersDark ? "dark" : "light") : theme;
-  root.classList.toggle("dark", effective === "dark");
-}
-
-function readInitialTheme(): Theme {
-  const stored = localStorage.getItem(THEME_STORAGE_KEY);
-  if (stored === "light" || stored === "dark" || stored === "system") {
-    return stored;
-  }
-  return "system";
+/**
+ * Static sources row. Phase 2 wires the cards to the `sources.list`
+ * IPC command, at which point each card becomes a sync-status tile.
+ */
+function SourcesRow() {
+  return (
+    <section
+      aria-label="Connected sources"
+      className="flex flex-wrap items-center gap-2 border-b border-neutral-200 px-6 py-3 dark:border-neutral-800"
+    >
+      <span className="text-xs uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
+        Sources
+      </span>
+      {SOURCE_PLACEHOLDERS.map((source) => (
+        <span
+          key={source.id}
+          title="Connect flow lands in Phase 2."
+          className="inline-flex items-center gap-1.5 rounded border border-dashed border-neutral-300 px-2 py-0.5 text-xs text-neutral-500 dark:border-neutral-700 dark:text-neutral-400"
+        >
+          <span
+            aria-hidden="true"
+            className="h-1.5 w-1.5 rounded-full bg-neutral-300 dark:bg-neutral-600"
+          />
+          {source.label}
+          <span className="sr-only"> — not connected</span>
+        </span>
+      ))}
+      <span className="ml-auto text-xs text-neutral-400 dark:text-neutral-500">
+        No sources connected
+      </span>
+    </section>
+  );
 }
 
 export default function App() {
-  const [theme, setTheme] = useState<Theme>(readInitialTheme);
-
-  useEffect(() => {
-    applyTheme(theme);
-    localStorage.setItem(THEME_STORAGE_KEY, theme);
-  }, [theme]);
-
-  useEffect(() => {
-    if (theme !== "system") return;
-    const media = window.matchMedia("(prefers-color-scheme: dark)");
-    const listener = () => applyTheme("system");
-    media.addEventListener("change", listener);
-    return () => media.removeEventListener("change", listener);
-  }, [theme]);
-
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center gap-6 px-8">
-      <h1 className="text-4xl font-semibold tracking-tight">Dayseam</h1>
-      <p className="max-w-md text-center text-sm text-neutral-500 dark:text-neutral-400">
-        Scaffold ready. Connectors, reports, and sinks land in later Phase 1 tasks.
-      </p>
-      <div
-        role="radiogroup"
-        aria-label="Theme"
-        className="inline-flex rounded-md border border-neutral-300 p-1 text-sm dark:border-neutral-700"
-      >
-        {(["light", "system", "dark"] as const).map((option) => (
-          <button
-            key={option}
-            role="radio"
-            aria-checked={theme === option}
-            onClick={() => setTheme(option)}
-            className={
-              "rounded px-3 py-1 transition " +
-              (theme === option
-                ? "bg-neutral-900 text-white dark:bg-neutral-100 dark:text-neutral-900"
-                : "text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100")
-            }
-          >
-            {option[0]!.toUpperCase() + option.slice(1)}
-          </button>
-        ))}
+    <ThemeProvider>
+      <div className="flex min-h-screen flex-col bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
+        <TitleBar />
+        <ActionBar />
+        <SourcesRow />
+        <ReportPreview />
+        <Footer />
       </div>
-    </main>
+    </ThemeProvider>
   );
 }
