@@ -10,11 +10,13 @@ use std::path::PathBuf;
 
 use chrono::{TimeZone, Utc};
 use dayseam_core::{
-    error_codes, ActivityEvent, ActivityKind, Actor, DayseamError, EntityRef, Evidence, Identity,
-    Link, LocalRepo, LogEntry, LogEvent, LogLevel, Person, Privacy, ProgressEvent, ProgressPhase,
-    RawRef, RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Sink,
-    SinkConfig, SinkKind, Source, SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind,
-    SourceKind, SourceRunState, ToastEvent, ToastSeverity, WriteReceipt,
+    error_codes, ActivityEvent, ActivityKind, Actor, Artifact, ArtifactId, ArtifactKind,
+    ArtifactPayload, DayseamError, EntityRef, Evidence, Identity, Link, LocalRepo, LogEntry,
+    LogEvent, LogLevel, PerSourceState, Person, Privacy, ProgressEvent, ProgressPhase, RawRef,
+    RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Sink, SinkConfig,
+    SinkKind, Source, SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind,
+    SourceRunState, SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger, ToastEvent,
+    ToastSeverity, WriteReceipt,
 };
 use proptest::prelude::*;
 use uuid::Uuid;
@@ -399,6 +401,96 @@ fn dayseam_error_round_trips_for_every_variant() {
     for case in cases {
         round_trip(&case);
     }
+}
+
+#[test]
+fn artifact_id_round_trips() {
+    round_trip(&ArtifactId::new());
+    round_trip(&ArtifactId::deterministic(
+        &Uuid::nil(),
+        ArtifactKind::CommitSet,
+        "/Users/v/Code/dayseam@2026-04-17",
+    ));
+}
+
+#[test]
+fn artifact_round_trips_for_every_payload() {
+    let source_id = Uuid::nil();
+    let external_id = "/Users/v/Code/dayseam@2026-04-17".to_string();
+    let artifact = Artifact {
+        id: ArtifactId::deterministic(&source_id, ArtifactKind::CommitSet, &external_id),
+        source_id,
+        kind: ArtifactKind::CommitSet,
+        external_id,
+        payload: ArtifactPayload::CommitSet {
+            repo_path: PathBuf::from("/Users/v/Code/dayseam"),
+            date: chrono::NaiveDate::from_ymd_opt(2026, 4, 17).unwrap(),
+            event_ids: vec![Uuid::new_v4(), Uuid::new_v4()],
+            commit_shas: vec!["abc123".into(), "def456".into()],
+        },
+        created_at: Utc.with_ymd_and_hms(2026, 4, 17, 10, 0, 0).unwrap(),
+    };
+    round_trip(&artifact);
+}
+
+#[test]
+fn sync_run_trigger_round_trips() {
+    round_trip(&SyncRunTrigger::User);
+    round_trip(&SyncRunTrigger::Retry {
+        previous_run_id: RunId::new(),
+    });
+}
+
+#[test]
+fn sync_run_cancel_reason_round_trips() {
+    round_trip(&SyncRunCancelReason::User);
+    round_trip(&SyncRunCancelReason::Shutdown);
+    round_trip(&SyncRunCancelReason::SupersededBy {
+        run_id: RunId::new(),
+    });
+}
+
+#[test]
+fn sync_run_status_round_trips() {
+    for status in [
+        SyncRunStatus::Running,
+        SyncRunStatus::Completed,
+        SyncRunStatus::Cancelled,
+        SyncRunStatus::Failed,
+    ] {
+        round_trip(&status);
+    }
+}
+
+#[test]
+fn sync_run_round_trips_with_per_source_state() {
+    let started_at = Utc.with_ymd_and_hms(2026, 4, 17, 9, 30, 0).unwrap();
+    let source_id = Uuid::new_v4();
+    let per_source = vec![PerSourceState {
+        source_id,
+        status: RunStatus::Failed,
+        started_at,
+        finished_at: Some(started_at + chrono::Duration::seconds(4)),
+        fetched_count: 2,
+        error: Some(DayseamError::Network {
+            code: error_codes::GITLAB_URL_DNS.into(),
+            message: "no such host".into(),
+        }),
+    }];
+    let previous = RunId::new();
+    let run = SyncRun {
+        id: RunId::new(),
+        started_at,
+        finished_at: Some(started_at + chrono::Duration::seconds(5)),
+        trigger: SyncRunTrigger::Retry {
+            previous_run_id: previous,
+        },
+        status: SyncRunStatus::Cancelled,
+        cancel_reason: Some(SyncRunCancelReason::SupersededBy { run_id: previous }),
+        superseded_by: Some(previous),
+        per_source_state: per_source,
+    };
+    round_trip(&run);
 }
 
 proptest! {

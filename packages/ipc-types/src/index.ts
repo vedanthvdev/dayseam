@@ -13,6 +13,17 @@ export type { Link } from "./generated/Link";
 export type { Privacy } from "./generated/Privacy";
 export type { RawRef } from "./generated/RawRef";
 
+export type { Artifact } from "./generated/Artifact";
+export type { ArtifactId } from "./generated/ArtifactId";
+export type { ArtifactKind } from "./generated/ArtifactKind";
+export type { ArtifactPayload } from "./generated/ArtifactPayload";
+
+export type { SyncRun } from "./generated/SyncRun";
+export type { SyncRunTrigger } from "./generated/SyncRunTrigger";
+export type { SyncRunStatus } from "./generated/SyncRunStatus";
+export type { SyncRunCancelReason } from "./generated/SyncRunCancelReason";
+export type { PerSourceState } from "./generated/PerSourceState";
+
 export type { Source } from "./generated/Source";
 export type { SourceConfig } from "./generated/SourceConfig";
 export type { SourceHealth } from "./generated/SourceHealth";

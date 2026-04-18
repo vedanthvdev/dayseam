@@ -46,6 +46,32 @@ pub const HTTP_RETRY_BUDGET_EXHAUSTED: &str = "http.retry.budget_exhausted";
 /// endpoint that isn't bound to a specific connector.
 pub const HTTP_TRANSPORT: &str = "http.transport";
 
+// -------- Orchestrator ------------------------------------------------------
+
+/// A run's terminal `Cancelled` state is reached because a newer run for the
+/// same `(person_id, date, template_id)` tuple superseded it. The stream's
+/// final `ProgressPhase::Failed` carries this code so the UI can render a
+/// distinct "superseded" chip instead of a generic cancel.
+pub const ORCHESTRATOR_RUN_SUPERSEDED: &str = "orchestrator.run.superseded";
+/// The orchestrator tripped cancellation on a run (user clicked Cancel,
+/// app is shutting down, …). Distinct from the connector-level
+/// `run.cancelled.*` codes so log-parsers can tell the difference
+/// between "a connector observed cancel" and "the orchestrator
+/// intentionally cancelled the whole run".
+pub const ORCHESTRATOR_RUN_CANCELLED: &str = "orchestrator.run.cancelled";
+/// The orchestrator's startup sweep found a `sync_runs` row still in
+/// `Running` with `finished_at IS NULL` — evidence of an unclean
+/// shutdown. The row is rewritten to `Failed` with this code so the
+/// next UI render can surface the recovery explicitly.
+pub const INTERNAL_PROCESS_RESTARTED: &str = "internal.process_restarted";
+
+// -------- Database ---------------------------------------------------------
+
+/// `sqlx::migrate!` failed to apply a pending migration. Always fatal
+/// at startup; the app bails out rather than run against a half-
+/// migrated schema.
+pub const DB_SCHEMA_MIGRATION_FAILED: &str = "db.schema.migration_failed";
+
 /// All known codes in declaration order. The snapshot test iterates over
 /// this slice so a missing entry means either the slice wasn't updated or
 /// a constant was renamed — in either case review needs to happen.
@@ -68,6 +94,10 @@ pub const ALL: &[&str] = &[
     CONNECTOR_UNSUPPORTED_SYNC_REQUEST,
     HTTP_RETRY_BUDGET_EXHAUSTED,
     HTTP_TRANSPORT,
+    ORCHESTRATOR_RUN_SUPERSEDED,
+    ORCHESTRATOR_RUN_CANCELLED,
+    INTERNAL_PROCESS_RESTARTED,
+    DB_SCHEMA_MIGRATION_FAILED,
 ];
 
 #[cfg(test)]

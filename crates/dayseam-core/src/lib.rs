@@ -13,6 +13,7 @@ pub mod types;
 pub use error::DayseamError;
 pub use types::{
     activity::{ActivityEvent, ActivityKind, Actor, EntityRef, Link, Privacy, RawRef},
+    artifact::{Artifact, ArtifactId, ArtifactKind, ArtifactPayload},
     events::{LogEvent, ProgressEvent, ProgressPhase, RunId, ToastEvent, ToastSeverity},
     identity::{Identity, Person, SourceIdentity, SourceIdentityKind},
     repo::LocalRepo,
@@ -20,6 +21,7 @@ pub use types::{
         Evidence, LogEntry, LogLevel, RenderedBullet, RenderedSection, ReportDraft, RunStatus,
         SourceRunState,
     },
+    run::{PerSourceState, SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger},
     settings::{Settings, SettingsPatch, ThemePreference},
     sink::{CapabilityConflict, Sink, SinkCapabilities, SinkConfig, SinkKind, WriteReceipt},
     source::{SecretRef, Source, SourceConfig, SourceHealth, SourceId, SourceKind},

@@ -16,11 +16,15 @@ pub use pool::open;
 
 pub use repos::{
     activity_events::ActivityRepo,
+    artifacts::ArtifactRepo,
     drafts::DraftRepo,
     identities::IdentityRepo,
     local_repos::LocalRepoRepo,
     logs::{LogRepo, LogRow},
+    persons::PersonRepo,
     raw_payloads::{RawPayload, RawPayloadRepo},
     settings::SettingsRepo,
+    source_identities::SourceIdentityRepo,
     sources::SourceRepo,
+    sync_runs::SyncRunRepo,
 };
