@@ -6,6 +6,15 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "Progress, log, and toast event bus for Dayseam."
+description = "Per-run streams and app-wide broadcast bus for Dayseam progress, log, and toast events."
 
 [dependencies]
+dayseam-core = { path = "../dayseam-core" }
+tokio = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "time", "sync"] }

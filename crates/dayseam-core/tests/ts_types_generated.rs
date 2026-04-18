@@ -16,8 +16,9 @@ use std::process::Command;
 
 use dayseam_core::{
     ActivityEvent, ActivityKind, Actor, DayseamError, EntityRef, Evidence, Identity, Link,
-    LocalRepo, LogEntry, LogLevel, Privacy, RawRef, RenderedBullet, RenderedSection, ReportDraft,
-    RunStatus, SecretRef, Source, SourceConfig, SourceHealth, SourceKind, SourceRunState,
+    LocalRepo, LogEntry, LogEvent, LogLevel, Privacy, ProgressEvent, ProgressPhase, RawRef,
+    RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Source,
+    SourceConfig, SourceHealth, SourceKind, SourceRunState, ToastEvent, ToastSeverity,
 };
 use ts_rs::{Config, TS};
 
@@ -57,6 +58,13 @@ fn export_all(out_dir: &Path) {
     RunStatus::export_all(&cfg).expect("export RunStatus");
     LogEntry::export_all(&cfg).expect("export LogEntry");
     LogLevel::export_all(&cfg).expect("export LogLevel");
+
+    RunId::export_all(&cfg).expect("export RunId");
+    ProgressEvent::export_all(&cfg).expect("export ProgressEvent");
+    ProgressPhase::export_all(&cfg).expect("export ProgressPhase");
+    LogEvent::export_all(&cfg).expect("export LogEvent");
+    ToastEvent::export_all(&cfg).expect("export ToastEvent");
+    ToastSeverity::export_all(&cfg).expect("export ToastSeverity");
 
     DayseamError::export_all(&cfg).expect("export DayseamError");
 }

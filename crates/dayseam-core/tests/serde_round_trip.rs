@@ -11,9 +11,9 @@ use std::path::PathBuf;
 use chrono::{TimeZone, Utc};
 use dayseam_core::{
     error_codes, ActivityEvent, ActivityKind, Actor, DayseamError, EntityRef, Evidence, Identity,
-    Link, LocalRepo, LogEntry, LogLevel, Privacy, RawRef, RenderedBullet, RenderedSection,
-    ReportDraft, RunStatus, SecretRef, Source, SourceConfig, SourceHealth, SourceKind,
-    SourceRunState,
+    Link, LocalRepo, LogEntry, LogEvent, LogLevel, Privacy, ProgressEvent, ProgressPhase, RawRef,
+    RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Source,
+    SourceConfig, SourceHealth, SourceKind, SourceRunState, ToastEvent, ToastSeverity,
 };
 use proptest::prelude::*;
 use uuid::Uuid;
@@ -189,6 +189,91 @@ fn log_entry_round_trips() {
         message: "hello".into(),
     };
     round_trip(&entry);
+}
+
+#[test]
+fn run_id_round_trips() {
+    let rid = RunId::new();
+    round_trip(&rid);
+}
+
+#[test]
+fn progress_event_round_trips_for_every_phase() {
+    let run_id = RunId::new();
+    let source_id = Some(Uuid::new_v4());
+    let emitted_at = Utc.with_ymd_and_hms(2026, 4, 17, 9, 30, 0).unwrap();
+    let phases = vec![
+        ProgressPhase::Starting {
+            message: "Starting GitLab fetch".into(),
+        },
+        ProgressPhase::InProgress {
+            completed: 3,
+            total: Some(10),
+            message: "3 / 10".into(),
+        },
+        ProgressPhase::InProgress {
+            completed: 0,
+            total: None,
+            message: "Scanning repos…".into(),
+        },
+        ProgressPhase::Completed {
+            message: "Done".into(),
+        },
+        ProgressPhase::Failed {
+            code: error_codes::GITLAB_AUTH_INVALID_TOKEN.into(),
+            message: "token expired".into(),
+        },
+    ];
+    for phase in phases {
+        round_trip(&ProgressEvent {
+            run_id,
+            source_id,
+            phase,
+            emitted_at,
+        });
+    }
+}
+
+#[test]
+fn log_event_round_trips() {
+    let event = LogEvent {
+        run_id: Some(RunId::new()),
+        source_id: Some(Uuid::new_v4()),
+        level: LogLevel::Warn,
+        message: "retrying after 429".into(),
+        context: serde_json::json!({ "retry_after_secs": 30, "attempt": 2 }),
+        emitted_at: Utc.with_ymd_and_hms(2026, 4, 17, 9, 30, 0).unwrap(),
+    };
+    round_trip(&event);
+
+    let system_event = LogEvent {
+        run_id: None,
+        source_id: None,
+        level: LogLevel::Info,
+        message: "Dayseam started".into(),
+        context: serde_json::Value::Null,
+        emitted_at: Utc.with_ymd_and_hms(2026, 4, 17, 9, 0, 0).unwrap(),
+    };
+    round_trip(&system_event);
+}
+
+#[test]
+fn toast_event_round_trips_for_every_severity() {
+    let emitted_at = Utc.with_ymd_and_hms(2026, 4, 17, 9, 30, 0).unwrap();
+    for severity in [
+        ToastSeverity::Info,
+        ToastSeverity::Success,
+        ToastSeverity::Warning,
+        ToastSeverity::Error,
+    ] {
+        round_trip(&ToastEvent {
+            id: Uuid::new_v4(),
+            severity,
+            title: "Connected to GitLab".into(),
+            body: Some("Found 3 projects you're a member of.".into()),
+            emitted_at,
+        });
+    }
 }
 
 #[test]

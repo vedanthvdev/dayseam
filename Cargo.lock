@@ -855,6 +855,14 @@ dependencies = [
 [[package]]
 name = "dayseam-events"
 version = "0.0.0"
+dependencies = [
+ "chrono",
+ "dayseam-core",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "uuid",
+]
 
 [[package]]
 name = "dayseam-report"

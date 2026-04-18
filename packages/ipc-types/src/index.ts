@@ -31,6 +31,13 @@ export type { RunStatus } from "./generated/RunStatus";
 export type { LogEntry } from "./generated/LogEntry";
 export type { LogLevel } from "./generated/LogLevel";
 
+export type { RunId } from "./generated/RunId";
+export type { ProgressEvent } from "./generated/ProgressEvent";
+export type { ProgressPhase } from "./generated/ProgressPhase";
+export type { LogEvent } from "./generated/LogEvent";
+export type { ToastEvent } from "./generated/ToastEvent";
+export type { ToastSeverity } from "./generated/ToastSeverity";
+
 export type { DayseamError } from "./generated/DayseamError";
 
 export type { JsonValue } from "./generated/serde_json/JsonValue";
