@@ -12,9 +12,9 @@ use chrono::{TimeZone, Utc};
 use dayseam_core::{
     error_codes, ActivityEvent, ActivityKind, Actor, DayseamError, EntityRef, Evidence, Identity,
     Link, LocalRepo, LogEntry, LogEvent, LogLevel, Person, Privacy, ProgressEvent, ProgressPhase,
-    RawRef, RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Source,
-    SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind, SourceRunState,
-    ToastEvent, ToastSeverity,
+    RawRef, RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Sink,
+    SinkConfig, SinkKind, Source, SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind,
+    SourceKind, SourceRunState, ToastEvent, ToastSeverity, WriteReceipt,
 };
 use proptest::prelude::*;
 use uuid::Uuid;
@@ -159,6 +159,52 @@ fn source_identity_round_trips_for_every_kind() {
             external_actor_id: "42".into(),
         });
     }
+}
+
+#[test]
+fn sink_round_trips() {
+    let sink = Sink {
+        id: Uuid::new_v4(),
+        kind: SinkKind::MarkdownFile,
+        label: "Obsidian vault".into(),
+        config: SinkConfig::MarkdownFile {
+            config_version: 1,
+            dest_dirs: vec![
+                PathBuf::from("/Users/v/notes/daily"),
+                PathBuf::from("/Users/v/Documents/backup"),
+            ],
+            frontmatter: true,
+        },
+        created_at: Utc.with_ymd_and_hms(2026, 4, 17, 10, 0, 0).unwrap(),
+        last_write_at: None,
+    };
+    round_trip(&sink);
+}
+
+#[test]
+fn write_receipt_round_trips() {
+    let receipt = WriteReceipt {
+        run_id: Some(RunId::new()),
+        sink_kind: SinkKind::MarkdownFile,
+        destinations_written: vec![PathBuf::from("/Users/v/notes/daily/2026-04-17.md")],
+        external_refs: Vec::new(),
+        bytes_written: 4321,
+        written_at: Utc.with_ymd_and_hms(2026, 4, 17, 18, 0, 5).unwrap(),
+    };
+    round_trip(&receipt);
+
+    // Adhoc write (not dispatched through the orchestrator) — `run_id`
+    // is `None` so the UI can distinguish a scheduled result from a
+    // manual "Save as…" click.
+    let adhoc = WriteReceipt {
+        run_id: None,
+        sink_kind: SinkKind::MarkdownFile,
+        destinations_written: vec![PathBuf::from("/tmp/one-off.md")],
+        external_refs: Vec::new(),
+        bytes_written: 12,
+        written_at: Utc.with_ymd_and_hms(2026, 4, 17, 18, 0, 5).unwrap(),
+    };
+    round_trip(&adhoc);
 }
 
 #[test]
