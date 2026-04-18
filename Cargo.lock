@@ -633,12 +633,11 @@ dependencies = [
  "reqwest 0.12.28",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
  "tokio",
  "tokio-util",
- "tracing",
  "uuid",
  "wiremock",
+ "zeroize",
 ]
 
 [[package]]
@@ -913,13 +912,11 @@ dependencies = [
  "dayseam-db",
  "dayseam-events",
  "dayseam-secrets",
- "serde",
  "serde_json",
  "sqlx",
  "tauri",
  "tauri-build",
  "tempfile",
- "thiserror 1.0.69",
  "tokio",
  "tokio-util",
  "tracing",
@@ -934,7 +931,6 @@ dependencies = [
  "dayseam-core",
  "serde_json",
  "tokio",
- "tracing",
  "uuid",
 ]
 
@@ -4501,11 +4497,8 @@ dependencies = [
  "chrono",
  "dayseam-core",
  "dayseam-events",
- "serde_json",
- "thiserror 1.0.69",
  "tokio",
  "tokio-util",
- "tracing",
  "uuid",
 ]
 

@@ -32,12 +32,16 @@ pnpm tauri:dev
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace
+cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test --workspace --all-features
 pnpm -r lint
 pnpm -r typecheck
 pnpm -r test --if-present
 ```
+
+`--all-features` is load-bearing: the Tauri desktop crate ships dev-only
+commands behind the `dev-commands` feature, and running the tests without
+it silently skips their coverage.
 
 CI runs the same commands — if they are green locally they will be green in CI.
 

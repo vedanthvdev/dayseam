@@ -26,10 +26,17 @@ use tokio::task::JoinHandle;
 /// listens on the exact same string.
 pub const TOAST_EVENT: &str = "toast";
 
-/// Spawn the long-lived forwarder task. Returns its [`JoinHandle`] so
-/// the caller (currently `AppState` setup) can hold it for the
-/// lifetime of the app — dropping the handle aborts the task, which
-/// is only what we want on shutdown.
+/// Spawn the long-lived forwarder task.
+///
+/// Returns its [`JoinHandle`] so the caller (currently `AppState`
+/// setup) can hold it for the lifetime of the app. Note that in
+/// `tokio`, dropping a `JoinHandle` **detaches** the task — it does
+/// *not* abort it. The forwarder instead exits naturally when the
+/// last [`AppBus`] clone is dropped, because `broadcast::Receiver::recv`
+/// then returns [`ToastSubscribeError::Closed`] and the `run` loop
+/// returns. On shutdown the caller should drop `AppState` (which
+/// holds the last `AppBus`) and, if it needs a deterministic join,
+/// explicitly `.await` this handle or call `.abort()`.
 #[must_use]
 pub fn spawn<R: Runtime>(handle: AppHandle<R>, bus: AppBus, logs: LogRepo) -> JoinHandle<()> {
     tokio::spawn(run(handle, bus, logs))

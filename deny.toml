@@ -1,7 +1,61 @@
+# `cargo deny` configuration.
+#
+# Keep this file in lockstep with the Phase 1 hardening review: every
+# `ignore` entry below carries a one-line rationale so a future
+# reviewer can tell "this is upstream and we can't act on it" apart
+# from "we forgot to fix this".
+
 [advisories]
 version = 2
 yanked = "deny"
-ignore = []
+# Each advisory we ignore is either:
+#   * upstream-only and not reachable from a binary we ship, or
+#   * pinned by a dependency we don't control (Tauri, sqlx).
+# Revisit this list at every phase-end review.
+ignore = [
+    # --- Unmaintained Unicode crates pulled in transitively by Tauri's
+    #     `urlpattern` → `tauri-utils` path. No safe upgrade exists
+    #     today; migration is blocked on Tauri upgrading to ICU4X.
+    { id = "RUSTSEC-2025-0075", reason = "unic-char-range is unmaintained; transitive via tauri-utils" },
+    { id = "RUSTSEC-2025-0080", reason = "unic-common is unmaintained; transitive via tauri-utils" },
+    { id = "RUSTSEC-2025-0081", reason = "unic-char-property is unmaintained; transitive via tauri-utils" },
+    { id = "RUSTSEC-2025-0098", reason = "unic-ucd-version is unmaintained; transitive via tauri-utils" },
+    { id = "RUSTSEC-2025-0100", reason = "unic-ucd-ident is unmaintained; transitive via tauri-utils" },
+    { id = "RUSTSEC-2024-0388", reason = "derivative is unmaintained; transitive via zbus/keyring" },
+    { id = "RUSTSEC-2025-0057", reason = "fxhash is unmaintained; transitive via a Tauri dep" },
+
+    # --- GTK Rust bindings pulled in by Tauri on Linux even when we
+    #     target macOS. They are deprecated in favour of the GTK4
+    #     bindings but Tauri's wry backend still uses the GTK3 set.
+    { id = "RUSTSEC-2024-0411", reason = "gtk is unmaintained; transitive via tauri/wry" },
+    { id = "RUSTSEC-2024-0412", reason = "atk is unmaintained; transitive via tauri/wry" },
+    { id = "RUSTSEC-2024-0413", reason = "atk-sys is unmaintained; transitive via tauri/wry" },
+    { id = "RUSTSEC-2024-0414", reason = "gdk is unmaintained; transitive via tauri/wry" },
+    { id = "RUSTSEC-2024-0415", reason = "gdk-sys is unmaintained; transitive via tauri/wry" },
+    { id = "RUSTSEC-2024-0416", reason = "gdkwayland-sys is unmaintained; transitive via tauri/wry" },
+    { id = "RUSTSEC-2024-0417", reason = "gdkx11 is unmaintained; transitive via tauri/wry" },
+    { id = "RUSTSEC-2024-0418", reason = "gdkx11-sys is unmaintained; transitive via tauri/wry" },
+    { id = "RUSTSEC-2024-0419", reason = "gtk-sys is unmaintained; transitive via tauri/wry" },
+    { id = "RUSTSEC-2024-0420", reason = "gtk3-macros is unmaintained; transitive via tauri/wry" },
+
+    # --- `rsa` timing side-channel (RUSTSEC-2023-0071). Pulled in by
+    #     `sqlx-mysql` for macro expansion only; we compile `sqlx` with
+    #     `default-features = false, features = ["sqlite"]`, so no MySQL
+    #     code is linked into any shipped binary.
+    { id = "RUSTSEC-2023-0071", reason = "rsa Marvin attack; reachable only via sqlx-mysql, which is not a compiled feature" },
+
+    # --- Additional zbus / async-std churn pulled in by `keyring` on
+    #     Linux. macOS uses the Security framework path directly.
+    { id = "RUSTSEC-2024-0384", reason = "instant is unmaintained; transitive via zbus on Linux" },
+    { id = "RUSTSEC-2024-0370", reason = "proc-macro-error is unreleased; transitive via zbus on Linux" },
+    { id = "RUSTSEC-2024-0429", reason = "glib VariantStrIter unsound iter impl; transitive via tauri/wry on Linux" },
+
+    # --- `rand 0.7` unsound-with-custom-logger issue. Reachable only
+    #     through `tauri-build`'s HTML rewriter
+    #     (phf_generator → selectors → kuchikiki) at codegen time. It
+    #     is never linked into the runtime binary.
+    { id = "RUSTSEC-2026-0097", reason = "rand 0.7 unsound-with-custom-logger; build-time only via tauri codegen" },
+]
 
 [licenses]
 version = 2
@@ -19,12 +73,24 @@ allow = [
     "CC0-1.0",
     "Unlicense",
     "0BSD",
+    # Our own code. Every internal workspace crate inherits this from
+    # `[workspace.package]`; listing it here keeps `cargo deny` honest
+    # when it walks our own manifests.
+    "AGPL-3.0-only",
+    # `webpki-roots` (pulled in by rustls) ships Mozilla's root CA list
+    # under CDLA-Permissive-2.0. It is a permissive data licence — the
+    # CA list itself is not linked code — and is required for TLS.
+    "CDLA-Permissive-2.0",
 ]
 confidence-threshold = 0.93
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
+# `dev-dependencies` on internal crates are allowed to omit a version
+# so tests can reference path-only fixtures without us adding a
+# phantom `version = "0.0.0"` everywhere.
+allow-wildcard-paths = true
 
 [sources]
 unknown-registry = "warn"

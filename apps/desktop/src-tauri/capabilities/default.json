@@ -1,14 +1,12 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Phase 1 app-command allow-list. Tauri v2 denies every command that is not explicitly named in `permissions`; adding a command requires touching this file, the Rust `#[tauri::command]` definition, and the TS `Commands` map in `@dayseam/ipc-types` in the same PR. `dev_*` commands are dev-only — in release builds they are compiled out by the `dev-commands` Cargo feature *and* they should be removed from this allow-list before shipping a notarised bundle.",
+  "description": "Phase 1 production app-command allow-list. Tauri v2 denies every command that is not explicitly named in `permissions`; adding a command requires touching this file, the Rust `#[tauri::command]` definition, and the TS `Commands` map in `@dayseam/ipc-types` in the same PR. Dev-only commands live in a sibling `dev.json` capability that is written by `build.rs` only when the `dev-commands` Cargo feature is enabled, so release bundles carry no dev surface at all.",
   "windows": ["main"],
   "permissions": [
     "core:default",
     "allow-settings-get",
     "allow-settings-update",
-    "allow-logs-tail",
-    "allow-dev-emit-toast",
-    "allow-dev-start-demo-run"
+    "allow-logs-tail"
   ]
 }

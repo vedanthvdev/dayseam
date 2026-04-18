@@ -6,6 +6,61 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Phase 1 hardening + cross-cutting review.** Capstone review over
+  every PR merged in Phase 1 (PRs #8 – #26, inventoried in
+  [`docs/review/phase-1-review.md`](./docs/review/phase-1-review.md)).
+  Fixes span correctness, security, architecture, maintainability,
+  performance, testing, and project standards. No behavioural change to
+  downstream callers yet (no real runs ship in Phase 1), so the PR lands
+  under `semver:none`.
+  - **Correctness / performance.**
+    - `LogRepo::tail` now returns newest-first (`ORDER BY ts DESC`). The
+      log drawer and any future tooling over the `logs` table stop
+      rendering the oldest slice once the table grows past the limit.
+    - `HttpClient::compute_backoff` honours `Retry-After` up to a
+      5-minute absolute safety ceiling instead of clamping to our
+      internal `max_backoff`. Polite servers (GitLab, GitHub) stop
+      seeing retry storms.
+    - `RunRegistry` gains `spawn_run_reaper`, which awaits every
+      spawned task, records panics, and removes the registry entry
+      exactly once. The registry no longer leaks handles; shutdown's
+      `cancel_all` is now meaningful.
+  - **Security / architecture.**
+    - `dev-commands` is no longer a default Cargo feature, and the
+      capability file that allow-lists them is split: `capabilities/default.json`
+      is production-only, and `build.rs` emits `capabilities/dev.json`
+      only when `dev-commands` is enabled. Release bundles no longer
+      expose `dev_emit_toast` / `dev_start_demo_run`.
+    - `PatAuth` wraps its PAT in a local `SecretString` (Drop-zeroised,
+      Debug-redacted). Manual `Debug` for `PatAuth` prints `***`. The
+      fix lives inside `connectors-sdk` via the tiny local wrapper so
+      the `no_cross_crate_leak` layering test continues to forbid
+      `connectors-sdk` from depending on `dayseam-secrets`.
+    - `tauri.conf.json` no longer pins `capabilities: ["default"]`, so
+      Tauri auto-discovers the conditional dev capability file.
+  - **Supply chain.**
+    - `deny.toml` + `.cargo/audit.toml` cover advisories, licences, and
+      sources. Every ignored advisory carries a one-line rationale.
+      Licence allow-list adds `AGPL-3.0-only` (our own code) and
+      `CDLA-Permissive-2.0` (Mozilla CA list via `webpki-roots`).
+    - `cargo machete` is clean after removing unused `thiserror` /
+      `tracing` / `serde_json` / `serde` deps across `connectors-sdk`,
+      `dayseam-events`, `sinks-sdk`, and `dayseam-desktop`.
+    - Every internal crate inherits `publish = false` from the
+      workspace and pins internal path deps at `version = "0.0.0"`, so
+      `cargo deny` is green on both the licence and bans axes.
+  - **Docs / standards.**
+    - README status blockquote rewritten to reflect that Phase 1
+      foundations have landed (crates + Tauri shell + typed IPC) but
+      no source connectors or sinks yet.
+    - `SinkCapabilities` re-exported from `@dayseam/ipc-types`.
+    - `CONTRIBUTING.md` test recipe now uses `--all-features` so the
+      dev-command paths are covered locally.
+    - `LogLevel` gains per-variant doc comments pinning the
+      filter-ordering contract.
+
 ### Added
 
 - Initial monorepo scaffold: Cargo workspace with seven crate skeletons, pnpm
@@ -26,6 +81,13 @@ All notable changes to Dayseam are documented in this file. The format follows
   the macOS Keychain under a `service::account` composite key. Delete is
   idempotent and the macOS round-trip is covered by an `#[ignore]`d
   smoke test.
+- Phase 1 implementation plan realigned with `ARCHITECTURE.md` and
+  extended with an explicit phase-end hardening review task (PR #18):
+  rewrites the per-task contracts in `docs/plan/2026-04-17-v0.1-plan.md`
+  so they match the canonical crate boundaries in `ARCHITECTURE.md`,
+  adds Task 10 (cross-cutting review) as a mandatory final step for
+  every phase, and documents the semver-label CI requirement so
+  future phases inherit the same landing pattern.
 - `ARCHITECTURE.md`: top-down living architecture + versioned roadmap
   for Dayseam. Covers principles, repo layout, runtime topology, the
   connector/sink contracts, the canonical artifact layer, persistence

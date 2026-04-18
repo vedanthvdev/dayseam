@@ -22,15 +22,21 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 /// Per-run bookkeeping used by the IPC layer: the cancellation token
-/// that aborts the run, and the task handles spawned to pump the
-/// per-run streams into Tauri `Channel<T>`s.
+/// that aborts the run and the reaper task that waits for every
+/// forwarder + producer to finish before deregistering the run.
+///
+/// Keeping only the reaper (rather than every spawned task
+/// individually) means a shutdown path that wants to wait for runs to
+/// drain only has to await one `JoinHandle` per active run.
 #[derive(Debug)]
 pub struct RunHandle {
     pub run_id: RunId,
     pub cancel: CancellationToken,
-    /// Forwarder tasks (progress + log + producer). Held onto so the
-    /// registry can `await` or `abort` them on shutdown.
-    pub tasks: Vec<JoinHandle<()>>,
+    /// Reaper task — completes once all of the run's spawned tasks
+    /// have finished and the registry entry has been removed. `None`
+    /// is only used by unit tests that construct a handle without a
+    /// real reaper.
+    pub reaper: Option<JoinHandle<()>>,
 }
 
 /// Registry of currently-live sync runs keyed by [`RunId`].
@@ -90,11 +96,18 @@ impl RunRegistry {
 
 /// Process-wide state. Cheap to share — every field is either cheaply
 /// cloneable (`SqlitePool`, `AppBus`) or behind an `Arc` / `RwLock`.
+///
+/// `runs` is an `Arc<RwLock<RunRegistry>>` specifically so a run's
+/// reaper task can hold its own clone of the registry handle and
+/// remove the run once all forwarders + producer have finished.
+/// Without the `Arc`, the reaper would have no way back into the
+/// registry without going through `AppHandle::state()` on every
+/// wake-up.
 pub struct AppState {
     pub pool: SqlitePool,
     pub app_bus: AppBus,
     pub secrets: Arc<dyn SecretStore>,
-    pub runs: RwLock<RunRegistry>,
+    pub runs: Arc<RwLock<RunRegistry>>,
 }
 
 impl AppState {
@@ -107,9 +120,39 @@ impl AppState {
             pool,
             app_bus,
             secrets,
-            runs: RwLock::new(RunRegistry::new()),
+            runs: Arc::new(RwLock::new(RunRegistry::new())),
         }
     }
+}
+
+/// Spawn a reaper task that waits for every handle in `tasks` to
+/// finish and then deregisters `run_id` from `registry`.
+///
+/// This is how the run lifecycle closes the loop end-to-end: when the
+/// producer closes its senders, the forwarders' receivers return
+/// `None`, the forwarders exit, the reaper's `join_all` completes,
+/// and the run disappears from the registry. Without this, finished
+/// runs pile up — holding their cancellation tokens and task handles
+/// forever — and the app leaks roughly one `RunHandle` per sync.
+///
+/// Returns the reaper's own `JoinHandle` so a future `shutdown` path
+/// can await it if desired. Callers that don't need the handle can
+/// drop it without panicking; the task is detached and self-contained.
+pub fn spawn_run_reaper(
+    registry: Arc<RwLock<RunRegistry>>,
+    run_id: RunId,
+    tasks: Vec<JoinHandle<()>>,
+) -> JoinHandle<()> {
+    tokio::spawn(async move {
+        for task in tasks {
+            // `Err` here means the task panicked or was aborted; in
+            // either case the cleanup still has to happen, so we
+            // swallow the error rather than propagate it.
+            let _ = task.await;
+        }
+        let mut guard = registry.write().await;
+        guard.remove(&run_id);
+    })
 }
 
 #[cfg(test)]
@@ -120,7 +163,7 @@ mod tests {
         RunHandle {
             run_id,
             cancel: CancellationToken::new(),
-            tasks: Vec::new(),
+            reaper: None,
         }
     }
 
@@ -148,5 +191,48 @@ mod tests {
         reg.cancel_all();
         assert!(tok_a.is_cancelled());
         assert!(tok_b.is_cancelled());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reaper_removes_run_when_tasks_finish() {
+        let registry = Arc::new(RwLock::new(RunRegistry::new()));
+        let run_id = RunId::new();
+        {
+            let mut guard = registry.write().await;
+            guard.insert(handle(run_id));
+        }
+
+        // Three trivial tasks — the reaper waits on all of them.
+        let tasks = (0..3).map(|_| tokio::spawn(async {})).collect();
+        let reaper = spawn_run_reaper(registry.clone(), run_id, tasks);
+        reaper.await.expect("reaper joined");
+
+        let guard = registry.read().await;
+        assert!(
+            !guard.contains(&run_id),
+            "reaper should have removed the run"
+        );
+        assert!(guard.is_empty());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn reaper_removes_run_even_when_a_task_panics() {
+        let registry = Arc::new(RwLock::new(RunRegistry::new()));
+        let run_id = RunId::new();
+        {
+            let mut guard = registry.write().await;
+            guard.insert(handle(run_id));
+        }
+
+        let panicking = tokio::spawn(async { panic!("task panic on purpose") });
+        let ok = tokio::spawn(async {});
+        let reaper = spawn_run_reaper(registry.clone(), run_id, vec![panicking, ok]);
+        reaper.await.expect("reaper joined");
+
+        let guard = registry.read().await;
+        assert!(
+            !guard.contains(&run_id),
+            "reaper must tolerate panicking children"
+        );
     }
 }

@@ -288,10 +288,23 @@ impl HttpClient {
         err.is_timeout() || err.is_connect() || err.is_request()
     }
 
+    /// Hard ceiling applied when a server returns a pathological
+    /// `Retry-After` (e.g. a day). The exponential `max_backoff` on
+    /// [`RetryPolicy`] is the ceiling for *our* computed wait, not for
+    /// an explicit server instruction — hammering an API that asked
+    /// for a longer pause is exactly the anti-social behaviour retry
+    /// headers exist to prevent. Five minutes is long enough to
+    /// accommodate real rate-limit windows and short enough that a
+    /// misconfigured endpoint can't stall a sync indefinitely.
+    const MAX_RETRY_AFTER: Duration = Duration::from_secs(5 * 60);
+
     fn compute_backoff(&self, attempt: u32, retry_after: Option<Duration>) -> Duration {
         if let Some(ra) = retry_after {
-            // Upstream's hint always wins over our exponential ramp.
-            return ra.min(self.policy.max_backoff);
+            // Honour the server's hint verbatim, only clipping at the
+            // absolute safety ceiling. Do *not* clamp to
+            // `policy.max_backoff`: that turns a "back off for 60s"
+            // response into a 30s wait and a second 429.
+            return ra.min(Self::MAX_RETRY_AFTER);
         }
         if self.policy.base_backoff.is_zero() {
             return Duration::ZERO;
@@ -382,6 +395,30 @@ mod tests {
         let c = HttpClient::new().expect("build");
         let wait = c.compute_backoff(1, Some(Duration::from_secs(7)));
         assert_eq!(wait, Duration::from_secs(7));
+    }
+
+    #[test]
+    fn compute_backoff_honours_retry_after_beyond_max_backoff() {
+        // If the server asks for 60s, a 30s `max_backoff` must not
+        // reduce the wait — otherwise we'd immediately re-hit the
+        // rate limit.
+        let c = HttpClient::new().expect("build").with_policy(RetryPolicy {
+            max_attempts: 5,
+            base_backoff: Duration::from_millis(500),
+            max_backoff: Duration::from_secs(30),
+            jitter_frac: 0.0,
+        });
+        let wait = c.compute_backoff(1, Some(Duration::from_secs(60)));
+        assert_eq!(wait, Duration::from_secs(60));
+    }
+
+    #[test]
+    fn compute_backoff_clips_pathological_retry_after_at_safety_ceiling() {
+        // A malicious / misconfigured server asking for 1 day must not
+        // stall the sync forever.
+        let c = HttpClient::new().expect("build");
+        let wait = c.compute_backoff(1, Some(Duration::from_secs(86_400)));
+        assert_eq!(wait, Duration::from_secs(5 * 60));
     }
 
     #[test]

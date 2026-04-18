@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 description = "Core domain types, error taxonomy, and traits shared across Dayseam crates."
 
 [dependencies]

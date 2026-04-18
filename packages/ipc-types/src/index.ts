@@ -20,6 +20,7 @@ export type { SourceKind } from "./generated/SourceKind";
 export type { SecretRef } from "./generated/SecretRef";
 
 export type { Sink } from "./generated/Sink";
+export type { SinkCapabilities } from "./generated/SinkCapabilities";
 export type { SinkConfig } from "./generated/SinkConfig";
 export type { SinkKind } from "./generated/SinkKind";
 export type { WriteReceipt } from "./generated/WriteReceipt";

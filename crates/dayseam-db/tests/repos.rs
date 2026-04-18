@@ -396,8 +396,17 @@ async fn logs_append_tail_prune_and_system_source() {
         .await
         .unwrap();
     assert_eq!(tail.len(), 2);
-    assert_eq!(tail[0], system_row);
-    assert_eq!(tail[1], scoped_row);
+    // `tail` returns newest-first so the scoped row (ts + 1s) comes
+    // before the system row.
+    assert_eq!(tail[0], scoped_row);
+    assert_eq!(tail[1], system_row);
+
+    // A tight limit must keep the newest row, not discard it.
+    let newest_only = repo
+        .tail(fixed_now() - Duration::hours(1), 1)
+        .await
+        .unwrap();
+    assert_eq!(newest_only, vec![scoped_row.clone()]);
 
     let pruned = repo
         .prune_older_than(fixed_now() + Duration::seconds(2))

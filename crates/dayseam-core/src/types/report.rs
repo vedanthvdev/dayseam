@@ -96,11 +96,27 @@ pub struct LogEntry {
     pub message: String,
 }
 
+/// Severity of a log entry surfaced in the desktop log drawer.
+///
+/// The ordering `Debug` → `Info` → `Warn` → `Error` is load-bearing:
+/// the frontend filter dropdown maps severities to "this level and
+/// above", so any reordering here must be mirrored in
+/// `apps/desktop/src/ipc/useLogs.ts`. Variants are rendered verbatim
+/// in the UI (no localisation yet), so renaming them is a breaking
+/// change to both the IPC contract and the user-facing copy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub enum LogLevel {
+    /// Verbose diagnostic detail. Off by default in the UI filter,
+    /// intended for development builds and bug reports.
     Debug,
+    /// Routine progress: run started, source completed, report
+    /// rendered. Always visible in the log drawer.
     Info,
+    /// Recoverable problems: a single source failed but the run
+    /// continued, a rate-limit backoff was triggered, etc.
     Warn,
+    /// Run-terminating or data-loss-class problems the user must see.
+    /// Pair with a toast when surfaced during an active run.
     Error,
 }

@@ -9,9 +9,8 @@ rust-version.workspace = true
 description = "Per-run streams and app-wide broadcast bus for Dayseam progress, log, and toast events."
 
 [dependencies]
-dayseam-core = { path = "../dayseam-core" }
+dayseam-core = { path = "../dayseam-core", version = "0.0.0" }
 tokio = { workspace = true }
-tracing = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
 serde_json = { workspace = true }

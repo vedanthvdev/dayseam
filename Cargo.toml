@@ -18,6 +18,11 @@ license = "AGPL-3.0-only"
 repository = "https://github.com/vedanthvdev/dayseam"
 authors = ["Dayseam contributors"]
 rust-version = "1.88"
+# Every workspace crate is an internal component of the Dayseam desktop
+# app; none of them are intended for crates.io publication. Opting every
+# one out of publishing at the workspace level means a future refactor
+# can't accidentally release an internal helper.
+publish = false
 
 [workspace.dependencies]
 tokio = { version = "1", features = ["full"] }

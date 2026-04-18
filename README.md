@@ -8,10 +8,14 @@ evidence-linked report of what you actually did on a given day. Pick a
 date, click generate, and get a clean markdown report you can save to
 disk or drop into your Obsidian vault.
 
-> **Status: early design, not yet shippable.** This repository currently
-> contains only the licence, this README, and a `.gitignore`. The first
-> working version (v0.1) will ship as a Mac app with local git and
-> self-hosted GitLab sources, and a markdown/Obsidian sink.
+> **Status: Phase 1 foundations landed; not yet shippable.** The
+> workspace now includes the Rust core crates (`dayseam-core`,
+> `dayseam-db`, `dayseam-secrets`, `dayseam-events`, `dayseam-report`,
+> `connectors-sdk`, `sinks-sdk`) and a Tauri 2 desktop shell with typed
+> IPC, a log drawer, and a toast system — but no real source connectors
+> or sinks yet. The first user-visible milestone (v0.1) will ship as a
+> Mac app with local git and self-hosted GitLab sources and a
+> markdown/Obsidian sink.
 
 ## Why
 

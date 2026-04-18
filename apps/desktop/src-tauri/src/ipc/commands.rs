@@ -15,7 +15,7 @@
 //! change is an invariant of the IPC review checklist.
 
 use chrono::{DateTime, Utc};
-use dayseam_core::{DayseamError, LogEntry, LogLevel, Settings, SettingsPatch};
+use dayseam_core::{DayseamError, LogEntry, Settings, SettingsPatch};
 use dayseam_db::{LogRepo, LogRow, SettingsRepo};
 use tauri::State;
 
@@ -75,17 +75,15 @@ pub async fn settings_update(
     Ok(next)
 }
 
-/// Read the persisted log drawer tail.
+/// Read the persisted log drawer tail, newest first.
 ///
 /// * `since` — only return rows with `ts >= since`; `None` means
 ///   "return the whole retained window".
 /// * `limit` — clamp to at most `MAX_LOGS_LIMIT`; `None` uses
 ///   `DEFAULT_LOGS_LIMIT`.
 ///
-/// The database returns rows oldest-first; we reverse to newest-first
-/// before handing them to the UI because the log drawer renders newest
-/// at the top and reversing in TS would be a pointless per-render
-/// cost.
+/// `LogRepo::tail` already orders newest-first, which is what the log
+/// drawer renders, so we pass the rows through unchanged.
 #[tauri::command]
 pub async fn logs_tail(
     since: Option<DateTime<Utc>>,
@@ -95,11 +93,10 @@ pub async fn logs_tail(
     let effective_since = since.unwrap_or(DateTime::<Utc>::MIN_UTC);
     let effective_limit = limit.unwrap_or(DEFAULT_LOGS_LIMIT).min(MAX_LOGS_LIMIT);
     let repo = LogRepo::new(state.pool.clone());
-    let mut rows: Vec<LogRow> = repo
+    let rows: Vec<LogRow> = repo
         .tail(effective_since, effective_limit)
         .await
         .map_err(|e| internal("logs.tail", e))?;
-    rows.reverse();
     Ok(rows.into_iter().map(log_row_to_entry).collect())
 }
 
@@ -123,13 +120,13 @@ pub use dev::*;
 mod dev {
     use super::*;
 
-    use dayseam_core::{LogEvent, ProgressEvent, ProgressPhase, RunId, ToastEvent};
+    use dayseam_core::{LogEvent, LogLevel, ProgressEvent, ProgressPhase, RunId, ToastEvent};
     use dayseam_events::RunStreams;
     use tauri::ipc::Channel;
     use tokio_util::sync::CancellationToken;
 
     use crate::ipc::run_forwarder;
-    use crate::state::RunHandle;
+    use crate::state::{spawn_run_reaper, RunHandle};
 
     /// Fire a [`ToastEvent`] onto the app bus. The broadcast
     /// forwarder picks it up and emits it to every window — exactly
@@ -220,11 +217,21 @@ mod dev {
             // Senders drop here, which closes the forwarders cleanly.
         });
 
+        // Register the run, then spawn a reaper that waits for the
+        // producer and both forwarders to finish and then removes the
+        // run from the registry. Without the reaper every completed
+        // run would pile up — holding its `CancellationToken` and
+        // three `JoinHandle`s forever (see COR-02 / PERF-03).
+        let reaper = spawn_run_reaper(
+            state.runs.clone(),
+            run_id,
+            vec![progress_task, log_task, producer],
+        );
         let mut registry = state.runs.write().await;
         registry.insert(RunHandle {
             run_id,
             cancel,
-            tasks: vec![progress_task, log_task, producer],
+            reaper: Some(reaper),
         });
         Ok(run_id)
     }
@@ -233,6 +240,7 @@ mod dev {
 #[cfg(all(test, feature = "dev-commands"))]
 mod tests {
     use super::*;
+    use dayseam_core::LogLevel;
     use dayseam_db::open;
     use dayseam_events::AppBus;
     use dayseam_secrets::InMemoryStore;
@@ -287,8 +295,7 @@ mod tests {
             .expect("append");
         }
 
-        let mut rows = repo.tail(DateTime::<Utc>::MIN_UTC, 10).await.expect("tail");
-        rows.reverse();
+        let rows = repo.tail(DateTime::<Utc>::MIN_UTC, 10).await.expect("tail");
         let messages: Vec<_> = rows.into_iter().map(|r| r.message).collect();
         assert_eq!(messages, vec!["entry 2", "entry 1", "entry 0"]);
     }

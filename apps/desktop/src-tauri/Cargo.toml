@@ -20,7 +20,6 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-serde = { workspace = true }
 serde_json = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }
@@ -30,13 +29,12 @@ sqlx = { version = "0.8", default-features = false, features = [
     "runtime-tokio",
     "sqlite",
 ] }
-thiserror = { workspace = true }
 tracing = { workspace = true }
 tauri = { version = "2", features = [] }
-dayseam-core = { path = "../../../crates/dayseam-core" }
-dayseam-db = { path = "../../../crates/dayseam-db" }
-dayseam-events = { path = "../../../crates/dayseam-events" }
-dayseam-secrets = { path = "../../../crates/dayseam-secrets", features = ["keychain"] }
+dayseam-core = { path = "../../../crates/dayseam-core", version = "0.0.0" }
+dayseam-db = { path = "../../../crates/dayseam-db", version = "0.0.0" }
+dayseam-events = { path = "../../../crates/dayseam-events", version = "0.0.0" }
+dayseam-secrets = { path = "../../../crates/dayseam-secrets", version = "0.0.0", features = ["keychain"] }
 
 [dev-dependencies]
 tempfile = "3"
@@ -48,8 +46,11 @@ tauri = { version = "2", features = ["test"] }
 custom-protocol = ["tauri/custom-protocol"]
 # `dev-commands` compiles in the `dev_*` IPC commands (`dev_emit_toast`,
 # `dev_start_demo_run`) used by the frontend test harness and the in-app
-# dev tray. Enabled by default during development so `pnpm tauri dev`
-# just works; release builds turn it off via
-# `--no-default-features --features custom-protocol` in CI.
+# dev tray. It is **off by default** so a plain `cargo build --release`
+# or `cargo tauri build` ships a binary with no dev surface and no dev
+# capability grant. The build script writes `capabilities/dev.json` only
+# when this feature is on; `capabilities/default.json` carries only
+# production permissions. Development and CI (including `pnpm tauri dev`)
+# re-enable it with `--features dev-commands`.
 dev-commands = []
-default = ["dev-commands"]
+default = []

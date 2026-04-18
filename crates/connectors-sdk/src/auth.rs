@@ -19,6 +19,41 @@
 
 use async_trait::async_trait;
 use dayseam_core::DayseamError;
+use zeroize::Zeroize;
+
+/// Local, zero-dependency token wrapper used by the SDK's built-in
+/// auth strategies.
+///
+/// We deliberately do **not** import `dayseam_secrets::Secret` here:
+/// `tests/no_cross_crate_leak.rs` forbids `connectors-sdk` from
+/// depending on `dayseam-secrets` so a third-party connector author
+/// cannot reach past `AuthStrategy` to load raw tokens. This 20-line
+/// wrapper gives us the same two guarantees that matter at this
+/// layer — `Debug` never prints the value, and `Drop` zeroes it —
+/// without pulling in the heavier dep.
+struct SecretString(String);
+
+impl SecretString {
+    fn new(value: String) -> Self {
+        Self(value)
+    }
+
+    fn expose(&self) -> &str {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for SecretString {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("***")
+    }
+}
+
+impl Drop for SecretString {
+    fn drop(&mut self) {
+        self.0.zeroize();
+    }
+}
 
 /// Durable description of how a source authenticates. Serialises into
 /// the source's `SourceConfig`; deserialising it reconstructs the
@@ -91,14 +126,16 @@ impl AuthStrategy for NoneAuth {
 /// on the source (`PRIVATE-TOKEN` for GitLab, `Authorization: Bearer`
 /// for Jira DC), so the header name is configurable at construction.
 ///
-/// The token is owned by the strategy for the lifetime of the sync run
-/// and dropped when the run ends. A future revision will wrap it in a
-/// `Secret<String>` from `dayseam-secrets` so the bytes are zeroed on
-/// drop — tracked by the Phase 1 review task.
-#[derive(Debug, Clone)]
+/// The token is wrapped in [`SecretString`] so (a) it never appears in
+/// `{:?}` output — a risk at every `tracing` span boundary — and (b)
+/// its bytes are zeroed when `PatAuth` is dropped, bounding how long a
+/// PAT lives in process memory to the sync run's lifetime. `PatAuth`
+/// intentionally does not implement `Clone`: duplicating a secret
+/// should be a deliberate act, not a side-effect of passing the
+/// strategy to a helper.
 pub struct PatAuth {
     header_name: &'static str,
-    token: String,
+    header_value: SecretString,
     descriptor: AuthDescriptor,
 }
 
@@ -112,7 +149,7 @@ impl PatAuth {
     ) -> Self {
         Self {
             header_name: "PRIVATE-TOKEN",
-            token: token.into(),
+            header_value: SecretString::new(token.into()),
             descriptor: AuthDescriptor::Pat {
                 keychain_service: keychain_service.into(),
                 keychain_account: keychain_account.into(),
@@ -121,7 +158,9 @@ impl PatAuth {
     }
 
     /// Generic bearer-token PAT (used by later connectors such as
-    /// Jira Data Center).
+    /// Jira Data Center). We bake the `Bearer ` prefix in at
+    /// construction so the raw token is never materialised outside
+    /// the [`SecretString`] after this call returns.
     pub fn bearer(
         token: impl Into<String>,
         keychain_service: impl Into<String>,
@@ -129,12 +168,26 @@ impl PatAuth {
     ) -> Self {
         Self {
             header_name: "Authorization",
-            token: format!("Bearer {}", token.into()),
+            header_value: SecretString::new(format!("Bearer {}", token.into())),
             descriptor: AuthDescriptor::Pat {
                 keychain_service: keychain_service.into(),
                 keychain_account: keychain_account.into(),
             },
         }
+    }
+}
+
+// Manual `Debug` — the derived impl would have printed `header_value`
+// unredacted via `String`'s `Debug`. `SecretString` already renders as
+// `***`, but spelling the redaction out here defends against someone
+// later swapping the field type back to a bare `String`.
+impl std::fmt::Debug for PatAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PatAuth")
+            .field("header_name", &self.header_name)
+            .field("header_value", &"***")
+            .field("descriptor", &self.descriptor)
+            .finish()
     }
 }
 
@@ -148,7 +201,9 @@ impl AuthStrategy for PatAuth {
         &self,
         request: reqwest::RequestBuilder,
     ) -> Result<reqwest::RequestBuilder, DayseamError> {
-        Ok(request.header(self.header_name, &self.token))
+        // `expose` is the only reader; the resulting `&str` lives only
+        // until `header()` copies it into `reqwest`'s internal buffer.
+        Ok(request.header(self.header_name, self.header_value.expose()))
     }
 
     fn descriptor(&self) -> AuthDescriptor {
@@ -217,5 +272,32 @@ mod tests {
             }
         );
         assert_eq!(NoneAuth.descriptor(), AuthDescriptor::None);
+    }
+
+    #[test]
+    fn debug_does_not_leak_token() {
+        let strat = PatAuth::gitlab("super-secret-pat", "svc", "acct");
+        let rendered = format!("{strat:?}");
+        assert!(
+            !rendered.contains("super-secret-pat"),
+            "PAT leaked via Debug: {rendered}"
+        );
+        assert!(rendered.contains("***"), "missing redaction: {rendered}");
+    }
+
+    #[test]
+    fn bearer_debug_does_not_leak_token() {
+        let strat = PatAuth::bearer("super-secret-bearer", "svc", "acct");
+        let rendered = format!("{strat:?}");
+        assert!(
+            !rendered.contains("super-secret-bearer"),
+            "bearer token leaked via Debug: {rendered}"
+        );
+        // The `Bearer ` prefix also lives inside the `Secret`, so it
+        // must not appear in the redacted output either.
+        assert!(
+            !rendered.contains("Bearer "),
+            "header prefix leaked via Debug: {rendered}"
+        );
     }
 }

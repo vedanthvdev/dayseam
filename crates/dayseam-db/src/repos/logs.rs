@@ -62,14 +62,19 @@ impl LogRepo {
         Ok(())
     }
 
-    /// Return up to `limit` rows with `ts >= since`, oldest first. Use
+    /// Return up to `limit` rows with `ts >= since`, newest first. Use
     /// `since = DateTime::<Utc>::MIN_UTC` to read every retained row.
+    ///
+    /// The "newest first" ordering is the one the log drawer actually
+    /// needs: once the table has a few thousand rows, sorting ASC and
+    /// applying `LIMIT` would hand the UI the oldest N rows — the
+    /// opposite of a tail.
     pub async fn tail(&self, since: DateTime<Utc>, limit: u32) -> DbResult<Vec<LogRow>> {
         let rows = sqlx::query(
             "SELECT ts, level, source, message, context_json
              FROM log_entries
              WHERE ts >= ?
-             ORDER BY ts ASC
+             ORDER BY ts DESC
              LIMIT ?",
         )
         .bind(since.to_rfc3339())

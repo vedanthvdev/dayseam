@@ -9,20 +9,24 @@ rust-version.workspace = true
 description = "SDK for Dayseam source connectors: SourceConnector trait, AuthStrategy, HttpClient wrapper."
 
 [dependencies]
-dayseam-core = { path = "../dayseam-core" }
-dayseam-events = { path = "../dayseam-events" }
+dayseam-core = { path = "../dayseam-core", version = "0.0.0" }
+dayseam-events = { path = "../dayseam-events", version = "0.0.0" }
 
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["rt"] }
 async-trait = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
-thiserror = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
-tracing = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
 rand = "0.8"
+# `zeroize` here is deliberately pulled in directly rather than via
+# `dayseam-secrets`. The layering test in tests/no_cross_crate_leak.rs
+# forbids connectors-sdk from depending on dayseam-secrets; we still
+# want PATs to be zeroed on drop and redacted in `Debug`, so the crate
+# ships its own tiny secret string wrapper in `src/auth.rs`.
+zeroize = { version = "1" }
 
 [dev-dependencies]
 tokio = { workspace = true }
