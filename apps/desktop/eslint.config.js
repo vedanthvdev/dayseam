@@ -6,7 +6,10 @@ import tseslint from "typescript-eslint";
 
 export default tseslint.config(
   {
-    ignores: ["dist", "src-tauri/target", "node_modules"],
+    // Vite caches dependency bundles under `.vite/deps`; those are third-
+    // party artefacts that happen to land on disk when the dev server or
+    // `vitest` runs, and they must never be linted.
+    ignores: ["dist", "src-tauri/target", "node_modules", ".vite"],
   },
   {
     files: ["**/*.{ts,tsx}"],

@@ -9,3 +9,18 @@ rust-version.workspace = true
 description = "Core domain types, error taxonomy, and traits shared across Dayseam crates."
 
 [dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+chrono = { workspace = true }
+ts-rs = { version = "12", features = [
+    "serde-compat",
+    "chrono-impl",
+    "uuid-impl",
+    "serde-json-impl",
+] }
+
+[dev-dependencies]
+insta = { version = "1", features = ["yaml"] }
+proptest = "1"

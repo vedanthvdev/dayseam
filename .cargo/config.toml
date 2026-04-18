@@ -1,0 +1,19 @@
+# Workspace-wide Cargo configuration.
+#
+# `TS_RS_EXPORT_DIR` tells `ts-rs` where to write the generated TypeScript
+# declarations for every type annotated with `#[ts(export)]`. We point it at
+# `packages/ipc-types/src/generated/` so the frontend can import the exact
+# same shapes as the Rust core.
+#
+# `relative = true` makes the path relative to the directory containing this
+# `config.toml` (the workspace root), not the crate being built. That keeps
+# the behaviour consistent whether CI runs `cargo test` from the workspace
+# root or a contributor runs it inside `crates/dayseam-core/`.
+#
+# `TS_RS_LARGE_INT = "number"` overrides the default of `bigint`. Our i64/u64
+# fields (GitLab user ids, retry-after seconds, fetched counts) are all
+# comfortably within `Number.MAX_SAFE_INTEGER`, and typing them as `bigint`
+# would lie to the frontend — `JSON.parse` produces `number`, not `bigint`.
+[env]
+TS_RS_EXPORT_DIR = { value = "packages/ipc-types/src/generated", relative = true }
+TS_RS_LARGE_INT = "number"

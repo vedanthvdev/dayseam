@@ -1,0 +1,17 @@
+---
+source: crates/dayseam-core/src/error_codes.rs
+assertion_line: 65
+expression: ALL
+---
+- gitlab.auth.invalid_token
+- gitlab.auth.missing_scope
+- gitlab.url.dns
+- gitlab.url.tls
+- gitlab.rate_limited
+- gitlab.upstream_5xx
+- gitlab.upstream_shape_changed
+- local_git.repo_locked
+- local_git.repo_unreadable
+- sink.fs.not_writable
+- sink.fs.destination_missing
+- sink.malformed_marker

@@ -1,11 +1,23 @@
-//! dayseam-core: domain types, error taxonomy, and traits shared across
-//! Dayseam crates. This skeleton is intentionally empty; real content lands
-//! in a later Phase 1 task.
+//! `dayseam-core` — domain types, error taxonomy, and stable error codes
+//! shared across every other Dayseam crate.
+//!
+//! Everything that crosses a crate boundary or flows over IPC lives here.
+//! The TypeScript definitions generated from these Rust types via `ts-rs`
+//! are committed to `packages/ipc-types/src/generated/`, and the
+//! `ts_types_generated` integration test fails CI if the two ever drift.
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn crate_compiles_and_tests_run() {
-        assert_eq!(2 + 2, 4);
-    }
-}
+pub mod error;
+pub mod error_codes;
+pub mod types;
+
+pub use error::DayseamError;
+pub use types::{
+    activity::{ActivityEvent, ActivityKind, Actor, EntityRef, Link, Privacy, RawRef},
+    identity::Identity,
+    repo::LocalRepo,
+    report::{
+        Evidence, LogEntry, LogLevel, RenderedBullet, RenderedSection, ReportDraft, RunStatus,
+        SourceRunState,
+    },
+    source::{SecretRef, Source, SourceConfig, SourceHealth, SourceId, SourceKind},
+};
