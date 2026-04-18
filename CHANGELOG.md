@@ -6,6 +6,22 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 2 implementation plan published.** Draft
+  [`docs/plan/2026-04-18-v0.1-phase-2-local-git.md`](./docs/plan/2026-04-18-v0.1-phase-2-local-git.md)
+  covering the eight PRs that turn Dayseam from a themed shell into a
+  dogfoodable local-git end-to-end: schema v2 (`Artifact` / `SyncRun` /
+  `Person` / `SourceIdentity`), `connector-local-git`, `dayseam-report`
+  with a Dev EOD template, `sink-markdown-file` with marker-block
+  preservation, a new `dayseam-orchestrator` crate, real IPC + UI
+  replacing the Phase-1 demo-run wiring, first-run empty state + dogfood
+  polish, and a phase-end cross-cutting review that also formally
+  re-reviews the Phase-1 deferred [PERF-08](./docs/review/phase-1-review.md#35-performance).
+  No code change on `master` from this PR beyond the plan document and
+  this entry; every listed PR lands later under its own
+  `DAY-<n>-<kebab-title>` branch.
+
 ### Changed
 
 - **Phase 1 hardening + cross-cutting review.** Capstone review over
