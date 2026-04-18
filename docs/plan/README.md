@@ -27,6 +27,14 @@ Writing Phase 2 before Phase 1 has landed is speculative — the concrete shape 
    - Push, open PR, apply the task's designated `semver:*` label, request review.
    - Merge by squash when green and approved.
 
+## Every phase ends with a review task
+
+The **last task in every phase plan** is a cross-cutting hardening + review pass — not just "run the full test suite" but a deliberate, multi-persona deep review of the cumulative diff landed during the phase, looking for the class of bugs that only shows up when the pieces are seen together (cycles, leaked secrets, capability gaps, error-code overlaps, migration ordering, feature-flag regressions, drift between `ARCHITECTURE.md` and the shipped code).
+
+The canonical shape of this task — inventory, multi-lens review, hardening battery, smoke test, enumerated findings with resolutions, review artifact under `docs/review/phase-N-review.md`, changelog entry — is documented once in **Phase 1's Task 10** ([`2026-04-17-v0.1-phase-1-foundations.md`](./2026-04-17-v0.1-phase-1-foundations.md#task-10-phase-1-hardening--cross-cutting-review)). Each subsequent phase plan ends with its own "Phase N hardening + cross-cutting review" task that reuses that shape, tuned to the phase's domain (e.g. Phase 2 adds a "identity linking regression" lens; Phase 3 adds a "release engineering + signed artifact integrity" lens).
+
+A phase is not *done* when its feature tasks are merged. A phase is done when its review task is merged, every finding is resolved or explicitly deferred with a linked issue, and the hardening battery is green on `master`. Only then does the next phase's plan get drafted.
+
 ## Semver labels during pre-v0.1.0
 
 Per the design doc, the repo starts at `VERSION=0.0.0` and "0.1.0 is reserved for the first feature-complete v0.1 release." While we are pre-0.1.0:
