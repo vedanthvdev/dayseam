@@ -20,5 +20,6 @@ pub use types::{
         Evidence, LogEntry, LogLevel, RenderedBullet, RenderedSection, ReportDraft, RunStatus,
         SourceRunState,
     },
+    sink::{CapabilityConflict, Sink, SinkCapabilities, SinkConfig, SinkKind, WriteReceipt},
     source::{SecretRef, Source, SourceConfig, SourceHealth, SourceId, SourceKind},
 };

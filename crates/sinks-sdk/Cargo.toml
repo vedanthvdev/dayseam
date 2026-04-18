@@ -6,6 +6,21 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-description = "SDK for Dayseam sink adapters: SinkAdapter trait and export types."
+description = "SDK for Dayseam sink adapters: SinkAdapter trait, SinkCtx, MockSink."
 
 [dependencies]
+dayseam-core = { path = "../dayseam-core" }
+dayseam-events = { path = "../dayseam-events" }
+
+async-trait = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+chrono = { workspace = true }
+uuid = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+cargo_metadata = "0.19"

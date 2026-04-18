@@ -108,3 +108,53 @@ All notable changes to Dayseam are documented in this file. The format follows
     `no_cross_crate_leak` guard that fails the build if
     `connectors-sdk` ever picks up a dependency on `dayseam-db`,
     `dayseam-secrets`, `dayseam-report`, or `sinks-sdk`.
+- Canonical sink types on `dayseam-core` (data only, shared across the
+  workspace and frontend):
+  - `SinkKind` (v0.1 ships `MarkdownFile`; future variants are
+    namespaced identically to `SourceKind`).
+  - `SinkConfig` enum, currently carrying `MarkdownFile { config_version,
+    dest_dirs, frontmatter }`. Every variant carries an explicit
+    `config_version` so future schema migrations can be detected
+    without inventing a new discriminator.
+  - `SinkCapabilities` flags (`local_only`, `remote_write`,
+    `interactive_only`, `safe_for_unattended`) plus a `validate()`
+    method that returns a `CapabilityConflict` for the three illegal
+    shapes (local + remote, interactive + unattended, neither local
+    nor remote). `SinkCapabilities::LOCAL_ONLY` is the canonical
+    constant for all v0.1 file-writing sinks. The scheduler in Phase 3
+    will refuse to dispatch any sink whose capabilities don't satisfy
+    the "safe for unattended" predicate, closing the loop on the
+    "never auto-send without a human" non-goal.
+  - `Sink` record (stored sink configuration + label + timestamps) and
+    `WriteReceipt` (what the orchestrator persists after each successful
+    write: run id, sink kind, `destinations_written`, `external_refs`,
+    `bytes_written`, `written_at`). Both ship with serde round-trip
+    coverage and committed TypeScript bindings on
+    `@dayseam/ipc-types`.
+- `sinks-sdk` crate: the behavioural contract every sink adapter is
+  built on top of.
+  - `SinkAdapter` trait with `kind()`, `capabilities()`, and two async
+    methods: `validate(ctx, cfg)` for eager pre-flight checks (dest
+    dirs writable, marker block parseable, etc.) and `write(ctx, cfg,
+    draft)` which returns a `WriteReceipt`. The split lets the UI
+    surface configuration errors the moment the user confirms a
+    destination, instead of at write time.
+  - `SinkCtx` mirrors `ConnCtx`: per-write `run_id`, `ProgressSender` /
+    `LogSender` from the run's `RunStreams`, and a `CancellationToken`.
+    The struct is `#[non_exhaustive]` so additive fields (e.g. an HTTP
+    client for the future remote sinks) are source-compatible. A
+    `bail_if_cancelled` helper lets sink implementations short-circuit
+    between atomic-write boundaries.
+  - `MockSink`: an always-compiled in-memory `SinkAdapter` that
+    records every `write` call, emits a canonical `Starting → InProgress
+    → Completed` progress sequence, honours the cancellation token
+    before recording anything, and exposes a one-shot
+    `fail_next_with(DayseamError)` so downstream tests can rehearse
+    failure paths deterministically.
+  - Integration tests: the full 4-flag `SinkCapabilities` matrix (both
+    illegal and legal combinations), `MockSink` behaviour (recording,
+    ordered progress, cancellation, one-shot injected failure), a
+    `SinkCtx` cancellation-to-`DayseamError` smoke test, and a
+    `no_cross_crate_leak` guard that fails the build if `sinks-sdk`
+    ever picks up a dependency on `dayseam-db`, `dayseam-secrets`,
+    `dayseam-report`, or `connectors-sdk`.

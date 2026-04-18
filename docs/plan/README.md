@@ -43,6 +43,23 @@ Per the design doc, the repo starts at `VERSION=0.0.0` and "0.1.0 is reserved fo
 - **The final PR of Phase 3 — the "v0.1 feature-complete" capstone — carries `semver:minor`.** Applied to `VERSION=0.0.0` this bumps to `0.1.0` and triggers the first tagged release through the release workflow.
 - **After 0.1.0 ships**, the label policy switches to the design doc's normal rules: every feature PR carries the `semver:*` label that matches its change, and each merge auto-releases.
 
+## Deferred to Phase 3: graphify indexing for AI agents
+
+A collaborator flagged [`safishamsi/graphify`](https://github.com/safishamsi/graphify) as a tool that can turn the repo into a queryable knowledge graph for AI coding agents working on Dayseam. We are **not** wiring it into Phase 1 or Phase 2, for three reasons:
+
+- **Too early to be useful.** Through Phase 2 the workspace is small enough that `rg`, `cargo tree`, and `cargo doc` are faster and more accurate than any generated graph. A stale graph is actively worse than no graph, and nothing in the current toolchain keeps `graphify-out/` refreshed automatically.
+- **Changes the trust surface.** `graphify` reads the whole codebase and writes summarised artifacts back into the repo. Before we commit any generated summaries we want an explicit rule about (a) what gets checked in vs `.gitignore`d, (b) who / what regenerates it, (c) whether secrets-adjacent files (`.env`, keychain helpers, signing scripts) are excluded. That rule belongs with the rest of the Phase 3 release-engineering work, not scattered across earlier PRs.
+- **It should not become a second source of truth.** Our canonical description of the architecture is [`ARCHITECTURE.md`](../../ARCHITECTURE.md) plus the phase plans. Any `graphify` index is an *aid* to navigating them, not a replacement.
+
+Phase 3's plan (written once Phase 2 lands) therefore owns the decision of whether to adopt `graphify`, under a dedicated task roughly shaped like:
+
+- Evaluate `graphify` against the equivalent built-in tooling (`cargo doc --workspace`, `rust-analyzer`'s symbol index, the existing architecture doc) on a real Dayseam refactor task.
+- If adopted, add a `docs/graphify/` refresh script and a CI guard that fails if the committed index is staler than the last `master` commit, so an out-of-date graph can never mislead an agent.
+- Update `ARCHITECTURE.md` and `CONTRIBUTING.md` to tell human and AI contributors when to consult the graph vs the source-of-truth docs, and under what circumstances they must regenerate it.
+- Decide on retention: whether the generated artifacts are checked in (reviewable, but adds repo weight) or `.gitignore`d with a one-command regenerator (lean, but no review trail).
+
+Phase 3's review task must either land this decision or explicitly defer it with a tracked issue.
+
 ## Non-goals of these plans
 
 - **Not exhaustive line-level code.** The plan shows key interfaces, invariants, and test shapes. The executing engineer fills in straightforward glue (imports, boilerplate) without the plan narrating every line.

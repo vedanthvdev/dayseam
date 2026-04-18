@@ -19,6 +19,11 @@ export type { SourceHealth } from "./generated/SourceHealth";
 export type { SourceKind } from "./generated/SourceKind";
 export type { SecretRef } from "./generated/SecretRef";
 
+export type { Sink } from "./generated/Sink";
+export type { SinkConfig } from "./generated/SinkConfig";
+export type { SinkKind } from "./generated/SinkKind";
+export type { WriteReceipt } from "./generated/WriteReceipt";
+
 export type { Identity } from "./generated/Identity";
 export type { Person } from "./generated/Person";
 export type { SourceIdentity } from "./generated/SourceIdentity";

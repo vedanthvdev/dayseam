@@ -17,9 +17,9 @@ use std::process::Command;
 use dayseam_core::{
     ActivityEvent, ActivityKind, Actor, DayseamError, EntityRef, Evidence, Identity, Link,
     LocalRepo, LogEntry, LogEvent, LogLevel, Person, Privacy, ProgressEvent, ProgressPhase, RawRef,
-    RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Source,
-    SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind, SourceRunState,
-    ToastEvent, ToastSeverity,
+    RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Sink,
+    SinkCapabilities, SinkConfig, SinkKind, Source, SourceConfig, SourceHealth, SourceIdentity,
+    SourceIdentityKind, SourceKind, SourceRunState, ToastEvent, ToastSeverity, WriteReceipt,
 };
 use ts_rs::{Config, TS};
 
@@ -47,6 +47,12 @@ fn export_all(out_dir: &Path) {
     SourceConfig::export_all(&cfg).expect("export SourceConfig");
     SourceHealth::export_all(&cfg).expect("export SourceHealth");
     SecretRef::export_all(&cfg).expect("export SecretRef");
+
+    Sink::export_all(&cfg).expect("export Sink");
+    SinkKind::export_all(&cfg).expect("export SinkKind");
+    SinkConfig::export_all(&cfg).expect("export SinkConfig");
+    SinkCapabilities::export_all(&cfg).expect("export SinkCapabilities");
+    WriteReceipt::export_all(&cfg).expect("export WriteReceipt");
 
     Identity::export_all(&cfg).expect("export Identity");
     Person::export_all(&cfg).expect("export Person");
