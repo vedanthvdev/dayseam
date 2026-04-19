@@ -91,4 +91,40 @@ describe("LogDrawer", () => {
     fireEvent.click(screen.getByRole("button", { name: /close log drawer/i }));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
+
+  it("narrows the visible entries to the current run when 'This run' is toggled", async () => {
+    registerInvokeHandler("logs_tail", async () => SAMPLE);
+    render(
+      <LogDrawer
+        open
+        onClose={() => {}}
+        currentRunId="11111111-2222-3333-4444-555555555555"
+        liveLogs={[
+          {
+            run_id: "11111111-2222-3333-4444-555555555555",
+            source_id: null,
+            level: "Error",
+            message: "something failed",
+            context: {},
+            emitted_at: "2024-01-01T10:00:05Z",
+          },
+        ]}
+      />,
+    );
+
+    await waitFor(() =>
+      expect(screen.getByText(/app started/i)).toBeInTheDocument(),
+    );
+
+    fireEvent.click(screen.getByTestId("log-drawer-run-filter"));
+
+    expect(screen.queryByText(/app started/i)).toBeNull();
+    expect(screen.getByText(/something failed/i)).toBeInTheDocument();
+  });
+
+  it("disables the run filter when there is no active run", () => {
+    registerInvokeHandler("logs_tail", async () => []);
+    render(<LogDrawer open onClose={() => {}} currentRunId={null} />);
+    expect(screen.getByTestId("log-drawer-run-filter")).toBeDisabled();
+  });
 });

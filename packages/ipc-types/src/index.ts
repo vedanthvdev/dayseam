@@ -108,6 +108,7 @@ import type { SinkConfig as SinkConfigT } from "./generated/SinkConfig";
 import type { SinkKind as SinkKindT } from "./generated/SinkKind";
 import type { ReportDraft as ReportDraftT } from "./generated/ReportDraft";
 import type { WriteReceipt as WriteReceiptT } from "./generated/WriteReceipt";
+import type { ActivityEvent as ActivityEventT } from "./generated/ActivityEvent";
 
 /** Opaque handle used at the TS boundary for Tauri's `Channel<T>`. */
 export interface TauriChannel<T> {
@@ -205,6 +206,14 @@ export interface Commands {
     args: Record<string, never>;
     result: null;
   };
+  activity_events_get: {
+    args: { ids: string[] };
+    result: ActivityEventT[];
+  };
+  shell_open: {
+    args: { url: string };
+    result: null;
+  };
   /** Dev-only. Compiled out of release builds via `cfg(feature = "dev-commands")`. */
   dev_emit_toast: {
     args: { event: ToastEvent };
@@ -252,6 +261,8 @@ export const PROD_COMMANDS: readonly CommandName[] = [
   "report_get",
   "report_save",
   "retention_sweep_now",
+  "activity_events_get",
+  "shell_open",
 ] as const;
 
 /** Dev-only command identifiers. Gated behind the Rust

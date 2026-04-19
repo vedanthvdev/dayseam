@@ -89,9 +89,36 @@ export function resetEventBus(): void {
   mockListen.mockClear();
 }
 
+// `@tauri-apps/plugin-dialog` is stubbed in `setup.ts` to call through
+// to `mockDialogOpen`. Tests use `queueDialogOpen(...)` to script the
+// next N calls; after the queue drains the mock returns `null` (the
+// same thing the real plugin returns when the user cancels the
+// picker).
+type DialogOpenResponse = string | string[] | null;
+const dialogOpenQueue: DialogOpenResponse[] = [];
+
+export const mockDialogOpen = vi.fn(
+  async (_options?: Record<string, unknown>): Promise<DialogOpenResponse> => {
+    if (dialogOpenQueue.length > 0) {
+      return dialogOpenQueue.shift()!;
+    }
+    return null;
+  },
+);
+
+export function queueDialogOpen(...responses: DialogOpenResponse[]): void {
+  dialogOpenQueue.push(...responses);
+}
+
+export function resetDialogPlugin(): void {
+  dialogOpenQueue.length = 0;
+  mockDialogOpen.mockClear();
+}
+
 /** One-call reset used by `beforeEach` in tests. */
 export function resetTauriMocks(): void {
   resetInvokeHandlers();
   resetChannels();
   resetEventBus();
+  resetDialogPlugin();
 }

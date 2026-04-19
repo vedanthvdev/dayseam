@@ -8,6 +8,67 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **Phase 2, Task 6 PR-B2 — Report UI: generate, stream, evidence, save.**
+  Wires the report-generation flow PR-B1 left stubbed into a real
+  end-to-end UX. `ActionRow` replaces the disabled Phase-1 `ActionBar`
+  with a live date picker, a source multi-select (auto-selecting every
+  connected source the first time the list loads, so the dominant
+  "generate for everything" intent is one click), and a primary
+  Generate button that swaps to Cancel for the lifetime of an in-flight
+  run. `StreamingPreview` renders the `useReport()` stream directly:
+  a determinate progress bar when `ProgressPhase::InProgress` carries a
+  `total`, an indeterminate pulse otherwise, and the draft's
+  `RenderedSection`s / `RenderedBullet`s once the run completes —
+  cancellation and failure states surface with their own
+  `role="alert"` / `role="status"` banners rather than a silent empty
+  frame. Each bullet with `Evidence` becomes a button that opens
+  `BulletEvidencePopover`; the popover fetches the referenced
+  `ActivityEvent`s through a new `activity_events_get(ids)` IPC
+  command (thin pass-through to a new `ActivityRepo::get_many`) and
+  turns each event's `Link`s into clickable chips routed through a
+  new scoped `shell_open(url)` command. `shell_open` validates the URL
+  with the `url` crate and refuses any scheme outside the
+  `{http, https, file, vscode, obsidian}` allow-list, surfacing
+  `ipc.shell.url_disallowed` / `ipc.shell.url_invalid` /
+  `ipc.shell.open_failed` error codes so the UI can distinguish
+  "malicious input" from "OS refused" from "string isn't a URL" at
+  all. A new `SaveReportDialog` (wired to the Footer's "Save report"
+  entry, which only appears once a completed draft is in hand) lists
+  configured sinks filtered by `SinkCapabilities` (`interactive_only`
+  entries stay hidden from the future unattended path), calls
+  `report_save`, and renders each returned `WriteReceipt` as a row
+  whose written destinations are themselves `shell_open`-clickable.
+  `LogDrawer` grows a "This run" toggle that narrows persisted
+  `LogEntry`s down to the current run's live `LogEvent` stream by
+  `(emitted_at, message)` composite key — client-side so the existing
+  `log_entries` schema doesn't need a migration. The Phase-1 dev-only
+  `dev_start_demo_run` is removed from production paths entirely
+  (`useRunStreams` deleted, plus a static guard test that fails CI if
+  any file under `apps/desktop/src/` outside `__tests__/` mentions
+  the dev command literals again). Every new component ships with
+  Vitest coverage — ActionRow selection / cancel flow, StreamingPreview
+  progress modes and evidence wiring, BulletEvidencePopover's
+  `shell_open` call, SaveReportDialog's capability filter and error
+  surfacing — and the Rust `shell_open` guard is covered by allow-list
+  and unparseable-URL unit tests plus the existing capability-parity
+  integration test. `AddLocalGitSourceDialog` also picks up a native
+  "Browse…" folder picker (via `tauri-plugin-dialog` behind a scoped
+  `dialog:allow-open` grant) that appends the chosen absolute path to
+  the scan-roots textarea, so users no longer need to know or type a
+  path to add a source; cancelled picks and duplicate picks are both
+  no-ops, and power users can still paste paths directly. Alongside
+  the picker, `build.rs` is repaired so the `dev-commands` gate
+  actually takes effect — `cfg!(feature = "dev-commands")` inside a
+  build script always evaluates to `false` because cargo doesn't
+  propagate package features into the build-script's own compilation,
+  so the gate now reads `CARGO_FEATURE_DEV_COMMANDS` from the
+  environment as documented. The dev capability body moves to
+  `capabilities.dev.template.json` and is `include_str!`-embedded by
+  both `build.rs` (for the on-disk write) and the
+  `dev_capability_covers_every_dev_command` parity test (for
+  content assertion), which makes the test independent of
+  `tauri_build::try_build`'s intermediate filesystem state.
+
 - **Phase 2, Task 6 PR-B1 — Admin UI: sources sidebar, add/approve flow, identity & sinks dialogs.**
   Wires the PR-A React hooks into a navigable admin surface. `App.tsx`
   drops the Phase-1 static `SOURCE_PLACEHOLDERS` row for a live

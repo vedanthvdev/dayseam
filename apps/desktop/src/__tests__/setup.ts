@@ -36,3 +36,13 @@ vi.mock("@tauri-apps/api/event", async () => {
     listen: mod.mockListen,
   };
 });
+
+// `@tauri-apps/plugin-dialog` reaches into the Tauri webview's native
+// IPC bridge the moment it's imported, so in vitest we short-circuit it
+// to an in-process responder that tests can drive via `queueDialogOpen`.
+vi.mock("@tauri-apps/plugin-dialog", async () => {
+  const mod = await import("./tauri-mock");
+  return {
+    open: mod.mockDialogOpen,
+  };
+});

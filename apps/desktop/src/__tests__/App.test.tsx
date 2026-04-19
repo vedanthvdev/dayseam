@@ -37,11 +37,10 @@ describe("App", () => {
     expect(screen.getByRole("contentinfo")).toBeInTheDocument(); // <footer>
   });
 
-  it("marks every Phase-1 action as disabled with a helpful title", () => {
+  it("keeps Generate disabled when no sources are connected", () => {
     render(<App />);
     const generate = screen.getByRole("button", { name: /generate report/i });
     expect(generate).toBeDisabled();
-    expect(generate).toHaveAttribute("title", expect.stringMatching(/phase 2/i));
   });
 
   it("renders a theme radio group with Light / System / Dark", () => {

@@ -107,6 +107,42 @@ impl ActivityRepo {
             .await?;
         Ok(())
     }
+
+    /// Fetch events by primary key. Used by the evidence popover to
+    /// hydrate the bullets returned inside a `ReportDraft`: the draft
+    /// only carries event *ids*, not the full rows, so the UI pulls
+    /// them on demand when the user clicks the bullet.
+    ///
+    /// Preserves input order, silently drops ids that no longer exist
+    /// on disk (retention can evict them) rather than treating a miss
+    /// as an error — the popover just shows whatever is still there.
+    pub async fn get_many(&self, ids: &[Uuid]) -> DbResult<Vec<ActivityEvent>> {
+        if ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        // `sqlx` doesn't inline `IN (?, ?, …)` bindings for us on
+        // SQLite so we build the placeholder list ourselves. Ids are
+        // `Uuid` so the bound values are trivially safe to interpolate.
+        let placeholders = vec!["?"; ids.len()].join(", ");
+        let sql = format!(
+            "SELECT id, source_id, external_id, kind, occurred_at, actor_json, title, body,
+                    links_json, entities_json, parent_external_id, metadata_json, raw_ref, privacy
+             FROM activity_events
+             WHERE id IN ({placeholders})"
+        );
+        let mut query = sqlx::query(&sql);
+        for id in ids {
+            query = query.bind(id.to_string());
+        }
+        let rows = query.fetch_all(&self.pool).await?;
+        let mut by_id: std::collections::HashMap<Uuid, ActivityEvent> =
+            std::collections::HashMap::with_capacity(rows.len());
+        for row in rows {
+            let ev = row_to_event(row)?;
+            by_id.insert(ev.id, ev);
+        }
+        Ok(ids.iter().filter_map(|id| by_id.remove(id)).collect())
+    }
 }
 
 fn row_to_event(row: sqlx::sqlite::SqliteRow) -> DbResult<ActivityEvent> {

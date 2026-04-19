@@ -1,0 +1,10 @@
+{
+  "$schema": "./gen/schemas/desktop-schema.json",
+  "identifier": "dev",
+  "description": "Dev-only capability written to `capabilities/dev.json` by `build.rs` when the `dev-commands` Cargo feature is on. Grants the frontend test harness and the in-app dev tray access to `dev_emit_toast` and `dev_start_demo_run`. Absent from release builds — the file lives outside `capabilities/` precisely so tauri-build's `capabilities/**/*` scanner only sees it when we opt in.",
+  "windows": ["main"],
+  "permissions": [
+    "allow-dev-emit-toast",
+    "allow-dev-start-demo-run"
+  ]
+}

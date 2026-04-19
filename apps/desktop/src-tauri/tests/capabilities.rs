@@ -74,14 +74,22 @@ fn default_capability_covers_every_production_command() {
     );
 }
 
-/// Dev capability is written by `build.rs` only when the
-/// `dev-commands` feature is on, so the test is gated on the same
-/// flag. Without the gate the file isn't on disk during a plain
-/// `cargo test` and the harness would fail to load it.
+/// The dev capability is materialised on disk only when `build.rs`
+/// runs with `CARGO_FEATURE_DEV_COMMANDS` set, and even then
+/// `tauri_build::try_build` can move/rewrite files in the capabilities
+/// directory mid-pipeline — the on-disk state during a `cargo test`
+/// run is therefore not a reliable place to read from. The test
+/// instead parses the exact same template bytes that `build.rs`
+/// embeds via `include_str!`, which makes the parity check robust
+/// regardless of whether `capabilities/dev.json` happens to exist
+/// when the test binary runs. Gated on the feature so the `DEV_COMMANDS`
+/// parity check only fires when the matching command surface is live.
 #[cfg(feature = "dev-commands")]
 #[test]
 fn dev_capability_covers_every_dev_command() {
-    let capability = load_capability("capabilities/dev.json");
+    const DEV_CAPABILITY_TEMPLATE: &str = include_str!("../capabilities.dev.template.json");
+    let capability: Capability = serde_json::from_str(DEV_CAPABILITY_TEMPLATE)
+        .expect("parse capabilities.dev.template.json");
     let granted: BTreeSet<String> = capability.permissions.into_iter().collect();
 
     let mut missing = Vec::new();
@@ -93,7 +101,7 @@ fn dev_capability_covers_every_dev_command() {
     }
     assert!(
         missing.is_empty(),
-        "capabilities/dev.json does not grant these dev commands: {}",
+        "capabilities.dev.template.json does not grant these dev commands: {}",
         missing.join(", ")
     );
 }

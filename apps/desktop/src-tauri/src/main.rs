@@ -16,19 +16,26 @@ fn main() {
         .expect("build tokio runtime");
     let _guard = runtime.enter();
 
-    let builder = tauri::Builder::default().setup(|app| {
-        let data_dir = startup::default_data_dir();
-        let state = tauri::async_runtime::block_on(startup::build_app_state(&data_dir))
-            .expect("build AppState");
-        let pool = state.pool.clone();
-        let app_bus = state.app_bus.clone();
-        app.manage(state);
+    let builder = tauri::Builder::default()
+        // Registers the native file/directory chooser. The only
+        // permission we grant on it is `dialog:allow-open` (see
+        // `capabilities/default.json`); save-pickers, message boxes,
+        // and confirm dialogs stay denied so the plugin surface can't
+        // grow by accident.
+        .plugin(tauri_plugin_dialog::init())
+        .setup(|app| {
+            let data_dir = startup::default_data_dir();
+            let state = tauri::async_runtime::block_on(startup::build_app_state(&data_dir))
+                .expect("build AppState");
+            let pool = state.pool.clone();
+            let app_bus = state.app_bus.clone();
+            app.manage(state);
 
-        let handle = app.handle().clone();
-        let logs = LogRepo::new(pool);
-        let _broadcast_task = broadcast_forwarder::spawn(handle, app_bus, logs);
-        Ok(())
-    });
+            let handle = app.handle().clone();
+            let logs = LogRepo::new(pool);
+            let _broadcast_task = broadcast_forwarder::spawn(handle, app_bus, logs);
+            Ok(())
+        });
 
     // Release builds compile the dev commands out entirely so the
     // binary ships with a minimal IPC surface. Keep this list in
@@ -58,6 +65,8 @@ fn main() {
         commands::report_get,
         commands::report_save,
         commands::retention_sweep_now,
+        commands::activity_events_get,
+        commands::shell_open,
         commands::dev_emit_toast,
         commands::dev_start_demo_run,
     ]);
@@ -85,6 +94,8 @@ fn main() {
         commands::report_get,
         commands::report_save,
         commands::retention_sweep_now,
+        commands::activity_events_get,
+        commands::shell_open,
     ]);
 
     builder

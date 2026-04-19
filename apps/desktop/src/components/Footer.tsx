@@ -2,6 +2,10 @@ interface FooterProps {
   onOpenLogs?: () => void;
   onOpenIdentities?: () => void;
   onOpenSinks?: () => void;
+  /** Optional — renders a "Save report" entry once a completed draft
+   *  is available. Hidden while no draft exists so the status bar
+   *  doesn't advertise an action that can't succeed. */
+  onOpenSave?: () => void;
 }
 
 /**
@@ -16,6 +20,7 @@ export function Footer({
   onOpenLogs,
   onOpenIdentities,
   onOpenSinks,
+  onOpenSave,
 }: FooterProps) {
   return (
     <footer
@@ -52,6 +57,17 @@ export function Footer({
             className="rounded px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-900"
           >
             Sinks
+          </button>
+        ) : null}
+        {onOpenSave ? (
+          <button
+            type="button"
+            onClick={onOpenSave}
+            title="Save the current draft to a sink"
+            data-testid="footer-save"
+            className="rounded bg-neutral-900 px-2 py-0.5 text-xs font-medium text-white hover:bg-neutral-800 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white"
+          >
+            Save report
           </button>
         ) : null}
       </div>
