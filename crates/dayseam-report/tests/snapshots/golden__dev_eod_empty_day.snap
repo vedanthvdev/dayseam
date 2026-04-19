@@ -1,0 +1,19 @@
+---
+source: crates/dayseam-report/tests/golden.rs
+assertion_line: 176
+expression: draft
+---
+id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+date: 2026-04-18
+template_id: dayseam.dev_eod
+template_version: 2026-04-18
+sections:
+  - id: commits
+    title: Commits
+    bullets:
+      - id: b_9fbcadec91faffed
+        text: "*No tracked activity for Saturday, Apr 18, 2026.*"
+evidence: []
+per_source_state: {}
+verbose_mode: false
+generated_at: "2026-04-18T23:00:00Z"

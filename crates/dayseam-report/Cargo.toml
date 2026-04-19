@@ -6,7 +6,26 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
-publish.workspace = true
-description = "Report generation pipeline for Dayseam: rollup, template rendering, and evidence linking."
+description = "Deterministic report engine for Dayseam: rollup, template rendering, and evidence linking. Pure — no IO, no clocks, no randomness."
 
 [dependencies]
+dayseam-core = { path = "../dayseam-core", version = "0.0.0" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+chrono = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true }
+# Handlebars powers the template renderer. Pinned to v6; breaking
+# changes between majors affect helper registration and partials, so
+# the registry in `templates/mod.rs` is insulated from drift.
+handlebars = "6"
+# SHA-256 drives `bullet_id` hashing. Kept out of the workspace deps
+# because the rest of Dayseam uses UUIDv5 for determinism; only the
+# render stage wants a hex-encoded hash string to embed in markdown.
+sha2 = "0.10"
+
+[dev-dependencies]
+insta = { version = "1", features = ["yaml"] }
+proptest = "1"
+cargo_metadata = "0.19"

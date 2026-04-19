@@ -1,0 +1,31 @@
+---
+source: crates/dayseam-report/tests/golden.rs
+assertion_line: 64
+expression: draft
+---
+id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+date: 2026-04-18
+template_id: dayseam.dev_eod
+template_version: 2026-04-18
+sections:
+  - id: commits
+    title: Commits
+    bullets:
+      - id: b_2eee00dbea71a1dc
+        text: "**repo-a** — feat: add activity store — _3 commits_"
+evidence:
+  - bullet_id: b_2eee00dbea71a1dc
+    event_ids:
+      - 88200526-ad9f-50c8-a9e7-3ebd4a4dcb82
+      - 179995f9-0e23-528b-b92a-ec3d5a51a8d7
+      - e2645c7d-9db5-5c9e-9cce-cce14db8353c
+    reason: 3 commits
+per_source_state:
+  01000000-0000-0000-0000-000000000000:
+    status: Succeeded
+    started_at: "2026-04-18T23:00:00Z"
+    finished_at: "2026-04-18T23:00:00Z"
+    fetched_count: 3
+    error: ~
+verbose_mode: false
+generated_at: "2026-04-18T23:00:00Z"

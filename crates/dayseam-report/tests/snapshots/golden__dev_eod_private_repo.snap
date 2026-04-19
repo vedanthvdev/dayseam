@@ -1,0 +1,30 @@
+---
+source: crates/dayseam-report/tests/golden.rs
+assertion_line: 165
+expression: draft
+---
+id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+date: 2026-04-18
+template_id: dayseam.dev_eod
+template_version: 2026-04-18
+sections:
+  - id: commits
+    title: Commits
+    bullets:
+      - id: b_0815e80b31394dab
+        text: (private work) — _2 commits_
+evidence:
+  - bullet_id: b_0815e80b31394dab
+    event_ids:
+      - dc363fdd-fe9e-522b-9562-338e715788cf
+      - 9ace5508-6ff5-53e3-b927-9cf7b907193f
+    reason: 2 commits
+per_source_state:
+  03000000-0000-0000-0000-000000000000:
+    status: Succeeded
+    started_at: "2026-04-18T23:00:00Z"
+    finished_at: "2026-04-18T23:00:00Z"
+    fetched_count: 2
+    error: ~
+verbose_mode: false
+generated_at: "2026-04-18T23:00:00Z"

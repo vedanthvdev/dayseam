@@ -45,6 +45,21 @@ it silently skips their coverage.
 
 CI runs the same commands — if they are green locally they will be green in CI.
 
+### Accepting `insta` snapshot changes
+
+`dayseam-core` and `dayseam-report` use `insta` for golden snapshots
+(error-code registry, rendered report drafts). When an intentional
+change modifies a snapshot, run
+
+```bash
+cargo insta accept -p <crate>
+```
+
+to rewrite the `.snap` files on disk, review the diff in your PR, and
+commit the updated snapshots alongside the change. Tests fail loudly
+until the new snapshot is either accepted or the change is reverted —
+never `INSTA_UPDATE=always` your way past a failure.
+
 ## Branching and commits
 
 - **Never commit directly to `master`.** Always open a PR.
