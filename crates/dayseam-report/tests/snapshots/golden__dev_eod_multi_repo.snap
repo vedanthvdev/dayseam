@@ -1,30 +1,34 @@
 ---
 source: crates/dayseam-report/tests/golden.rs
-assertion_line: 110
 expression: draft
 ---
 id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
 date: 2026-04-18
 template_id: dayseam.dev_eod
-template_version: 2026-04-18
+template_version: 2026-04-20
 sections:
   - id: commits
     title: Commits
     bullets:
       - id: b_3087c140ca8b1c3e
-        text: "**repo-a** — fix: repo-a quirk — _1 commit_"
-      - id: b_5c377d1ea312b569
-        text: "**repo-b** — feat: repo-b thing — _2 commits_"
+        text: "**repo-a** — fix: repo-a quirk"
+      - id: b_0d6beca99696a241
+        text: "**repo-b** — feat: repo-b thing"
+      - id: b_6503ec4942ee7e21
+        text: "**repo-b** — chore: repo-b cleanup"
 evidence:
   - bullet_id: b_3087c140ca8b1c3e
     event_ids:
       - ce03c27a-ce09-5f87-b776-1d250bdbdea9
     reason: 1 commit
-  - bullet_id: b_5c377d1ea312b569
+  - bullet_id: b_0d6beca99696a241
     event_ids:
       - 8f317320-a4bc-5048-ad34-4dcecd742796
+    reason: 1 commit
+  - bullet_id: b_6503ec4942ee7e21
+    event_ids:
       - 84c627ad-a54d-5655-bfa5-8569bc59e21f
-    reason: 2 commits
+    reason: 1 commit
 per_source_state:
   02000000-0000-0000-0000-000000000000:
     status: Succeeded

@@ -1,18 +1,17 @@
 ---
 source: crates/dayseam-report/tests/golden.rs
-assertion_line: 225
 expression: draft
 ---
 id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
 date: 2026-04-18
 template_id: dayseam.dev_eod
-template_version: 2026-04-18
+template_version: 2026-04-20
 sections:
   - id: commits
     title: Commits
     bullets:
       - id: b_a760710b779c2949
-        text: "**repo-a** — feat: mine — _1 commit_"
+        text: "**repo-a** — feat: mine"
 evidence:
   - bullet_id: b_a760710b779c2949
     event_ids:

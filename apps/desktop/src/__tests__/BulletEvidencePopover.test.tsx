@@ -90,13 +90,13 @@ describe("BulletEvidencePopover", () => {
     // trailing setState doesn't race into React after the test is
     // torn down and trip the act() warning.
     await waitFor(() =>
-      expect(screen.getByText(/no longer on disk/i)).toBeInTheDocument(),
+      expect(screen.getByText(/aren.t available on disk/i)).toBeInTheDocument(),
     );
     fireEvent.keyDown(window, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("surfaces the eviction fallback when the event rows are gone", async () => {
+  it("surfaces the empty-state fallback when the event rows are gone", async () => {
     registerInvokeHandler("activity_events_get", async () => []);
     render(
       <BulletEvidencePopover
@@ -107,7 +107,7 @@ describe("BulletEvidencePopover", () => {
       />,
     );
     await waitFor(() =>
-      expect(screen.getByText(/no longer on disk/i)).toBeInTheDocument(),
+      expect(screen.getByText(/aren.t available on disk/i)).toBeInTheDocument(),
     );
   });
 });

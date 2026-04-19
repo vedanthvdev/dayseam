@@ -115,8 +115,8 @@ export function BulletEvidencePopover({
 
       {events && events.length === 0 ? (
         <p className="text-xs text-neutral-500 dark:text-neutral-400">
-          The events that produced this bullet are no longer on disk.
-          Retention may have evicted them.
+          The events that produced this bullet aren&rsquo;t available on
+          disk. Regenerating the report usually brings them back.
         </p>
       ) : null}
 

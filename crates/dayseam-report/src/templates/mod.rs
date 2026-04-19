@@ -21,7 +21,13 @@ pub const DEV_EOD_TEMPLATE_ID: &str = "dayseam.dev_eod";
 /// [`crate::ReportDraft::template_version`]. Bumped whenever the
 /// rendered output would change for the same input; pure cosmetic
 /// changes in comments stay on the same version.
-pub const DEV_EOD_TEMPLATE_VERSION: &str = "2026-04-18";
+///
+/// * `2026-04-18` — initial `dev_eod` template (one bullet per
+///   `CommitSet` group with a `_N commits_` suffix).
+/// * `2026-04-20` — DAY-52: one bullet per commit for `CommitSet`
+///   groups, inline short-SHA in verbose mode, and `rollup`-side
+///   deduplication of `CommitSet` groups that share a repo/date.
+pub const DEV_EOD_TEMPLATE_VERSION: &str = "2026-04-20";
 
 /// Build a fresh [`Handlebars`] registry with every bundled template
 /// + partial registered.

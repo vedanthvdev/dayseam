@@ -48,8 +48,24 @@ impl ActivityRepo {
             let raw_ref_json = serde_json::to_string(&e.raw_ref)?;
             let privacy = privacy_to_db(&e.privacy);
 
+            // `INSERT OR IGNORE` is load-bearing here. The orchestrator
+            // calls `insert_many` on every generate run, and local-git
+            // (and every other connector) assigns a deterministic
+            // `ActivityEvent::id` derived from
+            // `(source_id, external_id, kind)` so repeat runs reproduce
+            // the same row verbatim. Without `OR IGNORE` the second
+            // generation of the same day blows up on either the `id`
+            // primary-key or the `UNIQUE(source_id, external_id, kind)`
+            // index — and because the orchestrator currently falls
+            // through to `Failed` on any db error here, that would
+            // mean every second report fails to render. We prefer the
+            // first-write-wins semantics: even if a later run has
+            // slightly different `title` / `links_json`, what's already
+            // on disk is what the prior draft's evidence ids point at,
+            // so keeping that row avoids dangling references from
+            // still-resident `report_drafts`. DAY-52.
             sqlx::query(
-                "INSERT INTO activity_events
+                "INSERT OR IGNORE INTO activity_events
                     (id, source_id, external_id, kind, occurred_at, actor_json, title, body,
                      links_json, entities_json, parent_external_id, metadata_json, raw_ref,
                      privacy)
@@ -114,8 +130,12 @@ impl ActivityRepo {
     /// them on demand when the user clicks the bullet.
     ///
     /// Preserves input order, silently drops ids that no longer exist
-    /// on disk (retention can evict them) rather than treating a miss
-    /// as an error — the popover just shows whatever is still there.
+    /// on disk rather than treating a miss as an error — the popover
+    /// just shows whatever is still there. Phase 2 retention does not
+    /// prune `activity_events`, so a miss today means the row was
+    /// never written (pre-DAY-52 the orchestrator never called
+    /// `insert_many`) or the owning source was deleted (the FK
+    /// cascades), not that a sweep evicted it.
     pub async fn get_many(&self, ids: &[Uuid]) -> DbResult<Vec<ActivityEvent>> {
         if ids.is_empty() {
             return Ok(Vec::new());

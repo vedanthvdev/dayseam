@@ -261,7 +261,7 @@ async fn local_repos_upsert_and_private_toggle() {
 }
 
 #[tokio::test]
-async fn activity_events_round_trip_and_unique() {
+async fn activity_events_round_trip_and_reinsert_is_idempotent() {
     let (pool, _dir) = test_pool().await;
     let sources = SourceRepo::new(pool.clone());
     let events = ActivityRepo::new(pool.clone());
@@ -275,10 +275,20 @@ async fn activity_events_round_trip_and_unique() {
     let got = events.list_by_source_date(&src.id, date).await.unwrap();
     assert_eq!(got, vec![event.clone()]);
 
-    let err = events.insert_many(&[event.clone()]).await.unwrap_err();
-    assert!(
-        matches!(err, DbError::Conflict { .. }),
-        "expected Conflict, got {err:?}"
+    // DAY-52: `insert_many` is now `INSERT OR IGNORE`. Re-inserting the
+    // same deterministic-id event on a second generate run must succeed
+    // silently (first write wins) rather than erroring, otherwise every
+    // regeneration of the same day would tear the sync down.
+    events
+        .insert_many(&[event.clone()])
+        .await
+        .expect("re-insert of a deterministic event id must be idempotent");
+
+    let still_one = events.list_by_source_date(&src.id, date).await.unwrap();
+    assert_eq!(
+        still_one,
+        vec![event.clone()],
+        "idempotent re-insert must not duplicate rows",
     );
 }
 

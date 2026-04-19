@@ -118,6 +118,29 @@ async fn single_source_completes_and_persists_draft() {
     assert_eq!(draft.template_id, DEV_EOD_TEMPLATE_ID);
     assert_eq!(draft.per_source_state.len(), 1);
 
+    // DAY-52: the orchestrator now persists `activity_events` before
+    // render so the evidence popover can hydrate them. The draft's
+    // `evidence` rows point at event ids that must exist on disk;
+    // otherwise every bullet shows "no longer on disk".
+    let activity_ids: Vec<_> = draft
+        .evidence
+        .iter()
+        .flat_map(|e| e.event_ids.iter().copied())
+        .collect();
+    assert!(
+        !activity_ids.is_empty(),
+        "happy path draft must reference at least one event",
+    );
+    let hydrated = dayseam_db::ActivityRepo::new(pool.clone())
+        .get_many(&activity_ids)
+        .await
+        .expect("activity_events lookup");
+    assert_eq!(
+        hydrated.len(),
+        activity_ids.len(),
+        "every evidence event id must resolve to a persisted row",
+    );
+
     // In-flight entry cleared (terminal path owns cleanup).
     assert_eq!(orch.in_flight_count().await, 0);
 }

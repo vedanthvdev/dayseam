@@ -251,6 +251,34 @@ impl SourceConnector for LocalGitConnector {
             }
         }
 
+        if filtered_by_identity > 0 {
+            // The most common reason a commit today is yours but got
+            // filtered: you authored-merged via GitHub / GitLab's
+            // web UI, which rewrites the committer as a noreply
+            // alias (`NNNN+user@users.noreply.github.com` on GitHub)
+            // that isn't in your identity list. Surface the count
+            // plus the copy-pasteable hint so the user has a clear
+            // path to fixing their identity mapping from the log.
+            // See `error_codes::LOCAL_GIT_COMMITS_FILTERED_BY_IDENTITY`
+            // for the machine-readable code. DAY-52.
+            ctx.logs.send(
+                LogLevel::Warn,
+                Some(ctx.source_id),
+                format!(
+                    "{filtered_by_identity} commit(s) on this day were authored or committed \
+                     by email(s) not in your identity list. If those commits are yours — \
+                     e.g. merge commits made through the GitHub / GitLab web UI that use a \
+                     `NNNN+user@users.noreply.github.com` alias — add the email to your \
+                     identity mapping under Settings → Identities to include them in \
+                     reports."
+                ),
+                serde_json::json!({
+                    "code": error_codes::LOCAL_GIT_COMMITS_FILTERED_BY_IDENTITY,
+                    "count": filtered_by_identity,
+                }),
+            );
+        }
+
         let stats = SyncStats {
             fetched_count: events.len() as u64,
             filtered_by_identity,

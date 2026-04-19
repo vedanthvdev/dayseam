@@ -346,6 +346,40 @@ async fn run_background(
     // incomplete report.
     let (events, artifacts, per_source_state, per_source_syncrun) = split_fan_out(per_source);
 
+    // Persist the raw `activity_events` to disk before render. The
+    // evidence popover in the UI hydrates `ReportDraft::evidence`
+    // event ids via `activity_events_get`; without this call the
+    // ids land in the persisted draft but point at rows that were
+    // never written, and every bullet shows "events are no longer
+    // on disk". Pre-DAY-52 this was a silent Phase 2 bug because the
+    // rendered draft already carried the visible bullet text; DAY-52
+    // made every bullet clickable so the gap is now surfaced as a
+    // UX regression. `insert_many` is `INSERT OR IGNORE`, so a
+    // regeneration of the same day against the same source is a
+    // no-op rather than a constraint violation (connectors assign
+    // deterministic ids keyed off `external_id`). A failure here
+    // falls through to `Failed` the same way a draft insert would —
+    // a draft whose evidence can't be hydrated is not a draft.
+    if !events.is_empty() {
+        let activity_repo = dayseam_db::ActivityRepo::new(orch.pool.clone());
+        if let Err(e) = activity_repo.insert_many(&events).await {
+            tracing::error!(
+                run_id = %run_id,
+                error = %e,
+                "activity_events insert failed — run terminating as Failed",
+            );
+            return terminate_failed(
+                &orch,
+                run_id,
+                &key,
+                &progress,
+                per_source_syncrun,
+                &format!("activity_events insert failed: {e}"),
+            )
+            .await;
+        }
+    }
+
     let source_identities: Vec<SourceIdentity> = request
         .sources
         .iter()
