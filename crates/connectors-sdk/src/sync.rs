@@ -13,7 +13,7 @@
 //! signature change.
 
 use chrono::NaiveDate;
-use dayseam_core::{ActivityEvent, LogEvent, RawRef};
+use dayseam_core::{ActivityEvent, Artifact, LogEvent, RawRef};
 use serde::{Deserialize, Serialize};
 
 /// What the orchestrator is asking the connector to fetch.
@@ -59,11 +59,13 @@ pub struct Checkpoint {
 
 /// Everything a successful `sync` call produced.
 ///
-/// `artifacts` is intentionally absent from v0.1: the canonical
-/// artifact layer lands in Phase 2 alongside multi-source
-/// correlation. Connectors therefore return events + optional
-/// checkpoint + stats for now; the orchestrator promotes sets of
-/// events into artifacts downstream.
+/// As of Phase 2 (Task 2) this now includes an `artifacts` field: the
+/// canonical upstream records grouped around one or more `events`.
+/// Connectors that have a natural artefact grouping (`local-git`'s
+/// `(repo, day)` commit set, a MR thread, an issue) emit one
+/// [`dayseam_core::Artifact`] per group; connectors without a
+/// grouping leave the vec empty and the orchestrator treats each
+/// event as its own implicit artefact.
 #[derive(Debug, Clone, Default)]
 pub struct SyncResult {
     /// Normalised evidence records. Every `ActivityEvent::raw_ref`
@@ -71,6 +73,12 @@ pub struct SyncResult {
     /// already-persisted row for connectors that wrote to the raw
     /// store in-line).
     pub events: Vec<ActivityEvent>,
+    /// Canonical artefacts produced by the connector, one per
+    /// `(source_id, kind, external_id)` group that had at least one
+    /// matching event. See `ARCHITECTURE.md` §7A. Deterministic ids
+    /// (via [`dayseam_core::ArtifactId::deterministic`]) make
+    /// re-syncs idempotent at the DB layer.
+    pub artifacts: Vec<Artifact>,
     /// Checkpoint to persist in the `SyncRun` row so the next
     /// incremental call can resume from here. `None` means the
     /// connector does not support incremental sync.

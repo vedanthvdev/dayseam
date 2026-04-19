@@ -1,0 +1,33 @@
+[package]
+name = "connector-local-git"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+description = "Local-git source connector for Dayseam: discovers repos under configured scan roots and emits CommitAuthored events + CommitSet artifacts for a requested day."
+
+[dependencies]
+connectors-sdk = { path = "../../connectors-sdk", version = "0.0.0" }
+dayseam-core = { path = "../../dayseam-core", version = "0.0.0" }
+dayseam-events = { path = "../../dayseam-events", version = "0.0.0" }
+
+async-trait = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+uuid = { workspace = true }
+# `vendored-libgit2` bundles the C library so the connector never
+# depends on a host-installed libgit2 (which would vary across
+# contributor machines and CI runners). Default features off so we
+# don't pick up ssh/https transport crates we never use — local-git
+# reads filesystem-only repos.
+git2 = { version = "0.20.4", default-features = false, features = ["vendored-libgit2"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+tempfile = "3"
+tokio-util = { version = "0.7", features = ["rt"] }
+cargo_metadata = "0.19"

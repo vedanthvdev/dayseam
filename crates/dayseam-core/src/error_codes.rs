@@ -20,6 +20,29 @@ pub const GITLAB_UPSTREAM_SHAPE_CHANGED: &str = "gitlab.upstream_shape_changed";
 
 pub const LOCAL_GIT_REPO_LOCKED: &str = "local_git.repo_locked";
 pub const LOCAL_GIT_REPO_UNREADABLE: &str = "local_git.repo_unreadable";
+/// The repository exists but its object database is corrupt and
+/// `git2::Repository::open` / `walk` returned an error that does not
+/// fit the "locked" or "unreadable" buckets. Surfaced as a
+/// `LogEvent::Error` so the run continues across other repos; the
+/// orchestrator still produces a report, just without this repo's
+/// commits.
+pub const LOCAL_GIT_REPO_CORRUPT: &str = "local_git.repo_corrupt";
+/// A configured scan root does not exist on disk. Fatal for the
+/// connector's `sync` call (the user asked us to scan a path that
+/// isn't there); surfaced as `DayseamError::Io` with a
+/// `path = Some(root)` so the UI can render the exact missing path.
+pub const LOCAL_GIT_REPO_NOT_FOUND: &str = "local_git.repo_not_found";
+/// The repo has no author/committer signature configured and every
+/// commit we tried to read came back without a usable email. Emitted
+/// as a warning log; we still emit the `CommitAuthored` event because
+/// "someone committed here today" is still signal, just without
+/// identity attribution.
+pub const LOCAL_GIT_NO_SIGNATURE: &str = "local_git.no_signature";
+/// Discovery hit the configured `max_roots` cap before finishing
+/// walking the scan tree. Surfaced as a warning log with the cap's
+/// value and the first N roots so the user can either raise the cap
+/// or narrow their scan roots.
+pub const LOCAL_GIT_TOO_MANY_ROOTS: &str = "local_git.too_many_roots";
 
 // -------- Sinks -------------------------------------------------------------
 
@@ -85,6 +108,10 @@ pub const ALL: &[&str] = &[
     GITLAB_UPSTREAM_SHAPE_CHANGED,
     LOCAL_GIT_REPO_LOCKED,
     LOCAL_GIT_REPO_UNREADABLE,
+    LOCAL_GIT_REPO_CORRUPT,
+    LOCAL_GIT_REPO_NOT_FOUND,
+    LOCAL_GIT_NO_SIGNATURE,
+    LOCAL_GIT_TOO_MANY_ROOTS,
     SINK_FS_NOT_WRITABLE,
     SINK_FS_DESTINATION_MISSING,
     SINK_MALFORMED_MARKER,

@@ -180,6 +180,7 @@ impl SourceConnector for MockConnector {
         };
         Ok(SyncResult {
             events: fetched,
+            artifacts: Vec::new(),
             checkpoint: None,
             stats,
             warnings: Vec::new(),

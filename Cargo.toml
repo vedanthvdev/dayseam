@@ -8,6 +8,7 @@ members = [
     "crates/dayseam-events",
     "crates/dayseam-report",
     "crates/connectors-sdk",
+    "crates/connectors/connector-local-git",
     "crates/sinks-sdk",
 ]
 
