@@ -6,7 +6,7 @@
 //! produces [`RolledUpArtifact`] records keyed by the artifact (real
 //! or synthetic) and sorted so downstream rendering is deterministic.
 //!
-//! Two invariants worth reading twice:
+//! Three invariants worth reading twice:
 //!
 //! 1. **Every event lands in exactly one group.** An event belongs to
 //!    an [`Artifact`] iff that artifact's payload claims its id; an
@@ -15,7 +15,15 @@
 //!    — the same shape the connector would have produced had it
 //!    emitted one. This keeps the template blind to whether the
 //!    connector pre-grouped or not.
-//! 2. **Sort order is total.** Groups are ordered by
+//! 2. **CommitSet groups are deduplicated by `(repo_path, date)`.**
+//!    Two configured sources that happen to scan the same repo (the
+//!    user added an overlapping scan root by mistake, or a symlink
+//!    exposes one repo under two paths that canonicalise the same)
+//!    each emit their own `CommitSet` artifact. Without this merge
+//!    step the report would show every commit twice. Events are
+//!    unioned across the colliding groups and deduplicated by commit
+//!    SHA so the count on the output side is honest.
+//! 3. **Sort order is total.** Groups are ordered by
 //!    `(kind_token, external_id)`; events inside a group are ordered
 //!    by `(occurred_at, external_id, id)`. No hash-map iteration
 //!    survives into the render stage.
@@ -135,8 +143,89 @@ pub(crate) fn roll_up(
         });
     }
 
+    let groups = merge_duplicate_commit_sets(groups);
+    let mut groups = groups;
     sort_groups(&mut groups);
     groups
+}
+
+/// Merge `CommitSet` groups that share a `(repo_path, date)` key.
+///
+/// Two sources scanning the same repository each produce their own
+/// `CommitSet` artifact for a given day; without this pass the
+/// report renders identical bullets twice. We keep the first group's
+/// artifact id (so `bullet_id` stays stable across runs as long as
+/// the canonical source doesn't churn) and union the events from
+/// every colliding group, deduplicating by commit SHA
+/// (`ActivityEvent::external_id`).
+///
+/// This runs on *rolled-up* groups so it catches both real
+/// `CommitSet` artifacts emitted by the connector **and** synthetic
+/// ones the orphan path minted. The pass is a no-op when no two
+/// groups share the key — we pay one `BTreeMap` insertion per group
+/// and no extra allocation otherwise.
+fn merge_duplicate_commit_sets(groups: Vec<RolledUpArtifact>) -> Vec<RolledUpArtifact> {
+    use std::collections::HashSet;
+
+    let mut by_key: BTreeMap<(PathBuf, NaiveDate), RolledUpArtifact> = BTreeMap::new();
+    // Preserve first-seen order so the final sort has a deterministic
+    // tie-breaker when two merged groups sort equal on
+    // `(kind_token, external_id)` — the downstream `sort_groups` is
+    // stable, so first-seen wins.
+    let mut order: Vec<(PathBuf, NaiveDate)> = Vec::with_capacity(groups.len());
+
+    for group in groups {
+        let key = commit_set_key(&group);
+        match key {
+            Some(k) => {
+                if let Some(existing) = by_key.get_mut(&k) {
+                    let mut seen: HashSet<String> = existing
+                        .events
+                        .iter()
+                        .map(|e| e.external_id.clone())
+                        .collect();
+                    for event in group.events {
+                        if seen.insert(event.external_id.clone()) {
+                            existing.events.push(event);
+                        }
+                    }
+                    sort_events(&mut existing.events);
+                } else {
+                    order.push(k.clone());
+                    by_key.insert(k, group);
+                }
+            }
+            None => {
+                // Non-CommitSet kinds are passed through untouched.
+                // The `order` vec is keyed by `(repo_path, date)` so
+                // we can't reuse it; push this group onto the output
+                // via a sentinel key and let the caller re-sort.
+                // Phase 2 only ships CommitSet so this branch is
+                // unreachable today, but keeping the scaffolding
+                // makes the Phase 3 MergeRequest path a one-file
+                // change.
+                let sentinel = (
+                    PathBuf::from(format!("__non_commit_set__::{}", group.artifact.id)),
+                    NaiveDate::from_ymd_opt(1970, 1, 1).unwrap_or_default(),
+                );
+                order.push(sentinel.clone());
+                by_key.insert(sentinel, group);
+            }
+        }
+    }
+
+    order
+        .into_iter()
+        .filter_map(|k| by_key.remove(&k))
+        .collect()
+}
+
+fn commit_set_key(group: &RolledUpArtifact) -> Option<(PathBuf, NaiveDate)> {
+    match &group.artifact.payload {
+        ArtifactPayload::CommitSet {
+            repo_path, date, ..
+        } => Some((repo_path.clone(), *date)),
+    }
 }
 
 fn sort_events(events: &mut [ActivityEvent]) {
@@ -273,6 +362,82 @@ mod tests {
         assert_eq!(groups[0].events.len(), 2);
         assert_eq!(groups[0].events[0].id, e1.id);
         assert_eq!(groups[0].events[1].id, e2.id);
+    }
+
+    /// DAY-52 regression: two configured sources scanning the same
+    /// repository each produce their own `CommitSet` artifact for
+    /// the same day. The rollup merges them by `(repo_path, date)`
+    /// so the downstream render sees one group with every unique
+    /// commit, not two groups with the same commits.
+    #[test]
+    fn duplicate_commit_sets_are_merged_across_sources() {
+        let src_a = Uuid::from_u128(0x2222);
+        let src_b = Uuid::from_u128(0x3333);
+
+        // e_a / e_b: "same commit" (same SHA / title) seen by two
+        // sources. They have *different* event ids because
+        // `ActivityEvent::deterministic_id` hashes in the source id,
+        // so the dedup has to key on the commit SHA, not the event
+        // id.
+        let e_a = event(1, src_a, 9, "/work/dayseam");
+        let e_b = event(1, src_b, 9, "/work/dayseam");
+        // Separate SHA, unique to source_a.
+        let e_a_only = event(2, src_a, 10, "/work/dayseam");
+
+        let day = NaiveDate::from_ymd_opt(2026, 4, 18).unwrap();
+        let external_id = format!("/work/dayseam::{day}");
+        let art_a = Artifact {
+            id: ArtifactId::deterministic(&src_a, ArtifactKind::CommitSet, &external_id),
+            source_id: src_a,
+            kind: ArtifactKind::CommitSet,
+            external_id: external_id.clone(),
+            payload: ArtifactPayload::CommitSet {
+                repo_path: PathBuf::from("/work/dayseam"),
+                date: day,
+                event_ids: vec![e_a.id, e_a_only.id],
+                commit_shas: vec![e_a.external_id.clone(), e_a_only.external_id.clone()],
+            },
+            created_at: Utc.with_ymd_and_hms(2026, 4, 18, 0, 0, 0).unwrap(),
+        };
+        let art_b = Artifact {
+            id: ArtifactId::deterministic(&src_b, ArtifactKind::CommitSet, &external_id),
+            source_id: src_b,
+            kind: ArtifactKind::CommitSet,
+            external_id,
+            payload: ArtifactPayload::CommitSet {
+                repo_path: PathBuf::from("/work/dayseam"),
+                date: day,
+                event_ids: vec![e_b.id],
+                commit_shas: vec![e_b.external_id.clone()],
+            },
+            created_at: Utc.with_ymd_and_hms(2026, 4, 18, 0, 0, 0).unwrap(),
+        };
+
+        let groups = roll_up(
+            &[e_a.clone(), e_a_only.clone(), e_b],
+            &[art_a.clone(), art_b],
+            day,
+        );
+
+        assert_eq!(
+            groups.len(),
+            1,
+            "two sources sharing a repo should merge into one group"
+        );
+        let shas: Vec<&str> = groups[0]
+            .events
+            .iter()
+            .map(|e| e.external_id.as_str())
+            .collect();
+        assert_eq!(
+            shas,
+            vec!["sha1", "sha2"],
+            "events unioned and deduplicated by SHA, sorted by (occurred_at, id)"
+        );
+        assert_eq!(
+            groups[0].artifact.id, art_a.id,
+            "first-seen group wins the artifact id so bullet_id stays stable"
+        );
     }
 
     #[test]

@@ -7,16 +7,13 @@
 //! deliberately scoped to the `CommitSet` artifacts
 //! `connector-local-git` produces.
 //!
-//! The template is two Handlebars partials — the two logical hinges
-//! future templates will reuse:
-//!
-//! * `section_commits` — renders the markdown fragment that becomes a
-//!   bullet's [`dayseam_core::RenderedBullet::text`]. Handles the
-//!   normal case and the verbose-mode expansion.
-//! * `evidence_link` — renders the inline evidence suffix
-//!   ("_1 commit_"). Kept in its own partial so templates that
-//!   aggregate differently (e.g. a weekly rollup) can replace it
-//!   without forking the whole section.
+//! `section_commits` is the only partial the template registers. It
+//! renders one bullet per commit (the Phase 2 rule — see
+//! `render.rs` for the rationale) with an optional verbose-mode SHA
+//! suffix. The older `evidence_link` partial (rendering
+//! "_N commits_") was removed in DAY-52 along with the
+//! per-CommitSet bullet shape it supported; reintroduce it alongside
+//! whichever aggregated artifact kind needs it.
 //!
 //! Partial sources are embedded as string constants so `cargo test`
 //! works on any machine without a working-directory assumption.
@@ -25,19 +22,16 @@ use handlebars::Handlebars;
 
 use crate::error::ReportError;
 
-/// `section_commits` partial source. Input is a [`crate::render::BulletCtx`]
-/// (see `render.rs`).
-const SECTION_COMMITS: &str = "{{headline}} — {{> evidence_link evidence=evidence}}\
-{{#if verbose_mode}}\
-{{#each verbose_lines}}
-  - {{{this}}}\
-{{/each}}\
-{{/if}}";
-
-/// `evidence_link` partial source. Expects a `{ "evidence": "1 commit" }`
-/// context; rendered both inline from `section_commits` and directly
-/// by tests that want to snapshot just the evidence suffix.
-const EVIDENCE_LINK: &str = "_{{evidence}}_";
+/// `section_commits` partial source. Input is a
+/// [`crate::render::CommitBulletCtx`] (see `render.rs`).
+///
+/// * Non-verbose: `{{headline}}` — a single markdown bullet.
+/// * Verbose: `{{headline}} · `{{short_sha}}`` — the plain text is
+///   a strict prefix of the verbose text, which
+///   `tests/invariants.rs::verbose_mode_only_adds_bullets`
+///   depends on.
+const SECTION_COMMITS: &str =
+    "{{headline}}{{#if verbose_mode}}{{#if short_sha}} · `{{short_sha}}`{{/if}}{{/if}}";
 
 pub(crate) fn register(reg: &mut Handlebars<'_>) -> Result<(), ReportError> {
     reg.register_partial("section_commits", SECTION_COMMITS)
@@ -45,17 +39,5 @@ pub(crate) fn register(reg: &mut Handlebars<'_>) -> Result<(), ReportError> {
             template_id: format!("{}::section_commits", super::DEV_EOD_TEMPLATE_ID),
             source,
         })?;
-    reg.register_partial("evidence_link", EVIDENCE_LINK)
-        .map_err(|source| ReportError::Register {
-            template_id: format!("{}::evidence_link", super::DEV_EOD_TEMPLATE_ID),
-            source,
-        })?;
     Ok(())
-}
-
-/// Render the free-standing evidence suffix (`_1 commit_`) without
-/// going through the Handlebars registry. Kept next to the partial
-/// it mirrors so the two forms never drift.
-pub(crate) fn render_evidence_suffix(reason: &str) -> String {
-    format!("_{reason}_")
 }

@@ -37,6 +37,87 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Fixed
 
+- **Report accuracy: per-commit bullets, cross-source dedup,
+  identity-filter visibility.** Three related report-accuracy bugs
+  users hit on the first end-to-end generation, scoped together so
+  the fix goes in before Phase 3 starts.
+  - **One bullet per commit, not per repo-day.** The report engine
+    used to emit one bullet per `CommitSet` artifact with
+    `_N commits_` as the evidence suffix and the earliest commit's
+    subject as the headline. That collapsed N unrelated pieces of
+    work (branches, PRs, fixes) behind whichever commit happened to
+    land first at midnight and hid the rest from the user. For
+    `CommitSet` groups `render.rs` now emits one bullet per commit,
+    each with its own evidence edge pointing at exactly the commit
+    that produced the summary text. Verbose mode appends a backtick
+    short-SHA so the plain-mode text is still a strict prefix of
+    the verbose-mode text, keeping the `verbose_mode is additive`
+    invariant true. Future artifact kinds (`MergeRequest`, `Issue`)
+    will still roll up to one bullet per artifact; the per-commit
+    rule is scoped to `CommitSet`.
+  - **No more duplicate bullets when two sources scan the same
+    repo.** If the user configures multiple local-git sources with
+    overlapping scan roots (a common onboarding mistake — or an
+    unnoticed symlink), each source emits its own `CommitSet`
+    artifact for the shared repo and the report rendered every
+    commit twice. `rollup.rs` now merges `CommitSet` groups by
+    `(repo_path, date)` after artifact claim: events are unioned
+    across the colliding groups and deduplicated by commit SHA, and
+    the first-seen group's artifact id wins so `bullet_id` stays
+    stable run-to-run. Covered by a new rollup unit test and a new
+    golden-level integration test that mounts two sources on the
+    same repo and asserts exactly one bullet per commit.
+  - **`filtered_by_identity` warn log.** Merge commits authored
+    through the GitHub / GitLab web UI use a
+    `NNNN+user@users.noreply.github.com` alias as the committer,
+    which isn't in the user's identity list by default, so the
+    connector silently dropped them. The sync now emits a warn
+    `LogEvent` at the end of every run where
+    `filtered_by_identity > 0`, carrying the new
+    `local_git.commits_filtered_by_identity` error code, the count,
+    and copy-pasteable hint text naming the noreply alias pattern
+    so the user can fix the identity mapping from the log without
+    hunting for the cause.
+  - **`activity_events` now persist.** The orchestrator used to ship
+    `ActivityEvent`s through render in-memory and write only the
+    `ReportDraft` to disk, leaving `draft.evidence.event_ids`
+    pointing at rows that were never inserted. The evidence popover
+    consequently rendered its empty-state fallback ("Retention may
+    have evicted them") for every bullet in every report — a Phase
+    2 bug the per-bullet-per-commit change surfaced loudly because
+    every bullet is now individually clickable. `generate_report`
+    now calls `ActivityRepo::insert_many(&events)` between fan-out
+    and render; `insert_many` switched to `INSERT OR IGNORE` so
+    deterministic event ids (connectors derive them from
+    `external_id`) survive regenerations of the same day as a
+    no-op rather than a constraint violation. Failures here now
+    terminate the run as `Failed` with the existing
+    `terminate_failed` path — a draft whose evidence can't be
+    hydrated is not a draft. Happy-path integration test extended
+    to assert every evidence event id round-trips through the
+    repo.
+  - **Template version bump: `dev_eod` → `2026-04-20`.** The
+    per-bullet-per-commit change and the cross-source dedup both
+    change rendered output for the same input, so the template
+    version contract (`DEV_EOD_TEMPLATE_VERSION`) bumps from
+    `2026-04-18` to `2026-04-20`. Golden snapshots pick it up
+    automatically; the version log gains an entry describing the
+    semantic delta.
+  - **Clearer template-version UI label.** `StreamingPreview` used
+    to render `{template_id} · {template_version}` in the report
+    header, which sat right next to the report date and produced
+    visible confusions like `2026-04-19` (report date) next to
+    `2026-04-18` (template version). Now renders
+    `{template_id} · template v{template_version}` with a `title`
+    attribute spelling the two apart in plain English.
+  - **Popover empty-state copy.** The fallback that shows when
+    `activity_events_get` returns an empty set claimed retention
+    may have evicted the events, but the retention sweep doesn't
+    touch `activity_events` at all (Phase 2 only prunes
+    `raw_payloads` and `log_entries`), so the message was
+    misleading. Now reads "The events that produced this bullet
+    aren't available on disk. Regenerating the report usually
+    brings them back." — which is both true and actionable.
 - **Sources list drift across consumers.** `useSources()` now fans
   every successful `sources_add` / `update` / `remove` /
   `healthcheck` out over a module-level event bus. Each mounted
@@ -45,6 +126,12 @@ All notable changes to Dayseam are documented in this file. The format follows
   owns its own local `useState`. Covered by a regression test that
   mounts two hook instances and asserts the observer sees a delete
   driven from the mutator.
+- **Pre-existing daily flake in the App snapshot.** The
+  `App.snapshot.test.tsx` fixture captured the `ActionRow` date
+  input's `value` attribute verbatim, which defaults to
+  `localTodayIso()` and rotated the snapshot every midnight. The
+  sanitiser now stubs the attribute to `<today>` so the snapshot
+  only flags genuine layout drift.
 
 ### Changed
 

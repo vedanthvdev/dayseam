@@ -1,18 +1,22 @@
 //! Stage 3: walk the rollup output, build bullets, run the template.
 //!
-//! The engine emits exactly one bullet per rolled-up artifact — a
-//! merged MR would become one bullet, its commits the evidence
-//! beneath it (`ARCHITECTURE.md` §10). Phase 2 ships only
-//! [`dayseam_core::ArtifactKind::CommitSet`] so the section taxonomy
-//! is a single "Commits" section; rollup already orders by kind so
-//! additional sections (merge requests, issues) slot in without
-//! touching this module.
+//! For [`dayseam_core::ArtifactKind::CommitSet`] groups — the only
+//! kind Phase 2 ships — the engine emits **one bullet per commit**.
+//! The earlier design was "one bullet per artifact" (one bullet per
+//! repo-day CommitSet, with a `_N commits_` evidence suffix), but
+//! that collapsed N distinct pieces of work behind whichever commit
+//! happened to be earliest on the day and hid all the rest. Phase 3
+//! artifact kinds (`MergeRequest`, `Issue`) will still be one bullet
+//! per artifact; each kind owns its own rendering rule (see
+//! `render_group` below).
 //!
 //! **Determinism.** `bullet_id` is a sha256 of
 //! `(template_id || section_id || artifact_id || sorted_event_ids)`
 //! so it never depends on the iteration order of a map, the system
-//! clock, or a RNG. Tests lean on this heavily — see
-//! `tests/golden.rs` + `tests/purity.rs`.
+//! clock, or a RNG. Per-commit bullets key on `[event.id]` — a
+//! one-element vector — which is still deterministic per commit.
+//! Tests lean on this heavily — see `tests/golden.rs` +
+//! `tests/invariants.rs`.
 
 use dayseam_core::{
     ActivityEvent, ArtifactId, ArtifactPayload, Evidence, Privacy, RenderedBullet, RenderedSection,
@@ -109,19 +113,24 @@ fn build_sections(
     template_id: &str,
     verbose_mode: bool,
 ) -> Result<(Vec<RenderedSection>, Vec<Evidence>), ReportError> {
+    // Pre-size for the common case where every group is a CommitSet
+    // with a handful of events. Under-allocating is fine; the
+    // allocator will grow the vec as needed.
     let mut bullets: Vec<RenderedBullet> = Vec::with_capacity(groups.len());
     let mut evidence: Vec<Evidence> = Vec::new();
 
     for group in groups {
-        let (bullet, group_evidence) = render_group_bullet(
+        let rendered = render_group(
             group,
             registry,
             template_id,
             COMMITS_SECTION_ID,
             verbose_mode,
         )?;
-        evidence.push(group_evidence);
-        bullets.push(bullet);
+        for (bullet, ev) in rendered {
+            evidence.push(ev);
+            bullets.push(bullet);
+        }
     }
 
     let section = RenderedSection {
@@ -144,36 +153,76 @@ fn empty_section(date: chrono::NaiveDate) -> RenderedSection {
     }
 }
 
-fn render_group_bullet(
+/// Render every bullet this group contributes, in order.
+///
+/// For `CommitSet` groups, that means one bullet per commit — the
+/// rule that moved here in DAY-52 to stop collapsing N unrelated
+/// commits behind whichever happened to be earliest on the day.
+/// Evidence is emitted one edge per commit too (`event_ids = [e.id]`)
+/// so callers clicking the bullet land on exactly the commit that
+/// produced the summary text.
+///
+/// Empty CommitSet groups (a claimed artifact whose events all got
+/// filtered out before reaching the rollup) render as zero bullets;
+/// the orchestrator treats a fully-empty day via the `empty_section`
+/// path above, not here.
+fn render_group(
     group: &RolledUpArtifact,
     registry: &handlebars::Handlebars<'_>,
     template_id: &str,
     section_id: &str,
     verbose_mode: bool,
+) -> Result<Vec<(RenderedBullet, Evidence)>, ReportError> {
+    match &group.artifact.payload {
+        ArtifactPayload::CommitSet { repo_path, .. } => {
+            let mut out = Vec::with_capacity(group.events.len());
+            for event in &group.events {
+                out.push(render_commit_bullet(
+                    group.artifact.id,
+                    repo_path,
+                    event,
+                    registry,
+                    template_id,
+                    section_id,
+                    verbose_mode,
+                )?);
+            }
+            Ok(out)
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn render_commit_bullet(
+    artifact_id: ArtifactId,
+    repo_path: &std::path::Path,
+    event: &ActivityEvent,
+    registry: &handlebars::Handlebars<'_>,
+    template_id: &str,
+    section_id: &str,
+    verbose_mode: bool,
 ) -> Result<(RenderedBullet, Evidence), ReportError> {
-    let event_ids: Vec<Uuid> = group.events.iter().map(|e| e.id).collect();
-    let id = bullet_id(template_id, section_id, group.artifact.id, &event_ids);
-    let reason = evidence_reason(&group.events);
+    let event_ids = vec![event.id];
+    let id = bullet_id(template_id, section_id, artifact_id, &event_ids);
+    let reason = "1 commit".to_string();
 
-    let any_redacted = group
-        .events
-        .iter()
-        .any(|e| matches!(e.privacy, Privacy::RedactedPrivateRepo));
+    let redacted = matches!(event.privacy, Privacy::RedactedPrivateRepo);
 
-    let text = if any_redacted {
-        format!(
-            "{REDACTED_BULLET_TEXT} — {}",
-            crate::templates::dev_eod::render_evidence_suffix(&reason)
-        )
+    let text = if redacted {
+        // No repo_label, no commit title, no SHA: private repo
+        // contents must never leak through the report draft, and
+        // `(private work)` already tells the reader "there is
+        // content here, it is redacted". See
+        // `tests/invariants.rs::redacted_events_render_without_message`.
+        REDACTED_BULLET_TEXT.to_string()
     } else {
-        let ctx = BulletCtx {
-            headline: headline(&group.artifact.payload, &group.events),
-            evidence: reason.clone(),
+        let ctx = CommitBulletCtx {
+            headline: commit_headline(repo_path, event),
             verbose_mode,
-            verbose_lines: if verbose_mode {
-                verbose_event_lines(&group.events)
+            short_sha: if verbose_mode {
+                Some(short_sha(&event.external_id))
             } else {
-                Vec::new()
+                None
             },
         };
         registry
@@ -198,46 +247,16 @@ fn render_group_bullet(
 
 // ---- bullet body helpers --------------------------------------------------
 
-fn headline(payload: &ArtifactPayload, events: &[ActivityEvent]) -> String {
-    match payload {
-        ArtifactPayload::CommitSet { repo_path, .. } => {
-            let repo_label = repo_path
-                .file_name()
-                .map(|n| n.to_string_lossy().to_string())
-                .unwrap_or_else(|| repo_path.to_string_lossy().to_string());
-            // The headline shows the first commit's subject as the
-            // "what I did" summary. Count is intentionally *not* in
-            // the headline — the evidence suffix owns the count so
-            // the pluralisation rule lives in one place.
-            let summary = events
-                .first()
-                .map(|e| e.title.clone())
-                .unwrap_or_else(|| "(no commits)".to_string());
-            format!("**{repo_label}** — {summary}")
-        }
-    }
-}
-
-fn verbose_event_lines(events: &[ActivityEvent]) -> Vec<String> {
-    events
-        .iter()
-        .map(|e| {
-            let sha_short = short_sha(&e.external_id);
-            format!("`{sha_short}` {}", e.title)
-        })
-        .collect()
+fn commit_headline(repo_path: &std::path::Path, event: &ActivityEvent) -> String {
+    let repo_label = repo_path
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| repo_path.to_string_lossy().to_string());
+    format!("**{repo_label}** — {}", event.title)
 }
 
 fn short_sha(sha: &str) -> String {
     sha.chars().take(7).collect()
-}
-
-fn evidence_reason(events: &[ActivityEvent]) -> String {
-    match events.len() {
-        0 => "no evidence".to_string(),
-        1 => "1 commit".to_string(),
-        n => format!("{n} commits"),
-    }
 }
 
 // ---- id computation -------------------------------------------------------
@@ -297,10 +316,13 @@ fn format_date_long(date: chrono::NaiveDate) -> String {
 
 // ---- handlebars context ---------------------------------------------------
 
+/// Render context for the `section_commits` partial in per-commit
+/// mode. `short_sha` is only populated when `verbose_mode` is true;
+/// the template gates on `verbose_mode` so non-verbose bullets
+/// never leak the SHA even if the field were populated by mistake.
 #[derive(Serialize)]
-struct BulletCtx {
+struct CommitBulletCtx {
     headline: String,
-    evidence: String,
     verbose_mode: bool,
-    verbose_lines: Vec<String>,
+    short_sha: Option<String>,
 }

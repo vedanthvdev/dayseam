@@ -130,8 +130,11 @@ export function StreamingPreview({
             <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-50">
               {draft.date}
             </h2>
-            <span className="text-xs text-neutral-500 dark:text-neutral-400">
-              {draft.template_id} · {draft.template_version}
+            <span
+              className="text-xs text-neutral-500 dark:text-neutral-400"
+              title={`Template ${draft.template_id} at version ${draft.template_version}`}
+            >
+              {draft.template_id} · template v{draft.template_version}
             </span>
           </header>
           {draft.sections.length === 0 ? (

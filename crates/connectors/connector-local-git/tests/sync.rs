@@ -156,6 +156,91 @@ async fn sync_filters_by_identity() {
     assert_eq!(r.stats.fetched_count, 1);
 }
 
+/// DAY-52: when commits get silently dropped because their author /
+/// committer email isn't in the user's identity list, the sync must
+/// surface a warn log pointing the user at the fix. The most common
+/// trigger is merge commits made through the GitHub/GitLab web UI
+/// (committer becomes a `NNNN+user@users.noreply.github.com`
+/// alias); without this log the user sees "15 commits" in git log
+/// but a report listing only a subset with no explanation.
+#[tokio::test]
+async fn sync_warns_when_identity_filter_drops_commits() {
+    let root = tempdir().unwrap();
+    let t = layout_two_repos(root.path());
+
+    make_fixture_repo(
+        &t.mine,
+        &[FixtureCommit {
+            author_name: "Me",
+            author_email: SELF_EMAIL,
+            message: "mine: kept",
+            when_utc: at_utc(2026, 4, 17, 14, 0),
+        }],
+    );
+    // A commit authored by the GitHub noreply alias — looks like a
+    // merge-via-UI commit. This is the exact failure mode DAY-52
+    // was filed for.
+    make_fixture_repo(
+        &t.theirs,
+        &[FixtureCommit {
+            author_name: "noreply",
+            author_email: "61700595+user@users.noreply.github.com",
+            message: "Merge pull request #50",
+            when_utc: at_utc(2026, 4, 17, 15, 0),
+        }],
+    );
+
+    let connector = LocalGitConnector::new(vec![t.scan_root.clone()], HashSet::new(), utc_tz());
+    let harness = build_ctx_with_self();
+    let day = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
+    let r = connector
+        .sync(&harness.ctx, SyncRequest::Day(day))
+        .await
+        .expect("sync ok");
+
+    assert_eq!(r.stats.filtered_by_identity, 1);
+    assert_eq!(r.events.len(), 1, "only SELF_EMAIL's commit survives");
+
+    // Drain the log channel and verify we emitted the diagnostic.
+    drop(harness.ctx);
+    drop(harness.progress_tx);
+    drop(harness.log_tx);
+    drop(harness.progress_rx);
+    let mut log_rx = harness.log_rx;
+    let mut saw_code = false;
+    let mut saw_hint = false;
+    while let Some(evt) = log_rx.recv().await {
+        if evt
+            .context
+            .get("code")
+            .and_then(|v| v.as_str())
+            .is_some_and(|c| c == error_codes::LOCAL_GIT_COMMITS_FILTERED_BY_IDENTITY)
+        {
+            saw_code = true;
+            if evt
+                .message
+                .to_lowercase()
+                .contains("users.noreply.github.com")
+            {
+                saw_hint = true;
+            }
+            assert_eq!(
+                evt.context.get("count").and_then(|v| v.as_u64()),
+                Some(1),
+                "warn log must carry the dropped-commit count"
+            );
+        }
+    }
+    assert!(
+        saw_code,
+        "expected a LOCAL_GIT_COMMITS_FILTERED_BY_IDENTITY warn log"
+    );
+    assert!(
+        saw_hint,
+        "warn log message must mention the noreply alias so the user has a fix"
+    );
+}
+
 // -------- Invariant 3: one CommitSet per (source, repo, day) ---------------
 
 #[tokio::test]

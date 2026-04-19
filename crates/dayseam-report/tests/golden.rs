@@ -264,6 +264,102 @@ fn dev_eod_verbose_mode_is_additive() {
     insta::assert_yaml_snapshot!("dev_eod_verbose", draft);
 }
 
+/// DAY-52 regression: two configured sources scanning the same repo
+/// each produce their own `CommitSet` artifact for the same day.
+/// The rollup merges them by `(repo_path, date)` so the report
+/// shows each commit exactly once, not twice. This is the Phase 2
+/// "duplicate bullet" bug from the bug report — `2A` in the DAY-52
+/// investigation.
+#[test]
+fn dev_eod_deduplicates_same_repo_across_sources() {
+    let src_a = source_id(12);
+    let src_b = source_id(13);
+    let mut input = fixture_input();
+    input.source_identities = vec![
+        self_git_identity(src_a, "self@example.com"),
+        self_git_identity(src_b, "self@example.com"),
+    ];
+
+    // Both sources saw the same two commits (same SHAs, same
+    // repo_path). The connector emits one `CommitSet` artifact per
+    // (source, repo, day) so artifacts don't collapse at the
+    // per-source boundary; the rollup has to do it.
+    let e1_a = commit_event(
+        src_a,
+        "dup11111",
+        "/work/dayseam",
+        "self@example.com",
+        9,
+        "feat: thing one",
+        Privacy::Normal,
+    );
+    let e1_b = commit_event(
+        src_b,
+        "dup11111",
+        "/work/dayseam",
+        "self@example.com",
+        9,
+        "feat: thing one",
+        Privacy::Normal,
+    );
+    let e2_a = commit_event(
+        src_a,
+        "dup22222",
+        "/work/dayseam",
+        "self@example.com",
+        11,
+        "feat: thing two",
+        Privacy::Normal,
+    );
+    let e2_b = commit_event(
+        src_b,
+        "dup22222",
+        "/work/dayseam",
+        "self@example.com",
+        11,
+        "feat: thing two",
+        Privacy::Normal,
+    );
+
+    let art_a = commit_set_artifact(src_a, "/work/dayseam", &[&e1_a, &e2_a]);
+    let art_b = commit_set_artifact(src_b, "/work/dayseam", &[&e1_b, &e2_b]);
+    input.events = vec![e1_a, e1_b, e2_a, e2_b];
+    input.artifacts = vec![art_a, art_b];
+    input.per_source_state.insert(src_a, succeeded_state(2));
+    input.per_source_state.insert(src_b, succeeded_state(2));
+
+    let draft = dayseam_report::render(input).expect("render must succeed");
+    let bullets: Vec<&str> = draft
+        .sections
+        .iter()
+        .flat_map(|s| s.bullets.iter().map(|b| b.text.as_str()))
+        .collect();
+
+    // Exactly two bullets, not four. Same commit rendered once even
+    // though two sources saw it.
+    assert_eq!(
+        bullets.len(),
+        2,
+        "expected one bullet per commit with cross-source dedup, got: {bullets:?}"
+    );
+    assert!(
+        bullets.iter().any(|b| b.contains("feat: thing one")),
+        "bullets missing first commit: {bullets:?}"
+    );
+    assert!(
+        bullets.iter().any(|b| b.contains("feat: thing two")),
+        "bullets missing second commit: {bullets:?}"
+    );
+    // Bullet ids must be distinct so the UI can click-through to
+    // per-commit evidence without one bullet masking another.
+    let ids: std::collections::HashSet<&str> = draft
+        .sections
+        .iter()
+        .flat_map(|s| s.bullets.iter().map(|b| b.id.as_str()))
+        .collect();
+    assert_eq!(ids.len(), bullets.len(), "duplicate bullet ids: {ids:?}");
+}
+
 /// Sanity: `generated_at` threads through untouched. If the engine
 /// ever starts calling `Utc::now()` this test catches it — drift
 /// here is a leaked side-effect, not a template change.

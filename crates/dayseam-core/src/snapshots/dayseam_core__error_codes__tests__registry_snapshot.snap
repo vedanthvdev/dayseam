@@ -15,6 +15,7 @@ expression: ALL
 - local_git.repo_not_found
 - local_git.no_signature
 - local_git.too_many_roots
+- local_git.commits_filtered_by_identity
 - sink.fs.not_writable
 - sink.fs.destination_missing
 - sink.malformed_marker

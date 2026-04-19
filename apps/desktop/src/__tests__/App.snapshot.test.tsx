@@ -38,11 +38,19 @@ async function renderWithTheme(theme: Theme): Promise<HTMLElement> {
 }
 
 // Attributes that can drift run-to-run (react-generated ids, test
-// ordering) are stripped so the snapshot stays meaningful.
+// ordering, today's date on the ActionRow date picker) are stripped
+// so the snapshot stays meaningful and doesn't flake across
+// midnight. The date input's initial `value` is derived from the
+// user's local calendar day via `localTodayIso()`, so without
+// normalising it the snapshot needs accepting once per day.
 function sanitize(html: string): string {
   return html
     .replace(/\s+data-reactroot=""/g, "")
-    .replace(/id=":[^"]+"/g, 'id="<stable>"');
+    .replace(/id=":[^"]+"/g, 'id="<stable>"')
+    .replace(
+      /(data-testid="action-row-date"[^>]*value=")\d{4}-\d{2}-\d{2}(")/,
+      '$1<today>$2',
+    );
 }
 
 describe("App visual shape", () => {

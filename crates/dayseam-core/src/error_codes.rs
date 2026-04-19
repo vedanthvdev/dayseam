@@ -43,6 +43,16 @@ pub const LOCAL_GIT_NO_SIGNATURE: &str = "local_git.no_signature";
 /// value and the first N roots so the user can either raise the cap
 /// or narrow their scan roots.
 pub const LOCAL_GIT_TOO_MANY_ROOTS: &str = "local_git.too_many_roots";
+/// One or more commits on the selected day were skipped because the
+/// author **and** committer emails are both absent from the user's
+/// [`crate::types::source::SourceIdentity`] list for this source.
+/// Surfaced as a warning log at the end of a sync so the user can
+/// see (a) that there was activity, (b) roughly how many commits
+/// got filtered, and (c) a hint pointing at the most common cause —
+/// merge commits authored through GitHub / GitLab's web UI, which
+/// use the platform's `NNNN+user@users.noreply.github.com` alias
+/// instead of the user's real email. DAY-52.
+pub const LOCAL_GIT_COMMITS_FILTERED_BY_IDENTITY: &str = "local_git.commits_filtered_by_identity";
 
 // -------- Sinks -------------------------------------------------------------
 
@@ -192,6 +202,7 @@ pub const ALL: &[&str] = &[
     LOCAL_GIT_REPO_NOT_FOUND,
     LOCAL_GIT_NO_SIGNATURE,
     LOCAL_GIT_TOO_MANY_ROOTS,
+    LOCAL_GIT_COMMITS_FILTERED_BY_IDENTITY,
     SINK_FS_NOT_WRITABLE,
     SINK_FS_DESTINATION_MISSING,
     SINK_MALFORMED_MARKER,
