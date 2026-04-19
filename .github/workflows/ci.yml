@@ -47,6 +47,25 @@ jobs:
       - name: cargo test
         run: cargo test --workspace --all-features
 
+  # Cheap Linux build of every crate that does NOT depend on Tauri /
+  # the desktop frontend bundle. macOS-only `rust` job above is the
+  # source of truth for the full workspace, but most contributors
+  # (and most future CI consumers) will be on Linux, so we want every
+  # core / engine / sink / connector crate to keep building and
+  # testing on Ubuntu without having to pay for another macOS minute.
+  rust-linux:
+    name: rust-linux
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain (matches rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88.0"
+      - uses: Swatinem/rust-cache@v2
+      - name: cargo test (workspace minus desktop)
+        run: cargo test --workspace --exclude dayseam-desktop --all-features
+
   frontend:
     name: frontend
     runs-on: ubuntu-latest

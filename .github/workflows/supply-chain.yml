@@ -1,0 +1,50 @@
+name: supply-chain
+
+# Three checks that protect us from supply-chain rot without paying
+# for a full Rust + Tauri build:
+#   * cargo deny  — banned crates / unwanted licences / yanked deps
+#   * cargo machete — unused workspace dependencies
+#   * cargo audit — RustSec advisories against the resolved Cargo.lock
+#
+# Run on every PR (so we catch problems at review time) AND on a weekly
+# cron against `master` (so a freshly-published advisory turns red on
+# its own, without waiting for the next PR).
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+  schedule:
+    - cron: "0 6 * * 1"
+
+concurrency:
+  group: supply-chain-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cargo-hygiene:
+    name: cargo-hygiene
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain (matches rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88.0"
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-deny, cargo-machete, cargo-audit
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-deny,cargo-machete,cargo-audit
+
+      - name: cargo deny check
+        run: cargo deny check
+
+      - name: cargo machete
+        run: cargo machete
+
+      - name: cargo audit
+        run: cargo audit
