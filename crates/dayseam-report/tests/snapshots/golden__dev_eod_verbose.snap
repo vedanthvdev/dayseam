@@ -1,0 +1,30 @@
+---
+source: crates/dayseam-report/tests/golden.rs
+assertion_line: 264
+expression: draft
+---
+id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+date: 2026-04-18
+template_id: dayseam.dev_eod
+template_version: 2026-04-18
+sections:
+  - id: commits
+    title: Commits
+    bullets:
+      - id: b_0498fbb46c0e0280
+        text: "**repo-a** — feat: one — _2 commits_\n  - `ver1111` feat: one\n  - `ver2222` feat: two"
+evidence:
+  - bullet_id: b_0498fbb46c0e0280
+    event_ids:
+      - b42af9f8-d6dd-56cd-a302-25eeb19d7605
+      - f7a77d0f-5ad2-5ad7-83c6-a4e9f6c087f4
+    reason: 2 commits
+per_source_state:
+  05000000-0000-0000-0000-000000000000:
+    status: Succeeded
+    started_at: "2026-04-18T23:00:00Z"
+    finished_at: "2026-04-18T23:00:00Z"
+    fetched_count: 2
+    error: ~
+verbose_mode: true
+generated_at: "2026-04-18T23:00:00Z"

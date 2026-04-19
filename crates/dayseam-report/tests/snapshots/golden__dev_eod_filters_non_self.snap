@@ -1,0 +1,29 @@
+---
+source: crates/dayseam-report/tests/golden.rs
+assertion_line: 225
+expression: draft
+---
+id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+date: 2026-04-18
+template_id: dayseam.dev_eod
+template_version: 2026-04-18
+sections:
+  - id: commits
+    title: Commits
+    bullets:
+      - id: b_a760710b779c2949
+        text: "**repo-a** — feat: mine — _1 commit_"
+evidence:
+  - bullet_id: b_a760710b779c2949
+    event_ids:
+      - 6a785db8-ad8d-5c85-8d70-4c4b5dea5cd0
+    reason: 1 commit
+per_source_state:
+  04000000-0000-0000-0000-000000000000:
+    status: Succeeded
+    started_at: "2026-04-18T23:00:00Z"
+    finished_at: "2026-04-18T23:00:00Z"
+    fetched_count: 3
+    error: ~
+verbose_mode: false
+generated_at: "2026-04-18T23:00:00Z"

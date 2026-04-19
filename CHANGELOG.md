@@ -8,6 +8,23 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **`dayseam-report` report engine — Dev EOD template, rollup, render, golden snapshots.**
+  Promotes the Phase-1 crate skeleton into the deterministic engine at
+  the centre of the pipeline: `dayseam_report::render(ReportInput) ->
+  Result<ReportDraft, ReportError>` is a pure function of its input
+  (no IO, no clocks, no randomness). Rollup groups `ActivityEvent`s
+  by `Artifact` (or a synthetic `CommitSet` for orphan events) and
+  sorts them deterministically; the Dev EOD template
+  (`template_id = "dayseam.dev_eod"`, `template_version = "2026-04-18"`)
+  renders one bullet per artifact with a `sha256`-stable `bullet_id`
+  and an `Evidence` edge back to its events. Seven invariants travel
+  with the code: purity, additive verbose mode, every bullet carries
+  evidence, redacted events render as `(private work)`, empty days
+  render an explicit empty-state bullet, golden snapshots cover
+  every `connector-local-git` fixture scenario, and a crate-graph
+  test keeps the engine independent of every connector, sink, and
+  persistence crate. `cargo insta accept` is documented in
+  `CONTRIBUTING.md` for intentional snapshot updates.
 - **Phase 2 implementation plan published.** Draft
   [`docs/plan/2026-04-18-v0.1-phase-2-local-git.md`](./docs/plan/2026-04-18-v0.1-phase-2-local-git.md)
   covering the eight PRs that turn Dayseam from a themed shell into a
