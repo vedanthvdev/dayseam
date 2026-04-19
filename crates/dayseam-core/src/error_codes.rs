@@ -49,6 +49,12 @@ pub const LOCAL_GIT_TOO_MANY_ROOTS: &str = "local_git.too_many_roots";
 pub const SINK_FS_NOT_WRITABLE: &str = "sink.fs.not_writable";
 pub const SINK_FS_DESTINATION_MISSING: &str = "sink.fs.destination_missing";
 pub const SINK_MALFORMED_MARKER: &str = "sink.malformed_marker";
+/// A concurrent `MarkdownFileSink::write` is already in flight for the
+/// same target path. The second caller observes the lock sentinel
+/// (`<file>.dayseam.lock`) and refuses to write rather than risk
+/// interleaving atomic renames. Surfaced as `DayseamError::Io` with the
+/// target path so the UI can offer a "retry in a moment" action.
+pub const SINK_FS_CONCURRENT_WRITE: &str = "sink.fs.concurrent_write";
 
 // -------- Connector SDK ----------------------------------------------------
 
@@ -115,6 +121,7 @@ pub const ALL: &[&str] = &[
     SINK_FS_NOT_WRITABLE,
     SINK_FS_DESTINATION_MISSING,
     SINK_MALFORMED_MARKER,
+    SINK_FS_CONCURRENT_WRITE,
     RUN_CANCELLED_BY_USER,
     RUN_CANCELLED_BY_SHUTDOWN,
     RUN_CANCELLED_BY_SUPERSEDED,

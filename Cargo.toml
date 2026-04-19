@@ -10,6 +10,7 @@ members = [
     "crates/connectors-sdk",
     "crates/connectors/connector-local-git",
     "crates/sinks-sdk",
+    "crates/sinks/sink-markdown-file",
 ]
 
 [workspace.package]

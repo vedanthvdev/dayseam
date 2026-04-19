@@ -18,6 +18,7 @@ expression: ALL
 - sink.fs.not_writable
 - sink.fs.destination_missing
 - sink.malformed_marker
+- sink.fs.concurrent_write
 - run.cancelled.by_user
 - run.cancelled.by_shutdown
 - run.cancelled.by_superseded
