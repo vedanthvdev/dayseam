@@ -9,7 +9,9 @@
 //! the core types stay free of storage concerns.
 
 use chrono::{DateTime, Utc};
-use dayseam_core::{ActivityKind, LogLevel, Privacy, SourceKind};
+use dayseam_core::{
+    ActivityKind, ArtifactKind, LogLevel, Privacy, SourceIdentityKind, SourceKind, SyncRunStatus,
+};
 
 use crate::error::DbError;
 
@@ -114,6 +116,66 @@ pub(crate) fn log_level_from_db(s: &str) -> Result<LogLevel, DbError> {
         other => Err(DbError::InvalidData {
             column: "log_entries.level".into(),
             message: format!("unknown LogLevel `{other}`"),
+        }),
+    }
+}
+
+pub(crate) fn artifact_kind_to_db(k: &ArtifactKind) -> &'static str {
+    match k {
+        ArtifactKind::CommitSet => "CommitSet",
+    }
+}
+
+pub(crate) fn artifact_kind_from_db(s: &str) -> Result<ArtifactKind, DbError> {
+    match s {
+        "CommitSet" => Ok(ArtifactKind::CommitSet),
+        other => Err(DbError::InvalidData {
+            column: "artifacts.kind".into(),
+            message: format!("unknown ArtifactKind `{other}`"),
+        }),
+    }
+}
+
+pub(crate) fn sync_run_status_to_db(s: &SyncRunStatus) -> &'static str {
+    match s {
+        SyncRunStatus::Running => "Running",
+        SyncRunStatus::Completed => "Completed",
+        SyncRunStatus::Cancelled => "Cancelled",
+        SyncRunStatus::Failed => "Failed",
+    }
+}
+
+pub(crate) fn sync_run_status_from_db(s: &str) -> Result<SyncRunStatus, DbError> {
+    match s {
+        "Running" => Ok(SyncRunStatus::Running),
+        "Completed" => Ok(SyncRunStatus::Completed),
+        "Cancelled" => Ok(SyncRunStatus::Cancelled),
+        "Failed" => Ok(SyncRunStatus::Failed),
+        other => Err(DbError::InvalidData {
+            column: "sync_runs.status".into(),
+            message: format!("unknown SyncRunStatus `{other}`"),
+        }),
+    }
+}
+
+pub(crate) fn source_identity_kind_to_db(k: &SourceIdentityKind) -> &'static str {
+    match k {
+        SourceIdentityKind::GitEmail => "GitEmail",
+        SourceIdentityKind::GitLabUserId => "GitLabUserId",
+        SourceIdentityKind::GitLabUsername => "GitLabUsername",
+        SourceIdentityKind::GitHubLogin => "GitHubLogin",
+    }
+}
+
+pub(crate) fn source_identity_kind_from_db(s: &str) -> Result<SourceIdentityKind, DbError> {
+    match s {
+        "GitEmail" => Ok(SourceIdentityKind::GitEmail),
+        "GitLabUserId" => Ok(SourceIdentityKind::GitLabUserId),
+        "GitLabUsername" => Ok(SourceIdentityKind::GitLabUsername),
+        "GitHubLogin" => Ok(SourceIdentityKind::GitHubLogin),
+        other => Err(DbError::InvalidData {
+            column: "source_identities.kind".into(),
+            message: format!("unknown SourceIdentityKind `{other}`"),
         }),
     }
 }

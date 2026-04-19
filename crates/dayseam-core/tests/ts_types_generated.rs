@@ -15,12 +15,13 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use dayseam_core::{
-    ActivityEvent, ActivityKind, Actor, DayseamError, EntityRef, Evidence, Identity, Link,
-    LocalRepo, LogEntry, LogEvent, LogLevel, Person, Privacy, ProgressEvent, ProgressPhase, RawRef,
-    RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Settings,
-    SettingsPatch, Sink, SinkCapabilities, SinkConfig, SinkKind, Source, SourceConfig,
-    SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind, SourceRunState, ThemePreference,
-    ToastEvent, ToastSeverity, WriteReceipt,
+    ActivityEvent, ActivityKind, Actor, Artifact, ArtifactId, ArtifactKind, ArtifactPayload,
+    DayseamError, EntityRef, Evidence, Identity, Link, LocalRepo, LogEntry, LogEvent, LogLevel,
+    PerSourceState, Person, Privacy, ProgressEvent, ProgressPhase, RawRef, RenderedBullet,
+    RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Settings, SettingsPatch, Sink,
+    SinkCapabilities, SinkConfig, SinkKind, Source, SourceConfig, SourceHealth, SourceIdentity,
+    SourceIdentityKind, SourceKind, SourceRunState, SyncRun, SyncRunCancelReason, SyncRunStatus,
+    SyncRunTrigger, ThemePreference, ToastEvent, ToastSeverity, WriteReceipt,
 };
 use ts_rs::{Config, TS};
 
@@ -42,6 +43,17 @@ fn export_all(out_dir: &Path) {
     EntityRef::export_all(&cfg).expect("export EntityRef");
     RawRef::export_all(&cfg).expect("export RawRef");
     Privacy::export_all(&cfg).expect("export Privacy");
+
+    Artifact::export_all(&cfg).expect("export Artifact");
+    ArtifactId::export_all(&cfg).expect("export ArtifactId");
+    ArtifactKind::export_all(&cfg).expect("export ArtifactKind");
+    ArtifactPayload::export_all(&cfg).expect("export ArtifactPayload");
+
+    SyncRun::export_all(&cfg).expect("export SyncRun");
+    SyncRunTrigger::export_all(&cfg).expect("export SyncRunTrigger");
+    SyncRunStatus::export_all(&cfg).expect("export SyncRunStatus");
+    SyncRunCancelReason::export_all(&cfg).expect("export SyncRunCancelReason");
+    PerSourceState::export_all(&cfg).expect("export PerSourceState");
 
     Source::export_all(&cfg).expect("export Source");
     SourceKind::export_all(&cfg).expect("export SourceKind");

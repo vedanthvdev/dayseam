@@ -7,13 +7,16 @@ use std::path::PathBuf;
 
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use dayseam_core::{
-    ActivityEvent, ActivityKind, Actor, EntityRef, Evidence, Identity, Link, LocalRepo, LogLevel,
-    Privacy, RawRef, RenderedBullet, RenderedSection, ReportDraft, RunStatus, SecretRef, Source,
-    SourceConfig, SourceHealth, SourceKind, SourceRunState,
+    ActivityEvent, ActivityKind, Actor, Artifact, ArtifactId, ArtifactKind, ArtifactPayload,
+    EntityRef, Evidence, Identity, Link, LocalRepo, LogLevel, PerSourceState, Person, Privacy,
+    RawRef, RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Source,
+    SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind, SourceRunState,
+    SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger,
 };
 use dayseam_db::{
-    open, ActivityRepo, DbError, DraftRepo, IdentityRepo, LocalRepoRepo, LogRepo, LogRow,
-    RawPayload, RawPayloadRepo, SettingsRepo, SourceRepo,
+    open, ActivityRepo, ArtifactRepo, DbError, DraftRepo, IdentityRepo, LocalRepoRepo, LogRepo,
+    LogRow, PersonRepo, RawPayload, RawPayloadRepo, SettingsRepo, SourceIdentityRepo, SourceRepo,
+    SyncRunRepo,
 };
 use sqlx::SqlitePool;
 use tempfile::TempDir;
@@ -484,4 +487,286 @@ async fn run_status_and_source_run_state_round_trip_via_draft() {
     // `_` silences clippy::items_after_test_module warnings when no
     // `fixture_*` helpers are used further down the file.
     let _ = (SourceKind::GitLab, SourceKind::LocalGit);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 2: artifacts, sync_runs, persons, source_identities
+// ---------------------------------------------------------------------------
+
+/// Reopening a database must not drop data and must be a no-op on the
+/// second reopen. Separately we pin the Phase 1 → Phase 2 upgrade
+/// story: `PersonRepo::bootstrap_from_identity` promotes the legacy
+/// `identities` row to the canonical self-`Person` without losing the
+/// original UUID.
+#[tokio::test]
+async fn migrations_are_additive_and_idempotent_across_reopens() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.db");
+
+    let pool = open(&path).await.unwrap();
+    let sources = SourceRepo::new(pool.clone());
+    let identities = IdentityRepo::new(pool.clone());
+    let src = fixture_source();
+    sources.insert(&src).await.unwrap();
+    let identity = Identity {
+        id: Uuid::new_v4(),
+        emails: vec!["vedanth@work.example".into()],
+        gitlab_user_ids: vec![42],
+        display_name: "Vedanth".into(),
+    };
+    identities.insert(&identity).await.unwrap();
+    drop(pool);
+
+    let pool2 = open(&path).await.expect("reopen 1");
+    let sources2 = SourceRepo::new(pool2.clone());
+    assert_eq!(sources2.list().await.unwrap(), vec![src.clone()]);
+
+    let persons = PersonRepo::new(pool2.clone());
+    let me = persons
+        .bootstrap_from_identity(&identity)
+        .await
+        .expect("bootstrap from identity");
+    assert!(me.is_self);
+    assert_eq!(me.id, identity.id);
+    assert_eq!(me.display_name, identity.display_name);
+
+    // A second call is a no-op; it must find the same row rather than
+    // inserting another self-`Person`.
+    let again = persons
+        .bootstrap_from_identity(&identity)
+        .await
+        .expect("second bootstrap");
+    assert_eq!(again, me);
+
+    drop(pool2);
+    let pool3 = open(&path).await.expect("reopen 2");
+    let persons3 = PersonRepo::new(pool3);
+    assert_eq!(persons3.list().await.unwrap().len(), 1, "no duplicates");
+}
+
+#[tokio::test]
+async fn artifacts_upsert_round_trip_and_cascade() {
+    let (pool, _dir) = test_pool().await;
+    let sources = SourceRepo::new(pool.clone());
+    let artifacts = ArtifactRepo::new(pool.clone());
+    let src = fixture_local_source();
+    sources.insert(&src).await.unwrap();
+
+    let date = NaiveDate::from_ymd_opt(2026, 4, 17).unwrap();
+    let external_id = format!("/Users/v/Code/dayseam@{date}");
+    let id = ArtifactId::deterministic(&src.id, ArtifactKind::CommitSet, &external_id);
+    let artifact = Artifact {
+        id,
+        source_id: src.id,
+        kind: ArtifactKind::CommitSet,
+        external_id: external_id.clone(),
+        payload: ArtifactPayload::CommitSet {
+            repo_path: PathBuf::from("/Users/v/Code/dayseam"),
+            date,
+            event_ids: vec![Uuid::new_v4()],
+            commit_shas: vec!["abc123".into()],
+        },
+        created_at: fixed_now(),
+    };
+
+    artifacts.upsert(&artifact).await.unwrap();
+    assert_eq!(artifacts.get(&id).await.unwrap().unwrap(), artifact);
+
+    // Upsert is idempotent and replaces payload in place.
+    let mut replaced = artifact.clone();
+    replaced.payload = ArtifactPayload::CommitSet {
+        repo_path: PathBuf::from("/Users/v/Code/dayseam"),
+        date,
+        event_ids: vec![],
+        commit_shas: vec!["def456".into()],
+    };
+    artifacts.upsert(&replaced).await.unwrap();
+    assert_eq!(artifacts.get(&id).await.unwrap().unwrap(), replaced);
+
+    let same_date = artifacts.list_for_source_date(&src.id, date).await.unwrap();
+    assert_eq!(same_date.len(), 1);
+    let other_date = artifacts
+        .list_for_source_date(&src.id, NaiveDate::from_ymd_opt(2026, 4, 18).unwrap())
+        .await
+        .unwrap();
+    assert!(other_date.is_empty());
+
+    sources.delete(&src.id).await.unwrap();
+    assert!(
+        artifacts.get(&id).await.unwrap().is_none(),
+        "artifact should cascade"
+    );
+}
+
+fn fixture_running_run() -> SyncRun {
+    SyncRun {
+        id: RunId::new(),
+        started_at: fixed_now(),
+        finished_at: None,
+        trigger: SyncRunTrigger::User,
+        status: SyncRunStatus::Running,
+        cancel_reason: None,
+        superseded_by: None,
+        per_source_state: vec![],
+    }
+}
+
+#[tokio::test]
+async fn sync_runs_running_to_completed() {
+    let (pool, _dir) = test_pool().await;
+    let repo = SyncRunRepo::new(pool);
+    let run = fixture_running_run();
+    repo.insert(&run).await.unwrap();
+
+    let src_id = Uuid::new_v4();
+    let per_source = vec![PerSourceState {
+        source_id: src_id,
+        status: RunStatus::Succeeded,
+        started_at: fixed_now(),
+        finished_at: Some(fixed_now() + Duration::seconds(2)),
+        fetched_count: 7,
+        error: None,
+    }];
+    repo.mark_finished(&run.id, fixed_now() + Duration::seconds(2), &per_source)
+        .await
+        .unwrap();
+
+    let got = repo.get(&run.id).await.unwrap().unwrap();
+    assert_eq!(got.status, SyncRunStatus::Completed);
+    assert_eq!(got.finished_at, Some(fixed_now() + Duration::seconds(2)));
+    assert_eq!(got.per_source_state, per_source);
+    assert!(got.cancel_reason.is_none());
+    assert!(got.superseded_by.is_none());
+}
+
+#[tokio::test]
+async fn sync_runs_running_to_cancelled_with_superseded_by() {
+    let (pool, _dir) = test_pool().await;
+    let repo = SyncRunRepo::new(pool);
+    let old = fixture_running_run();
+    let new = fixture_running_run();
+    repo.insert(&old).await.unwrap();
+    repo.insert(&new).await.unwrap();
+
+    repo.mark_cancelled(
+        &old.id,
+        fixed_now() + Duration::seconds(1),
+        SyncRunCancelReason::SupersededBy { run_id: new.id },
+        &[],
+    )
+    .await
+    .unwrap();
+
+    let got = repo.get(&old.id).await.unwrap().unwrap();
+    assert_eq!(got.status, SyncRunStatus::Cancelled);
+    assert_eq!(
+        got.cancel_reason,
+        Some(SyncRunCancelReason::SupersededBy { run_id: new.id })
+    );
+    assert_eq!(got.superseded_by, Some(new.id));
+}
+
+#[tokio::test]
+async fn sync_runs_reject_terminal_reentry() {
+    let (pool, _dir) = test_pool().await;
+    let repo = SyncRunRepo::new(pool);
+    let run = fixture_running_run();
+    repo.insert(&run).await.unwrap();
+    repo.mark_finished(&run.id, fixed_now(), &[]).await.unwrap();
+
+    let err = repo
+        .mark_finished(&run.id, fixed_now(), &[])
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, DbError::InvalidData { .. }),
+        "terminal → terminal must be rejected, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn persons_bootstrap_self_is_idempotent() {
+    let (pool, _dir) = test_pool().await;
+    let repo = PersonRepo::new(pool);
+    let first = repo.bootstrap_self("Vedanth").await.unwrap();
+    let second = repo.bootstrap_self("Someone Else").await.unwrap();
+    assert_eq!(first, second, "second call must return the same row");
+    let all = repo.list().await.unwrap();
+    assert_eq!(all.len(), 1);
+    assert!(all[0].is_self);
+}
+
+#[tokio::test]
+async fn persons_enforce_single_self_at_db_layer() {
+    let (pool, _dir) = test_pool().await;
+    let repo = PersonRepo::new(pool);
+    repo.insert(&Person::new_self("A")).await.unwrap();
+    let err = repo.insert(&Person::new_self("B")).await.unwrap_err();
+    assert!(
+        matches!(err, DbError::Conflict { .. }),
+        "second self-person must violate unique index, got {err:?}"
+    );
+}
+
+#[tokio::test]
+async fn source_identities_resolve_and_cascade() {
+    let (pool, _dir) = test_pool().await;
+    let sources = SourceRepo::new(pool.clone());
+    let persons = PersonRepo::new(pool.clone());
+    let identities = SourceIdentityRepo::new(pool.clone());
+
+    let src = fixture_source();
+    sources.insert(&src).await.unwrap();
+    let me = persons.bootstrap_self("Vedanth").await.unwrap();
+
+    let email_identity = SourceIdentity {
+        id: Uuid::new_v4(),
+        person_id: me.id,
+        source_id: None,
+        kind: SourceIdentityKind::GitEmail,
+        external_actor_id: "vedanth@example.com".into(),
+    };
+    let user_id_identity = SourceIdentity {
+        id: Uuid::new_v4(),
+        person_id: me.id,
+        source_id: Some(src.id),
+        kind: SourceIdentityKind::GitLabUserId,
+        external_actor_id: "42".into(),
+    };
+    identities.insert(&email_identity).await.unwrap();
+    identities.insert(&user_id_identity).await.unwrap();
+
+    let listed = identities.list_for_source(me.id, &src.id).await.unwrap();
+    assert_eq!(listed.len(), 2);
+
+    let resolved = identities
+        .resolve_person_id(Some(&src.id), SourceIdentityKind::GitLabUserId, "42")
+        .await
+        .unwrap();
+    assert_eq!(resolved, Some(me.id));
+    let missing = identities
+        .resolve_person_id(Some(&src.id), SourceIdentityKind::GitLabUserId, "999")
+        .await
+        .unwrap();
+    assert!(missing.is_none());
+    // Source-agnostic email matches regardless of the source id the
+    // caller asks for.
+    let agnostic = identities
+        .resolve_person_id(
+            Some(&src.id),
+            SourceIdentityKind::GitEmail,
+            "vedanth@example.com",
+        )
+        .await
+        .unwrap();
+    assert_eq!(agnostic, Some(me.id));
+
+    sources.delete(&src.id).await.unwrap();
+    let after_src_delete = identities.list_for_person(me.id).await.unwrap();
+    assert_eq!(
+        after_src_delete.len(),
+        1,
+        "source-scoped identity should cascade, source-agnostic one should stay"
+    );
+    assert_eq!(after_src_delete[0].kind, SourceIdentityKind::GitEmail);
 }

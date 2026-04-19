@@ -20,3 +20,7 @@ expression: ALL
 - connector.unsupported.sync_request
 - http.retry.budget_exhausted
 - http.transport
+- orchestrator.run.superseded
+- orchestrator.run.cancelled
+- internal.process_restarted
+- db.schema.migration_failed
