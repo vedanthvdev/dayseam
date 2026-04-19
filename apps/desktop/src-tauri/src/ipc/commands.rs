@@ -435,7 +435,7 @@ pub async fn sources_healthcheck(
         })?;
 
     let person = PersonRepo::new(state.pool.clone())
-        .bootstrap_self("Me")
+        .bootstrap_self(SELF_DEFAULT_DISPLAY_NAME)
         .await
         .map_err(|e| internal("persons.bootstrap_self", e))?;
     let identities = SourceIdentityRepo::new(state.pool.clone())
@@ -593,6 +593,48 @@ pub async fn local_repos_set_private(
 
 // ---- Sinks ----------------------------------------------------------------
 
+/// Reject sink configs that the [`SinkAdapter`] would later refuse to
+/// write against: empty `dest_dirs`, relative directory paths, and
+/// paths with `..` traversal components. The actual sink crate
+/// re-checks at write time (defence in depth), but failing fast here
+/// keeps the database from accumulating sinks that are guaranteed to
+/// 500 every save_report.
+fn validate_sink_config(config: &SinkConfig) -> Result<(), DayseamError> {
+    use std::path::Component;
+
+    match config {
+        SinkConfig::MarkdownFile { dest_dirs, .. } => {
+            if dest_dirs.is_empty() {
+                return Err(invalid_config(
+                    error_codes::IPC_SINK_INVALID_CONFIG,
+                    "MarkdownFile sink: dest_dirs must contain at least one path",
+                ));
+            }
+            for dir in dest_dirs {
+                if !dir.is_absolute() {
+                    return Err(invalid_config(
+                        error_codes::IPC_SINK_INVALID_CONFIG,
+                        format!(
+                            "MarkdownFile sink: dest_dir `{}` must be absolute",
+                            dir.display()
+                        ),
+                    ));
+                }
+                if dir.components().any(|c| matches!(c, Component::ParentDir)) {
+                    return Err(invalid_config(
+                        error_codes::IPC_SINK_INVALID_CONFIG,
+                        format!(
+                            "MarkdownFile sink: dest_dir `{}` must not contain `..` segments",
+                            dir.display()
+                        ),
+                    ));
+                }
+            }
+            Ok(())
+        }
+    }
+}
+
 #[tauri::command]
 pub async fn sinks_list(state: State<'_, AppState>) -> Result<Vec<Sink>, DayseamError> {
     SinkRepo::new(state.pool.clone())
@@ -617,6 +659,7 @@ pub async fn sinks_add(
             ),
         ));
     }
+    validate_sink_config(&config)?;
     let sink = Sink {
         id: Uuid::new_v4(),
         kind,
@@ -653,7 +696,7 @@ pub async fn report_generate(
     let template_id = template_id.unwrap_or_else(|| DEV_EOD_TEMPLATE_ID.to_string());
 
     let person = PersonRepo::new(state.pool.clone())
-        .bootstrap_self("Me")
+        .bootstrap_self(SELF_DEFAULT_DISPLAY_NAME)
         .await
         .map_err(|e| internal("persons.bootstrap_self", e))?;
 
@@ -807,13 +850,15 @@ pub async fn activity_events_get(
 ///
 /// * `http` / `https` — activity event links (MRs, issues, commits).
 /// * `file` — the "open saved report" action on a `WriteReceipt`.
+///   `file://` URLs additionally must be absolute and free of `..`
+///   components; see [`validate_file_url_path`].
 /// * `vscode` / `vscode-insiders` — "open in editor" affordance.
 /// * `obsidian` — "open in Obsidian" for the markdown sink.
 ///
 /// Everything else is refused so a compromised or buggy connector
-/// cannot slip a `javascript:`, `data:`, or `file://` with traversal
-/// payload past the app. Callers get a typed `DayseamError` instead
-/// of a silent handoff.
+/// cannot slip a `javascript:`, `data:`, or traversal-laden `file://`
+/// past the app. Callers get a typed `DayseamError` instead of a
+/// silent handoff.
 const SHELL_ALLOWED_SCHEMES: &[&str] = &[
     "http",
     "https",
@@ -822,6 +867,80 @@ const SHELL_ALLOWED_SCHEMES: &[&str] = &[
     "vscode-insiders",
     "obsidian",
 ];
+
+/// Reject `file://` URLs whose path is not absolute or contains
+/// `..` traversal segments. The docstring on [`shell_open`] and
+/// [`SHELL_ALLOWED_SCHEMES`] promises this guard; Phase 2 Task 8
+/// added it after the correctness review found the guard was
+/// missing from the scheme check.
+///
+/// The raw (pre-parse) URL string is inspected for `..` path
+/// segments because [`url::Url`] silently normalises them away
+/// during parsing — `file:///Users/alice/../../etc/passwd`
+/// becomes `/etc/passwd` on the parsed `Url`, which would otherwise
+/// slip past a components-only check. The parsed URL's path is
+/// still used to enforce absolute-path form.
+///
+/// Accepts: `file:///Users/alice/Documents/Dayseam/2026-04-17.md`.
+/// Rejects: `file:///Users/alice/../../etc/passwd`,
+/// `file:relative/path`, `file://./relative/path`.
+fn validate_file_url_path(raw_url: &str, url: &url::Url) -> Result<(), DayseamError> {
+    use std::path::{Component, PathBuf};
+
+    // `file:` URLs must be in the full `file:///absolute/path` form.
+    // url::Url::parse happily accepts `file:relative/path` and
+    // `file://host/path`, and it silently normalises `..` segments
+    // out of the parsed path — both would let a crafted sink slip
+    // a traversal or relative path past the scheme allow-list. Gate
+    // on the raw input so we never have to trust the parser's
+    // normalisation for security.
+    if !raw_url.starts_with("file:///") {
+        return Err(DayseamError::InvalidConfig {
+            code: error_codes::IPC_SHELL_URL_DISALLOWED.into(),
+            message: format!(
+                "file:// url must use the `file:///<absolute-path>` form: `{raw_url}`"
+            ),
+        });
+    }
+    // Segment-level check so `..foo` doesn't false-positive. The URL
+    // parser would strip `..` out of `url.path()`, so we look at the
+    // original string.
+    let after_scheme = &raw_url["file:///".len()..];
+    let has_parent_segment = after_scheme.split(['/', '\\']).any(|seg| seg == "..");
+    if has_parent_segment {
+        return Err(DayseamError::InvalidConfig {
+            code: error_codes::IPC_SHELL_URL_DISALLOWED.into(),
+            message: format!("file:// path contains `..` traversal segment: `{raw_url}`"),
+        });
+    }
+
+    let raw = url.path();
+    if raw.is_empty() {
+        return Err(DayseamError::InvalidConfig {
+            code: error_codes::IPC_SHELL_URL_DISALLOWED.into(),
+            message: "file:// url has empty path".to_string(),
+        });
+    }
+    let path = PathBuf::from(raw);
+    if !path.is_absolute() {
+        return Err(DayseamError::InvalidConfig {
+            code: error_codes::IPC_SHELL_URL_DISALLOWED.into(),
+            message: format!("file:// path must be absolute: `{raw}`"),
+        });
+    }
+    // Belt and suspenders: even though the raw-string check above
+    // already rejects `..`, re-verify on the parsed components in
+    // case the parser were ever to stop normalising.
+    for component in path.components() {
+        if matches!(component, Component::ParentDir) {
+            return Err(DayseamError::InvalidConfig {
+                code: error_codes::IPC_SHELL_URL_DISALLOWED.into(),
+                message: format!("file:// path contains `..` traversal component: `{raw}`"),
+            });
+        }
+    }
+    Ok(())
+}
 
 /// Hand a URL to the host OS so it opens in whatever app is registered
 /// for the scheme (browser, editor, Obsidian, Finder/Explorer…). The
@@ -849,6 +968,9 @@ pub async fn shell_open(url: String) -> Result<(), DayseamError> {
                 SHELL_ALLOWED_SCHEMES
             ),
         });
+    }
+    if parsed.scheme() == "file" {
+        validate_file_url_path(&url, &parsed)?;
     }
     // `opener::open` is a blocking, spawn-child-process call; push it
     // to the blocking pool so it cannot stall the IPC reactor even if
@@ -1032,6 +1154,7 @@ mod tests {
     use dayseam_events::AppBus;
     use dayseam_orchestrator::{ConnectorRegistry, OrchestratorBuilder, SinkRegistry};
     use dayseam_secrets::InMemoryStore;
+    use std::path::PathBuf;
     use std::sync::Arc;
     use tempfile::TempDir;
 
@@ -1133,6 +1256,42 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn shell_open_rejects_file_url_with_traversal() {
+        // A `file://` URL with `..` in its path could escape the
+        // user's Documents directory; the docstring promises we
+        // reject it, and after Phase 2 Task 8 we actually do.
+        let err = shell_open("file:///Users/alice/../../etc/passwd".into())
+            .await
+            .expect_err("file:// with .. must be rejected");
+        match err {
+            DayseamError::InvalidConfig { code, message } => {
+                assert_eq!(code, error_codes::IPC_SHELL_URL_DISALLOWED);
+                assert!(
+                    message.contains("..") || message.contains("traversal"),
+                    "expected traversal message, got: {message}"
+                );
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn shell_open_rejects_file_url_with_non_absolute_path() {
+        // `file:relative/path` parses with an empty authority and a
+        // relative path; `opener::open` would resolve it against
+        // the process CWD, which is never what a sink intended.
+        let err = shell_open("file:relative/path.md".into())
+            .await
+            .expect_err("file:// with relative path must be rejected");
+        match err {
+            DayseamError::InvalidConfig { code, .. } => {
+                assert_eq!(code, error_codes::IPC_SHELL_URL_DISALLOWED);
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
+    }
+
     #[test]
     fn shell_allowed_schemes_cover_phase_2_use_cases() {
         // Documentation test: the schemes the evidence popover and
@@ -1145,6 +1304,68 @@ mod tests {
                 "allow-list regression: `{scheme}` is no longer permitted"
             );
         }
+    }
+
+    // --- validate_sink_config ---------------------------------------------
+
+    #[test]
+    fn validate_sink_config_rejects_empty_dest_dirs() {
+        let cfg = SinkConfig::MarkdownFile {
+            config_version: 1,
+            dest_dirs: vec![],
+            frontmatter: false,
+        };
+        let err = validate_sink_config(&cfg).expect_err("empty dest_dirs must be rejected");
+        match err {
+            DayseamError::InvalidConfig { code, .. } => {
+                assert_eq!(code, error_codes::IPC_SINK_INVALID_CONFIG);
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_sink_config_rejects_relative_path() {
+        let cfg = SinkConfig::MarkdownFile {
+            config_version: 1,
+            dest_dirs: vec![PathBuf::from("relative/dir")],
+            frontmatter: false,
+        };
+        let err = validate_sink_config(&cfg).expect_err("relative dest_dir must be rejected");
+        match err {
+            DayseamError::InvalidConfig { code, message } => {
+                assert_eq!(code, error_codes::IPC_SINK_INVALID_CONFIG);
+                assert!(message.contains("absolute"), "got: {message}");
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_sink_config_rejects_traversal_segment() {
+        let cfg = SinkConfig::MarkdownFile {
+            config_version: 1,
+            dest_dirs: vec![PathBuf::from("/Users/alice/../../etc")],
+            frontmatter: false,
+        };
+        let err = validate_sink_config(&cfg).expect_err("`..` traversal must be rejected");
+        match err {
+            DayseamError::InvalidConfig { code, message } => {
+                assert_eq!(code, error_codes::IPC_SINK_INVALID_CONFIG);
+                assert!(message.contains(".."), "got: {message}");
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_sink_config_accepts_well_formed_config() {
+        let cfg = SinkConfig::MarkdownFile {
+            config_version: 1,
+            dest_dirs: vec![PathBuf::from("/Users/alice/Documents/Dayseam")],
+            frontmatter: true,
+        };
+        validate_sink_config(&cfg).expect("well-formed config must validate");
     }
 
     // --- activity_events_get -----------------------------------------------

@@ -64,14 +64,23 @@ pub(crate) async fn run(
     // Save is an ad-hoc action, not part of a generate run. We still
     // build a fresh `RunStreams` so the sink has progress / log
     // channels to emit on; Task 6 wires them into the save dialog's
-    // progress indicator.
+    // progress indicator. Until then we spawn detached drain tasks
+    // for each receiver so the sink's `emit()` calls keep returning
+    // `true` (the channel stays open) — letting the receivers fall
+    // out of scope here would mark the senders closed and silently
+    // drop every progress / log event the sink produces, which would
+    // mask sink-side regressions.
     let streams = RunStreams::new(RunId::new());
-    let ctx = SinkCtx::new(
-        None,
-        streams.progress_tx,
-        streams.log_tx,
-        CancellationToken::new(),
-    );
+    let RunStreams {
+        progress_tx,
+        log_tx,
+        mut progress_rx,
+        mut log_rx,
+        ..
+    } = streams;
+    let ctx = SinkCtx::new(None, progress_tx, log_tx, CancellationToken::new());
+    tokio::spawn(async move { while progress_rx.recv().await.is_some() {} });
+    tokio::spawn(async move { while log_rx.recv().await.is_some() {} });
 
     let receipt = adapter.write(&ctx, &sink.config, &draft).await?;
     Ok(vec![receipt])

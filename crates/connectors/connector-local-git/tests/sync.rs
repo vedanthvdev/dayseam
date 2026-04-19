@@ -9,8 +9,9 @@ use std::collections::HashSet;
 
 use chrono::NaiveDate;
 use common::{
-    at_utc, build_ctx, build_ctx_with_self, layout_two_repos, make_fixture_repo, mark_private,
-    tz_minus_five, utc_tz, FixtureCommit, OTHER_EMAIL, SELF_EMAIL,
+    at_utc, build_ctx, build_ctx_with_self, layout_two_repos, make_fixture_repo,
+    make_fixture_repo_rebased, mark_private, tz_minus_five, utc_tz, FixtureCommit, RebasedCommit,
+    OTHER_EMAIL, SELF_EMAIL,
 };
 use connector_local_git::{DiscoveryConfig, LocalGitConnector};
 use connectors_sdk::{Checkpoint, SourceConnector, SyncRequest};
@@ -400,6 +401,113 @@ async fn sync_unsupported_variants_return_unsupported() {
     assert!(matches!(err2, DayseamError::Unsupported { .. }));
     assert_eq!(err2.code(), error_codes::CONNECTOR_UNSUPPORTED_SYNC_REQUEST);
 }
+
+// -------- Invariant 4 (committer-time bucketing, Phase 2 DAY-50) -----------
+// A commit authored last week but committed today belongs in today's
+// report. The walker keys on committer-time, not author-time.
+
+#[tokio::test]
+async fn sync_buckets_by_committer_time_not_author_time() {
+    let root = tempdir().unwrap();
+    let repo = root.path().join("rebased");
+    make_fixture_repo_rebased(
+        &repo,
+        &[RebasedCommit {
+            author_name: "Me",
+            author_email: SELF_EMAIL,
+            committer_name: "Me",
+            committer_email: SELF_EMAIL,
+            message: "authored last week, rebased onto main today",
+            author_when_utc: at_utc(2026, 4, 10, 9, 0),
+            committer_when_utc: at_utc(2026, 4, 17, 14, 0),
+        }],
+    );
+
+    let connector =
+        LocalGitConnector::new(vec![root.path().to_path_buf()], HashSet::new(), utc_tz());
+    let harness = build_ctx_with_self();
+    let r = connector
+        .sync(
+            &harness.ctx,
+            SyncRequest::Day(NaiveDate::from_ymd_opt(2026, 4, 17).unwrap()),
+        )
+        .await
+        .expect("sync ok");
+
+    assert_eq!(
+        r.events.len(),
+        1,
+        "committer-time falls on the requested day → commit kept"
+    );
+    assert_eq!(r.stats.filtered_by_date, 0);
+
+    // Inverse: a request for the author's original day should return
+    // zero (committer-time is the authority).
+    let harness2 = build_ctx_with_self();
+    let r2 = connector
+        .sync(
+            &harness2.ctx,
+            SyncRequest::Day(NaiveDate::from_ymd_opt(2026, 4, 10).unwrap()),
+        )
+        .await
+        .expect("sync ok");
+    assert_eq!(r2.events.len(), 0, "author-time day must not match");
+}
+
+// -------- Invariant 2 (identity filter matches author OR committer) --------
+// A commit where the committer email is self but the author email is
+// someone else (common when merging a co-worker's PR locally) should
+// be kept. Filtering on author-only was the Phase 1 bug.
+
+#[tokio::test]
+async fn sync_identity_filter_matches_committer_when_author_differs() {
+    let root = tempdir().unwrap();
+    let repo = root.path().join("merged-pr");
+    make_fixture_repo_rebased(
+        &repo,
+        &[RebasedCommit {
+            author_name: "Open Source Contributor",
+            author_email: OTHER_EMAIL,
+            committer_name: "Me",
+            committer_email: SELF_EMAIL,
+            message: "merge: OSS PR onto main",
+            author_when_utc: at_utc(2026, 4, 17, 10, 0),
+            committer_when_utc: at_utc(2026, 4, 17, 14, 0),
+        }],
+    );
+
+    let connector =
+        LocalGitConnector::new(vec![root.path().to_path_buf()], HashSet::new(), utc_tz());
+    let harness = build_ctx_with_self();
+    let r = connector
+        .sync(
+            &harness.ctx,
+            SyncRequest::Day(NaiveDate::from_ymd_opt(2026, 4, 17).unwrap()),
+        )
+        .await
+        .expect("sync ok");
+
+    assert_eq!(
+        r.events.len(),
+        1,
+        "committer email matches self identity → commit kept even though author doesn't"
+    );
+    // The actor surfaced on the event is the matched identity (committer).
+    assert_eq!(r.events[0].actor.email.as_deref(), Some(SELF_EMAIL));
+    assert_eq!(r.stats.filtered_by_identity, 0);
+}
+
+// -------- Invariant 4 inverse (malformed timestamps drop, not surface today) ---
+// A commit with an out-of-range committer timestamp must not be
+// silently bucketed to "today" via a `Utc::now()` fallback. Phase 1
+// did this via `.single().unwrap_or_else(Utc::now)`; Phase 2 drops
+// the commit into `filtered_by_date` instead.
+//
+// `git2::Time::seconds()` returns `i64` and libgit2 accepts a wide
+// range, so we can't easily forge a "malformed" value through the
+// public fixture API. Instead we prove the behaviour via a direct
+// unit test on `commit_timestamp_utc` in `walk.rs`'s test module —
+// this file remains the integration surface.
 
 // -------- Kind + healthcheck (not in the plan's numbered list but cheap) ---
 

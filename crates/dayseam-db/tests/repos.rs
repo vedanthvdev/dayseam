@@ -121,6 +121,25 @@ async fn pool_is_idempotent_and_pragmas_are_set() {
         .unwrap();
     assert_eq!(fk, 1);
 
+    // busy_timeout is set via `SqliteConnectOptions::busy_timeout`; it
+    // surfaces as the configured ms value on each new connection.
+    // Phase 2 Task 8 pinned it at 5s so retention sweeps do not
+    // surface SQLITE_BUSY to the UI when they overlap a generate
+    // fan-out.
+    let busy_ms: i64 = sqlx::query_scalar("PRAGMA busy_timeout")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(busy_ms, 5000);
+
+    // cache_size is set to -8000 → ~8 MiB per connection. SQLite
+    // reports it back as the literal int we passed.
+    let cache_size: i64 = sqlx::query_scalar("PRAGMA cache_size")
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(cache_size, -8000);
+
     drop(pool);
     let pool2 = open(&path).await.expect("second open");
     let count: i64 = sqlx::query_scalar("SELECT COUNT(*) FROM sources")

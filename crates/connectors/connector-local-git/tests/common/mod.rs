@@ -94,6 +94,23 @@ pub struct FixtureCommit {
     pub when_utc: DateTime<Utc>,
 }
 
+/// Like [`FixtureCommit`] but with separate committer identity and
+/// timestamp. Use this for rebased / amended / committed-on-behalf
+/// fixtures where `author_*` and `committer_*` differ. A real-world
+/// example: a maintainer rebases a PR author's branch onto `main`
+/// — the commit's author remains the PR author but the committer
+/// is the maintainer, and the committer-time is "now" rather than
+/// the original authoring time.
+pub struct RebasedCommit {
+    pub author_name: &'static str,
+    pub author_email: &'static str,
+    pub committer_name: &'static str,
+    pub committer_email: &'static str,
+    pub message: &'static str,
+    pub author_when_utc: DateTime<Utc>,
+    pub committer_when_utc: DateTime<Utc>,
+}
+
 /// Initialise a git repo at `path` and append `commits` in order.
 /// Each commit has an empty tree (no working files) so the fixture
 /// is small and deterministic; the walker doesn't care about tree
@@ -127,6 +144,54 @@ pub fn make_fixture_repo(path: &Path, commits: &[FixtureCommit]) {
 
     // Drop the index lock before the repo handle goes out of scope so
     // tempdir cleanup doesn't race with it on Windows CI.
+    drop(index);
+    drop(tree);
+    drop(repo);
+}
+
+/// Initialise a git repo at `path` with commits whose author and
+/// committer signatures differ. Used by the author ≠ committer
+/// regression tests (plan invariants #2 and #4).
+pub fn make_fixture_repo_rebased(path: &Path, commits: &[RebasedCommit]) {
+    std::fs::create_dir_all(path).unwrap();
+    let repo = Repository::init(path).unwrap();
+    let mut index = repo.index().unwrap();
+    let tree_oid = index.write_tree().unwrap();
+    let tree = repo.find_tree(tree_oid).unwrap();
+
+    let mut parent_oid: Option<git2::Oid> = None;
+    for c in commits {
+        let author = Signature::new(
+            c.author_name,
+            c.author_email,
+            &git2::Time::new(c.author_when_utc.timestamp(), 0),
+        )
+        .unwrap();
+        let committer = Signature::new(
+            c.committer_name,
+            c.committer_email,
+            &git2::Time::new(c.committer_when_utc.timestamp(), 0),
+        )
+        .unwrap();
+
+        let parents: Vec<git2::Commit> = parent_oid
+            .map(|oid| vec![repo.find_commit(oid).unwrap()])
+            .unwrap_or_default();
+        let parent_refs: Vec<&git2::Commit> = parents.iter().collect();
+
+        let oid = repo
+            .commit(
+                Some("HEAD"),
+                &author,
+                &committer,
+                c.message,
+                &tree,
+                &parent_refs,
+            )
+            .unwrap();
+        parent_oid = Some(oid);
+    }
+
     drop(index);
     drop(tree);
     drop(repo);

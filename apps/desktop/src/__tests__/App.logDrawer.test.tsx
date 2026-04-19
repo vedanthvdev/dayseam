@@ -25,6 +25,9 @@ describe("App log drawer shortcut", () => {
 
   it("opens the log drawer when ⌘L is pressed and closes it on ⌘L again", async () => {
     render(<App />);
+    // Wait for onboarding / report hooks to settle so the surrounding
+    // state updates land inside `act(...)`.
+    await screen.findByRole("region", { name: /report actions/i });
     expect(screen.queryByRole("dialog", { name: /log drawer/i })).toBeNull();
 
     fireEvent.keyDown(window, { key: "l", metaKey: true });
@@ -42,6 +45,7 @@ describe("App log drawer shortcut", () => {
 
   it("opens the log drawer when the footer Logs button is clicked", async () => {
     render(<App />);
+    await screen.findByRole("region", { name: /report actions/i });
     fireEvent.click(screen.getByRole("button", { name: /^logs$/i }));
     await waitFor(() =>
       expect(

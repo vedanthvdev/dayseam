@@ -447,7 +447,6 @@ fn sync_run_trigger_round_trips() {
 #[test]
 fn sync_run_cancel_reason_round_trips() {
     round_trip(&SyncRunCancelReason::User);
-    round_trip(&SyncRunCancelReason::Shutdown);
     round_trip(&SyncRunCancelReason::SupersededBy {
         run_id: RunId::new(),
     });

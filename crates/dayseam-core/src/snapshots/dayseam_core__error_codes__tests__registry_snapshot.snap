@@ -20,13 +20,13 @@ expression: ALL
 - sink.malformed_marker
 - sink.fs.concurrent_write
 - run.cancelled.by_user
-- run.cancelled.by_shutdown
 - run.cancelled.by_superseded
 - connector.unsupported.sync_request
 - http.retry.budget_exhausted
 - http.transport
 - orchestrator.run.superseded
 - orchestrator.run.cancelled
+- orchestrator.run.failed
 - internal.process_restarted
 - orchestrator.retention.sweep_failed
 - orchestrator.save.draft_not_found
@@ -36,6 +36,7 @@ expression: ALL
 - ipc.local_repo.not_found
 - ipc.report_draft.not_found
 - ipc.source.config_kind_mismatch
+- ipc.sink.invalid_config
 - ipc.persons.invalid_display_name
 - ipc.shell.url_disallowed
 - ipc.shell.url_invalid

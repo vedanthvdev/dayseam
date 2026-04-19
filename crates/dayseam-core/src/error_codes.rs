@@ -60,10 +60,16 @@ pub const SINK_FS_CONCURRENT_WRITE: &str = "sink.fs.concurrent_write";
 
 /// Run cancelled by the user (e.g. they clicked Cancel in the UI).
 pub const RUN_CANCELLED_BY_USER: &str = "run.cancelled.by_user";
-/// Run cancelled because the app is shutting down.
-pub const RUN_CANCELLED_BY_SHUTDOWN: &str = "run.cancelled.by_shutdown";
 /// Run cancelled because a newer run for the same source/date superseded
 /// it.
+///
+/// A `run.cancelled.by_shutdown` code existed in Phase 1 alongside
+/// a `SyncRunCancelReason::Shutdown` variant, but Phase 2 Task 8
+/// removed both (LCY-01): no orchestrator path ever emits them, so
+/// keeping them in the registry implied an unshipped graceful-
+/// shutdown contract. A future Phase 3 shutdown implementation can
+/// reintroduce the code (and the matching variant on
+/// [`crate::types::run::SyncRunCancelReason`]) at that time.
 pub const RUN_CANCELLED_BY_SUPERSEDED: &str = "run.cancelled.by_superseded";
 /// Connector does not support the requested `SyncRequest` variant — most
 /// commonly `Since(Checkpoint)` against a connector with no incremental
@@ -88,6 +94,14 @@ pub const ORCHESTRATOR_RUN_SUPERSEDED: &str = "orchestrator.run.superseded";
 /// between "a connector observed cancel" and "the orchestrator
 /// intentionally cancelled the whole run".
 pub const ORCHESTRATOR_RUN_CANCELLED: &str = "orchestrator.run.cancelled";
+/// The orchestrator terminated a run in a `Failed` state because one
+/// or more fan-out steps returned an error the orchestrator could
+/// not recover from (e.g. a connector returned `Internal`). The
+/// stream's final `ProgressPhase::Failed` carries this code so the
+/// UI renders a "failed" row, not a "cancelled" one. Emitted by
+/// `terminate_failed`; distinct from `ORCHESTRATOR_RUN_CANCELLED`
+/// which is specifically about cancel/supersede termination.
+pub const ORCHESTRATOR_RUN_FAILED: &str = "orchestrator.run.failed";
 /// The orchestrator's startup sweep found a `sync_runs` row still in
 /// `Running` with `finished_at IS NULL` — evidence of an unclean
 /// shutdown. The row is rewritten to `Failed` with this code so the
@@ -125,6 +139,14 @@ pub const IPC_REPORT_DRAFT_NOT_FOUND: &str = "ipc.report_draft.not_found";
 /// silently widens a `LocalGit` source into a `GitLab` source via a
 /// patch.
 pub const IPC_SOURCE_CONFIG_KIND_MISMATCH: &str = "ipc.source.config_kind_mismatch";
+
+/// `sinks_add` was called with a `config` whose body fails the IPC
+/// layer's structural check (e.g. a `MarkdownFile` sink with an
+/// empty `dest_dirs` list, a non-absolute path, or a path with `..`
+/// traversal segments). The guard exists so a buggy or hostile
+/// frontend cannot wedge a sink that would later refuse every
+/// `report_save`.
+pub const IPC_SINK_INVALID_CONFIG: &str = "ipc.sink.invalid_config";
 
 /// `persons_update_self` was called with an empty or whitespace-only
 /// `display_name`. The command rejects the update before it touches
@@ -175,13 +197,13 @@ pub const ALL: &[&str] = &[
     SINK_MALFORMED_MARKER,
     SINK_FS_CONCURRENT_WRITE,
     RUN_CANCELLED_BY_USER,
-    RUN_CANCELLED_BY_SHUTDOWN,
     RUN_CANCELLED_BY_SUPERSEDED,
     CONNECTOR_UNSUPPORTED_SYNC_REQUEST,
     HTTP_RETRY_BUDGET_EXHAUSTED,
     HTTP_TRANSPORT,
     ORCHESTRATOR_RUN_SUPERSEDED,
     ORCHESTRATOR_RUN_CANCELLED,
+    ORCHESTRATOR_RUN_FAILED,
     INTERNAL_PROCESS_RESTARTED,
     ORCHESTRATOR_RETENTION_SWEEP_FAILED,
     ORCHESTRATOR_SAVE_DRAFT_NOT_FOUND,
@@ -191,6 +213,7 @@ pub const ALL: &[&str] = &[
     IPC_LOCAL_REPO_NOT_FOUND,
     IPC_REPORT_DRAFT_NOT_FOUND,
     IPC_SOURCE_CONFIG_KIND_MISMATCH,
+    IPC_SINK_INVALID_CONFIG,
     IPC_INVALID_DISPLAY_NAME,
     IPC_SHELL_URL_DISALLOWED,
     IPC_SHELL_URL_INVALID,

@@ -2,10 +2,21 @@
 //!
 //! Given one repository and a day window in the user's local
 //! timezone, walk every branch tip + `HEAD`, deduplicate commits by
-//! SHA, attribute each commit to its author email, and emit a
-//! `CommitAuthored` [`ActivityEvent`] for each commit whose author
-//! resolves to the current [`dayseam_core::Person`] via
-//! `ctx.source_identities`.
+//! SHA, attribute each commit to its author or committer email, and
+//! emit a `CommitAuthored` [`ActivityEvent`] for each commit whose
+//! author **or committer** resolves to the current
+//! [`dayseam_core::Person`] via `ctx.source_identities`.
+//!
+//! The committer path is load-bearing on rebased / amended / merged
+//! work: a maintainer who rebased a co-worker's branch onto `main`
+//! is the committer; the original author email need not match self
+//! identity. Filtering on author-only drops that class of work.
+//! Similarly, day-bucketing uses the **committer** timestamp, not
+//! the author timestamp — the committer time is the moment the
+//! commit object came into existence on this machine, which is the
+//! moment the work actually happened from the dogfooder's point of
+//! view. An amended-last-week commit committed today appears in
+//! today's report, matching the Phase 2 plan invariant #4.
 //!
 //! The walker returns a [`RepoWalk`] rather than writing directly so
 //! the connector layer can decide whether to redact, whether to
@@ -36,7 +47,12 @@ pub struct RepoWalk {
     /// Commits visited whose actor did not resolve to `person`.
     /// Counted so the connector can roll them into `stats.filtered_by_identity`.
     pub filtered_by_identity: u64,
-    /// Commits visited that fell outside the requested day window.
+    /// Commits visited that fell outside the requested day window, or
+    /// that carried a malformed / ambiguous committer timestamp that
+    /// could not be bucketed safely. Malformed-timestamp commits are
+    /// counted here rather than silently flagging "today" through
+    /// `Utc::now()` — a corrupt commit should drop out, not surface
+    /// in the current report.
     pub filtered_by_date: u64,
     /// True when at least one commit had no usable author email, so
     /// the connector emits a single
@@ -82,32 +98,63 @@ pub fn walk_repo_for_day(
             .find_commit(oid)
             .map_err(|e| map_repo_error(repo_root, e))?;
 
-        let when = commit_timestamp_utc(&commit);
+        // Bucket on committer-time (COR-01): the moment the commit
+        // entered this repo, not the original authoring time. A
+        // commit authored last week but committed today belongs in
+        // today's report.
+        let when = match commit_timestamp_utc(&commit) {
+            Some(t) => t,
+            None => {
+                // Malformed / ambiguous timestamps drop out rather
+                // than silently surfacing in the current day (COR-02).
+                filtered_by_date += 1;
+                continue;
+            }
+        };
         let commit_day = when.with_timezone(&local_tz).date_naive();
         if commit_day != day {
             filtered_by_date += 1;
             continue;
         }
 
-        let (display_name, email) = author_parts(&commit);
-        if email.is_none() {
+        let (display_name, author_email, committer_email) = commit_parts(&commit);
+        if author_email.is_none() && committer_email.is_none() {
             saw_missing_signature = true;
         }
 
-        let email_lower = email.as_ref().map(|s| s.to_lowercase());
-        let matches = email_lower
+        // Identity filter matches on *either* author or committer
+        // email (COR-04 / plan invariant #2). A rebased/amended
+        // commit where the committer is self but the author is
+        // someone else should still count as mine.
+        let author_lower = author_email.as_ref().map(|s| s.to_lowercase());
+        let committer_lower = committer_email.as_ref().map(|s| s.to_lowercase());
+        let matches = author_lower
             .as_ref()
             .map(|e| identity_emails.contains(e))
-            .unwrap_or(false);
+            .unwrap_or(false)
+            || committer_lower
+                .as_ref()
+                .map(|e| identity_emails.contains(e))
+                .unwrap_or(false);
         if !matches {
             filtered_by_identity += 1;
             continue;
         }
 
         let sha = oid.to_string();
-        if by_sha.contains_key(&sha) {
-            continue;
-        }
+
+        // Pick the actor email that actually matched: prefer author
+        // when it matches (reads more naturally in the report), fall
+        // back to committer otherwise.
+        let matched_email = if author_lower
+            .as_ref()
+            .map(|e| identity_emails.contains(e))
+            .unwrap_or(false)
+        {
+            author_email.clone()
+        } else {
+            committer_email.clone()
+        };
 
         let mut event = build_commit_event(
             *source_id,
@@ -116,7 +163,7 @@ pub fn walk_repo_for_day(
             &commit,
             when,
             display_name,
-            email,
+            matched_email,
         );
         if is_private {
             redact_private_event(&mut event);
@@ -125,6 +172,10 @@ pub fn walk_repo_for_day(
         event_ids.push(event.id);
         by_sha.insert(sha, event);
     }
+    // The `seen: HashSet<git2::Oid>` above already rejects duplicate
+    // OIDs before we reach `by_sha`; a SHA collision with an OID we
+    // did not already see would require two distinct commits hashing
+    // to the same SHA-1, which is not possible in practice.
 
     // Stable output ordering — the HashMap iteration order is not
     // stable across runs, but integration tests key off the same
@@ -180,23 +231,33 @@ fn push_every_branch_tip(
     Ok(())
 }
 
-fn commit_timestamp_utc(commit: &git2::Commit<'_>) -> DateTime<Utc> {
-    let when = commit.author().when();
-    // `git2::Time::seconds()` is unix seconds; the offset is already
-    // baked into the author/committer signature we don't need.
-    Utc.timestamp_opt(when.seconds(), 0)
-        .single()
-        .unwrap_or_else(Utc::now)
+/// Convert the committer-time of `commit` to UTC. Returns `None`
+/// when the underlying `git2::Time` is out-of-range or ambiguous —
+/// callers treat that as "drop the commit" rather than silently
+/// bucketing it to `Utc::now()`.
+fn commit_timestamp_utc(commit: &git2::Commit<'_>) -> Option<DateTime<Utc>> {
+    let when = commit.committer().when();
+    // `git2::Time::seconds()` is unix seconds; the signature's
+    // offset encodes the commit's original timezone, which we
+    // discard — the walker owns the local-tz bucketing.
+    Utc.timestamp_opt(when.seconds(), 0).single()
 }
 
-fn author_parts(commit: &git2::Commit<'_>) -> (String, Option<String>) {
+/// Display name + author/committer emails for `commit`. The walker
+/// uses both emails for identity resolution so we surface them
+/// separately rather than collapsing to a single tuple.
+fn commit_parts(commit: &git2::Commit<'_>) -> (String, Option<String>, Option<String>) {
     let author = commit.author();
-    let name = author
-        .name()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
-    let email = author.email().map(|s| s.to_string());
-    (name, email)
+    let committer = commit.committer();
+    let name = author.name().map(|s| s.to_string()).unwrap_or_else(|| {
+        committer
+            .name()
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "unknown".to_string())
+    });
+    let author_email = author.email().map(|s| s.to_string());
+    let committer_email = committer.email().map(|s| s.to_string());
+    (name, author_email, committer_email)
 }
 
 fn build_commit_event(

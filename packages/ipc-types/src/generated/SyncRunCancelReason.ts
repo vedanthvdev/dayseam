@@ -4,12 +4,15 @@ import type { RunId } from "./RunId";
 /**
  * Why a run was cancelled. Stored alongside the `Cancelled` status so
  * the UI can say "we cancelled your run because you hit Cancel" vs
- * "…because the app was shutting down" vs "…because you clicked
- * Generate again".
+ * "…because you clicked Generate again".
  *
- * The three variants map 1:1 to the already-registered error codes
- * `RUN_CANCELLED_BY_USER`, `RUN_CANCELLED_BY_SHUTDOWN`, and
- * `RUN_CANCELLED_BY_SUPERSEDED` from
- * [`crate::error_codes`].
+ * The two variants map 1:1 to error codes `RUN_CANCELLED_BY_USER`
+ * and `RUN_CANCELLED_BY_SUPERSEDED` from [`crate::error_codes`]. A
+ * `Shutdown` variant existed in Phase 1 in anticipation of a
+ * graceful-shutdown flow, but Phase 2 Task 8 removed it after the
+ * cross-cutting review (LCY-01) confirmed no orchestrator code path
+ * ever produces the value and no persisted rows carried it. A
+ * future graceful-shutdown implementation can re-introduce a
+ * dedicated variant at that time.
  */
-export type SyncRunCancelReason = { "kind": "user" } | { "kind": "shutdown" } | { "kind": "superseded_by", run_id: RunId, };
+export type SyncRunCancelReason = { "kind": "user" } | { "kind": "superseded_by", run_id: RunId, };

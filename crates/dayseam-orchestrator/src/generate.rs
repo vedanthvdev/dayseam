@@ -753,7 +753,7 @@ async fn terminate_failed(
     progress.send(
         None,
         ProgressPhase::Failed {
-            code: error_codes::ORCHESTRATOR_RUN_CANCELLED.to_string(),
+            code: error_codes::ORCHESTRATOR_RUN_FAILED.to_string(),
             message: message.to_string(),
         },
     );

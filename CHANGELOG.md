@@ -6,6 +6,97 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Phase 2 hardening + cross-cutting review.** Capstone review over
+  every PR merged in Phase 2 (PRs #33 – #49, inventoried in
+  [`docs/review/phase-2-review.md`](docs/review/phase-2-review.md)).
+  Fixes span correctness, security, performance, testing, and
+  project standards. No behavioural change visible to users yet,
+  so the PR lands under `semver:none`.
+  - **Correctness.**
+    - `connector-local-git` now buckets commits by committer time
+      and matches self-identity against either the author or the
+      committer email (COR-01 / COR-04). Rebased commits land under
+      the day they actually arrived in the repo, and rebase /
+      cherry-pick commits authored by someone else but committed by
+      the user now correctly surface in the EOD. Malformed /
+      ambiguous commit timestamps are filtered out instead of
+      panicking the sync (COR-02). `RebasedCommit` +
+      `make_fixture_repo_rebased` fixtures and two new integration
+      tests pin the semantics.
+    - `dayseam-orchestrator::terminate_failed` now emits the new
+      `orchestrator.run.failed` error code instead of re-using
+      `orchestrator.run.cancelled` for Failed terminal transitions
+      (COR-08).
+    - `Orchestrator::save_report` now destructures `RunStreams` and
+      spawns detached drain tasks for `progress_rx` / `log_rx`, so
+      sink-emitted progress and log events are no longer silently
+      dropped when the receivers would otherwise fall out of scope
+      (COR-11).
+  - **Security.**
+    - `shell_open` now rejects `file:` URLs that aren't in
+      `file:///<absolute-path>` form or contain `..` traversal
+      segments. The raw URL string is inspected for `..` before
+      `url::Url::parse` normalises them away, and the parsed path
+      is re-checked as a belt-and-suspenders measure. Covered by
+      two new unit tests and a refreshed `SHELL_ALLOWED_SCHEMES`
+      docstring (COR-12 / SEC-01 / TST-02 / STD-04).
+    - `sinks_add` validates `SinkConfig::MarkdownFile` before
+      persisting: `dest_dirs` must be non-empty, every path must be
+      absolute, and none may contain `..` components. A new
+      `ipc.sink.invalid_config` error code surfaces the rejection
+      typed; four new unit tests cover each reject branch plus a
+      happy-path accept (SEC-02).
+  - **Performance.**
+    - `dayseam-db::pool` pins `busy_timeout = 5s` and a
+      `cache_size = -8000` (~8 MiB) pragma on every SQLite
+      connection, so retention sweeps concurrent with a generate
+      fan-out no longer surface `SQLITE_BUSY` to the UI and each
+      connection gets a larger read cache. The
+      `pool_is_idempotent_and_pragmas_are_set` test now asserts
+      both pragmas round-trip (PERF-13).
+  - **Lifecycle / dead code.**
+    - `SyncRunCancelReason::Shutdown` and
+      `RUN_CANCELLED_BY_SHUTDOWN` are removed. Neither was ever
+      emitted by any orchestrator path and their presence implied
+      an unshipped graceful-shutdown contract. Rustdoc on
+      `SyncRunCancelReason` and `RUN_CANCELLED_BY_SUPERSEDED` now
+      documents the removal and the Phase-3 re-add path, the
+      `error_codes::ALL` registry is trimmed, and `ts-rs`
+      regenerates the `SyncRunCancelReason.ts` binding so the
+      TypeScript contract matches (LCY-01).
+  - **Supply chain.**
+    - `deny.toml` adds a `[graph] targets` block pinning the three
+      triples we actually build + ship for
+      (`aarch64-apple-darwin`, `x86_64-apple-darwin`,
+      `x86_64-unknown-linux-gnu`) so advisory evaluation stays
+      aligned with the live dependency graph. Four ignore entries
+      that no longer matched the live graph (`RUSTSEC-2023-0071`,
+      `RUSTSEC-2024-0384`, `RUSTSEC-2024-0429`,
+      `RUSTSEC-2026-0097`) were removed; a comment explains the
+      policy so a reviewer can tell "dropped because no longer
+      live" apart from "dropped because we stopped caring" (SUP-02).
+  - **Testing.**
+    - Frontend test suite adds `act`-flushing to `afterEach` and
+      switches synchronous `screen.getBy*` calls to `await
+      screen.findBy*` for initial renders in `App.test.tsx` and
+      `App.logDrawer.test.tsx`. Reduces React `act` warnings from
+      162 → ~60; remaining warnings originate from nested dialogs'
+      IPC-fetch cascades and are tracked as a Phase 3 chore (TST-05).
+  - **Docs / standards.**
+    - Phase 2 plan step 8.3 now cites the correct test target for
+      the additive-migration check:
+      `cargo test -p dayseam-db --test repos migrations_are_additive_and_idempotent`
+      (STD-01).
+    - `CHANGELOG.md` gains entries for DAY-34, DAY-36, DAY-40,
+      DAY-41, and DAY-42 so the changelog and the Phase 2 review
+      inventory agree verbatim (STD-02).
+    - Hardcoded `"Me"` sentinel strings in
+      `persons_update_self` are replaced with the shared
+      `SELF_DEFAULT_DISPLAY_NAME` constant already exported by
+      `PersonRepo::bootstrap_self` (IDN-02).
+
 ### Added
 
 - **Phase 2, Task 7.5 — Dogfood notes scaffold.** Adds
@@ -247,6 +338,112 @@ All notable changes to Dayseam are documented in this file. The format follows
   point. Ten new integration tests — four for `save`, three for
   retention, three for startup / crash recovery — prove the
   invariants.
+
+- **Phase 2, Task 5 PR-A — `dayseam-orchestrator` core generate-report lifecycle.**
+  Lands the new `dayseam-orchestrator` crate and wires
+  `generate_report(PersonId, NaiveDate, TemplateId, Vec<SourceId>) ->
+  RunStreams` as the single entry point for Task 6 / 7 to call. The
+  orchestrator fans out per-source `sync(Day)` calls in parallel
+  against the connector registry, drains each connector's
+  `ProgressEvent` / `LogEvent` / `ToastEvent` stream into a per-run
+  `RunStreams` broadcast (bounded, lag-coalescing; see Phase 1
+  PERF-08 follow-up in PR DAY-48), and collapses the fan-out into a
+  single `ReportDraft` through `dayseam-report::render` before
+  persisting it with `ReportDraftRepo`. The lifecycle is encoded as
+  an explicit state machine — `Running → Completed`, `Running →
+  Cancelled` (by user or supersede), `Running → Failed` — mirrored
+  into `SyncRunRepo` rows per invariant 4 of the Phase 2 plan. A
+  "supersede" path is built in from day one: clicking Generate while
+  an in-flight run exists for the same `(person_id, date,
+  template_id)` tuple cancels the older run with
+  `orchestrator.run.superseded` and replaces it atomically. Cancel
+  uses a `CancellationToken` threaded through `ConnCtx` so
+  connectors can observe it cooperatively without tearing down
+  shared state. Fourteen new integration tests cover the happy path,
+  cancellation, supersede, per-source partial failure, and the
+  fan-out tear-down invariants.
+
+- **Phase 2, Task 4.5 — CI supply-chain + Linux build for non-Tauri crates.**
+  Adds a second `ci-supply-chain.yml` GitHub Actions workflow that
+  runs `cargo fmt --check`, `cargo deny check`, `cargo audit`, and
+  `cargo machete` on every PR. The workflow runs on
+  `ubuntu-latest` and is explicitly scoped to the non-Tauri crates
+  (`dayseam-core`, `dayseam-db`, `connectors-sdk`,
+  `connector-local-git`, `sinks-sdk`, `sink-markdown-file`,
+  `dayseam-report`, `dayseam-orchestrator`, `dayseam-events`) so it
+  does not try to link `wry` / `gtk` on Linux — the desktop crate
+  stays macOS-only. The same workflow also runs
+  `cargo test -p <crate>` for each of those crates so any Linux-
+  specific regression (path handling, filesystem, thread model) is
+  caught before it reaches macOS. The licence allow-list,
+  advisory-ignore rationales, and `deny.toml` targets all live in
+  this PR so the workflow is self-contained.
+
+- **Phase 2, Task 4 — `sink-markdown-file` atomic writer + marker blocks.**
+  Adds the first production sink, `sink-markdown-file`, implementing
+  the `SinkAdapter` trait from `sinks-sdk`. Each write materialises
+  the rendered `ReportDraft` to an Obsidian-friendly filename
+  (`2026-04-18.md`), writes via tempfile + atomic rename so an
+  interrupted write never leaves a half-file, and wraps the
+  generated region in `<!-- dayseam:start … -->` /
+  `<!-- dayseam:end -->` HTML marker blocks so user-authored text
+  above or below the region survives regeneration. A new
+  `SinkCapabilities::supports_frontmatter` flag lets the sink
+  optionally emit a YAML frontmatter header for tags and
+  metadata. A `sink.fs.concurrent_write` error surfaces when two
+  renames for the same path interleave, giving the UI a typed retry
+  signal. Twelve integration tests drive the invariants: marker
+  preservation across two writes, frontmatter round-trip, atomic
+  rename behaviour under crash-like interrupts, and the `WriteReceipt`
+  shape each `save_report` call needs to return to the UI.
+
+- **Phase 2, Task 2 — `connector-local-git` libgit2 discovery + `sync(Day)`.**
+  Adds the first source connector. `LocalGitConnector` walks a set
+  of configured scan-root directories via `libgit2`, discovers git
+  repositories (filtered by the `is_private` flag so excluded repos
+  never surface commit content), and implements
+  `sync(SyncRequest::Day(date, identity_emails)) -> SyncResult` by
+  emitting one `ActivityEvent` per commit whose committer (or
+  author, fall-back) matches any of the self-identity's emails.
+  Day bucketing uses committer time (corrected by Phase 2 Task 8
+  review finding COR-01) so rebased commits land under the day they
+  actually arrived in the repo, not the day their original author
+  wrote them. A `commit_set` synthetic `Artifact` groups every
+  commit on a branch into a single report bullet so a 30-commit
+  feature branch does not render as 30 bullets. Fixture helpers
+  (`make_fixture_repo`, `FixtureCommit`) build deterministic test
+  repositories from a slice of commit descriptors and back a seven-
+  scenario integration suite covering empty days, multi-repo
+  fan-in, identity filtering, shallow clones, detached HEAD, the
+  `LOCAL_GIT_REPO_CORRUPT` error path, and the
+  `LOCAL_GIT_REPO_NOT_FOUND` error path.
+
+- **Phase 2, Task 1 — schema v2 (`Artifact` / `SyncRun` + self-Person bootstrap).**
+  Adds migration `0002_artifacts_syncruns.sql` on top of Phase 1's
+  `0001_initial.sql` with five new tables (`artifacts`,
+  `sync_runs`, `sync_runs_per_source`, `persons`,
+  `source_identities`) and one column addition
+  (`activity_events.artifact_id` nullable). The migration is
+  strictly additive — no drops, no renames, no type changes — so
+  existing databases from Phase 1 (none yet in the wild, but the
+  invariant matters as soon as we ship) can be opened without a
+  dump-and-restore. `ArtifactId::deterministic(source_id, kind,
+  external_id)` mirrors the Phase 1 `ActivityEvent::deterministic_id`
+  pattern so repeat syncs produce stable artifact rows. A new
+  `PersonRepo::bootstrap_self()` idempotently inserts the single
+  "self" `Person` row on first boot — every other row in `persons`
+  eventually maps to the same self via `source_identities`. Seven
+  repo tests enforce additivity, artifact determinism, the
+  `SyncRun` state machine (`Running → Completed` / `Cancelled` /
+  `Failed` only), nullable foreign keys on `activity_events` and
+  `report_drafts`, and the idempotent self-bootstrap. Four new
+  `dayseam-core` types (`Artifact`, `ArtifactKind`, `ArtifactId`,
+  `SyncRun`, `SyncRunStatus`, `SyncRunTrigger`,
+  `SyncRunCancelReason`, `PerSourceState`, `Person`, `Identity`,
+  `SourceIdentity`, `SourceIdentityKind`) ship with `ts-rs`
+  bindings so the TypeScript side stays in lockstep via the
+  `ts_types_generated` guard.
+
 - **`dayseam-report` report engine — Dev EOD template, rollup, render, golden snapshots.**
   Promotes the Phase-1 crate skeleton into the deterministic engine at
   the centre of the pipeline: `dayseam_report::render(ReportInput) ->
