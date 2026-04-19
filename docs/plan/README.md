@@ -10,7 +10,7 @@ A single 20+ PR plan document is hard to review and navigate. Three phase-plans 
 |---|---|---|
 | **1. Foundations** | [`2026-04-17-v0.1-phase-1-foundations.md`](./2026-04-17-v0.1-phase-1-foundations.md) | Mac app boots to an empty themed window. All SDK traits, database, secrets, event bus, error taxonomy, and CI pipeline are in place. No user-facing features yet. |
 | **2. Local-git end-to-end** | [`2026-04-18-v0.1-phase-2-local-git.md`](./2026-04-18-v0.1-phase-2-local-git.md) | First genuinely usable slice: pick a date, generate a report from local git repositories, save it to a folder or Obsidian vault. The product becomes dogfoodable. |
-| **3. GitLab + polish + release** | `2026-XX-XX-v0.1-phase-3-gitlab-release.md` *(written when Phase 2 lands)* | Shippable v0.1.0: GitLab connector added, per-source error cards, Playwright E2E happy path, codesigned + notarised `.dmg`, first tagged GitHub release. |
+| **3. GitLab + polish + release** | [`2026-04-20-v0.1-phase-3-gitlab-release.md`](./2026-04-20-v0.1-phase-3-gitlab-release.md) | Shippable v0.1.0: GitLab connector added, per-source error cards, Playwright E2E happy path, downloadable `.dmg` (unsigned for v0.1.0; codesign + notarisation tracked as a Phase 3.5 / v0.1.1 follow-up per the user decision recorded with the plan), first tagged GitHub release. |
 
 ## Why write them sequentially
 
