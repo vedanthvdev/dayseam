@@ -6,6 +6,8 @@ import {
   registerInvokeHandler,
   resetTauriMocks,
   mockInvoke,
+  mockDialogOpen,
+  queueDialogOpen,
 } from "./tauri-mock";
 
 const SOURCE: Source = {
@@ -78,6 +80,72 @@ describe("AddLocalGitSourceDialog", () => {
       "sources_add",
       expect.any(Object),
     );
+  });
+
+  it("Browse… appends the picked folder to the scan roots textarea", async () => {
+    queueDialogOpen("/Users/me/picked");
+
+    render(
+      <AddLocalGitSourceDialog open onClose={() => {}} onAdded={() => {}} />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: /scan roots/i }), {
+      target: { value: "/Users/me/existing" },
+    });
+
+    fireEvent.click(screen.getByTestId("add-local-git-browse"));
+
+    await waitFor(() => expect(mockDialogOpen).toHaveBeenCalledTimes(1));
+    expect(mockDialogOpen).toHaveBeenCalledWith(
+      expect.objectContaining({ directory: true, multiple: false }),
+    );
+
+    await waitFor(() => {
+      const textarea = screen.getByRole("textbox", {
+        name: /scan roots/i,
+      }) as HTMLTextAreaElement;
+      expect(textarea.value).toBe("/Users/me/existing\n/Users/me/picked");
+    });
+  });
+
+  it("Browse… is a no-op when the user cancels the picker", async () => {
+    // Default behaviour of the mock (empty queue) returns null, which
+    // is what the real plugin returns on cancel.
+    render(
+      <AddLocalGitSourceDialog open onClose={() => {}} onAdded={() => {}} />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: /scan roots/i }), {
+      target: { value: "/Users/me/existing" },
+    });
+
+    fireEvent.click(screen.getByTestId("add-local-git-browse"));
+
+    await waitFor(() => expect(mockDialogOpen).toHaveBeenCalledTimes(1));
+    const textarea = screen.getByRole("textbox", {
+      name: /scan roots/i,
+    }) as HTMLTextAreaElement;
+    expect(textarea.value).toBe("/Users/me/existing");
+  });
+
+  it("Browse… does not duplicate a folder that is already in the list", async () => {
+    queueDialogOpen("/Users/me/existing");
+
+    render(
+      <AddLocalGitSourceDialog open onClose={() => {}} onAdded={() => {}} />,
+    );
+
+    fireEvent.change(screen.getByRole("textbox", { name: /scan roots/i }), {
+      target: { value: "/Users/me/existing" },
+    });
+
+    fireEvent.click(screen.getByTestId("add-local-git-browse"));
+
+    await waitFor(() => expect(mockDialogOpen).toHaveBeenCalledTimes(1));
+    const textarea = screen.getByRole("textbox", {
+      name: /scan roots/i,
+    }) as HTMLTextAreaElement;
+    expect(textarea.value).toBe("/Users/me/existing");
   });
 
   it("surfaces backend errors inline without closing the dialog", async () => {

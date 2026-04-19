@@ -126,6 +126,20 @@ pub const IPC_REPORT_DRAFT_NOT_FOUND: &str = "ipc.report_draft.not_found";
 /// patch.
 pub const IPC_SOURCE_CONFIG_KIND_MISMATCH: &str = "ipc.source.config_kind_mismatch";
 
+/// `shell_open` was asked to open a URL whose scheme is not in the
+/// explicit allow-list (`file`, `http`, `https`, `vscode`, `obsidian`).
+/// The guard exists so a malicious or buggy evidence row cannot coax
+/// Dayseam into handing a `javascript:` URL to the OS.
+pub const IPC_SHELL_URL_DISALLOWED: &str = "ipc.shell.url_disallowed";
+/// `shell_open` could not parse the provided string as a URL at all.
+/// Distinct from `URL_DISALLOWED` so the UI can tell "looks broken"
+/// apart from "looks malicious".
+pub const IPC_SHELL_URL_INVALID: &str = "ipc.shell.url_invalid";
+/// `shell_open` handed the URL to the OS and the OS refused (missing
+/// handler, sandbox denial, etc.). Surfaced as `Internal` so it
+/// bubbles into a toast without retry.
+pub const IPC_SHELL_OPEN_FAILED: &str = "ipc.shell.open_failed";
+
 // -------- Database ---------------------------------------------------------
 
 /// `sqlx::migrate!` failed to apply a pending migration. Always fatal

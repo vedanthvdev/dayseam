@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { LogEntry, LogLevel } from "@dayseam/ipc-types";
+import type { LogEntry, LogEvent, LogLevel, RunId } from "@dayseam/ipc-types";
 import { useLogsTail } from "../ipc";
 
 const LEVELS: readonly LogLevel[] = ["Debug", "Info", "Warn", "Error"];
@@ -28,24 +28,69 @@ function formatTimestamp(ts: string): string {
 export interface LogDrawerProps {
   open: boolean;
   onClose: () => void;
+  /** The in-flight run whose logs can be isolated via the "This run
+   *  only" toggle. `null` disables the toggle. The filter is
+   *  client-side because the persisted `LogEntry` row doesn't carry a
+   *  `run_id` — we cross-reference against the streamed `LogEvent`s
+   *  by timestamp and message. */
+  currentRunId?: RunId | null;
+  /** Live-streamed log events for `currentRunId`. Passed in from
+   *  `useReport()` so the drawer doesn't need its own per-run
+   *  listener. An empty array is fine and means "no run active yet
+   *  or no events yet." */
+  liveLogs?: LogEvent[];
 }
 
-export function LogDrawer({ open, onClose }: LogDrawerProps) {
+type RunFilter = "all" | "current";
+
+/** Build the set of `(timestamp, message)` composite keys that belong
+ *  to the current run. Timestamp matching is exact on the ISO-8601
+ *  string because the Rust side emits the same `DateTime<Utc>` into
+ *  both the live stream and the persisted row; ties on identical
+ *  timestamp + message would already be indistinguishable in the
+ *  drawer regardless. */
+function currentRunKeys(liveLogs: LogEvent[]): Set<string> {
+  const keys = new Set<string>();
+  for (const ev of liveLogs) {
+    keys.add(`${ev.emitted_at}|${ev.message}`);
+  }
+  return keys;
+}
+
+export function LogDrawer({
+  open,
+  onClose,
+  currentRunId = null,
+  liveLogs = [],
+}: LogDrawerProps) {
   const { entries, loading, error, refresh } = useLogsTail({ autoLoad: open });
   const [activeLevels, setActiveLevels] = useState<Set<LogLevel>>(
     () => new Set(LEVELS),
   );
+  const [runFilter, setRunFilter] = useState<RunFilter>("all");
 
-  // Re-fetch on every open so the drawer always shows fresh entries,
-  // not whatever was current when the component first mounted.
   useEffect(() => {
     if (open) void refresh();
   }, [open, refresh]);
 
-  const visibleEntries = useMemo(
-    () => entries.filter((e) => activeLevels.has(e.level)),
-    [entries, activeLevels],
-  );
+  // A new run resets the filter to "all" so the drawer doesn't
+  // silently stay stuck on the previous run's keys.
+  useEffect(() => {
+    setRunFilter("all");
+  }, [currentRunId]);
+
+  const runKeys = useMemo(() => currentRunKeys(liveLogs), [liveLogs]);
+
+  const visibleEntries = useMemo(() => {
+    return entries.filter((e) => {
+      if (!activeLevels.has(e.level)) return false;
+      if (runFilter === "current") {
+        if (!currentRunId) return false;
+        return runKeys.has(`${e.timestamp}|${e.message}`);
+      }
+      return true;
+    });
+  }, [entries, activeLevels, runFilter, runKeys, currentRunId]);
 
   if (!open) return null;
 
@@ -117,6 +162,30 @@ export function LogDrawer({ open, onClose }: LogDrawerProps) {
             {level}
           </button>
         ))}
+        <div className="ml-auto flex items-center gap-1">
+          <button
+            type="button"
+            role="checkbox"
+            aria-checked={runFilter === "current"}
+            disabled={!currentRunId}
+            onClick={() =>
+              setRunFilter((prev) => (prev === "current" ? "all" : "current"))
+            }
+            data-testid="log-drawer-run-filter"
+            className={`rounded px-2 py-0.5 text-[11px] uppercase tracking-wide transition disabled:opacity-40 ${
+              runFilter === "current"
+                ? "bg-sky-200 text-sky-800 dark:bg-sky-900 dark:text-sky-100"
+                : "border border-neutral-300 text-neutral-500 dark:border-neutral-700 dark:text-neutral-400"
+            }`}
+            title={
+              currentRunId
+                ? "Show only entries tied to the current run"
+                : "No active run"
+            }
+          >
+            This run
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto px-4 py-3 font-mono text-xs">

@@ -28,19 +28,28 @@
 use std::path::PathBuf;
 
 const DEV_CAPABILITY_FILENAME: &str = "dev.json";
-const DEV_CAPABILITY_BODY: &str = r#"{
-  "$schema": "../gen/schemas/desktop-schema.json",
-  "identifier": "dev",
-  "description": "Dev-only capability written by `build.rs` when the `dev-commands` Cargo feature is enabled. Grants the frontend test harness and the in-app dev tray access to `dev_emit_toast` and `dev_start_demo_run`. Absent from release builds.",
-  "windows": ["main"],
-  "permissions": [
-    "allow-dev-emit-toast",
-    "allow-dev-start-demo-run"
-  ]
-}
-"#;
+/// The canonical dev capability JSON. Lives on disk at
+/// `capabilities.dev.template.json` (outside the `capabilities/`
+/// directory so tauri-build's `capabilities/**/*` scanner never sees
+/// the template itself) and is embedded here at compile time. The
+/// integration test in `tests/capabilities.rs` parses the exact same
+/// bytes, which makes the parity check independent of whether the
+/// on-disk `capabilities/dev.json` happens to be materialised when
+/// the test binary runs.
+const DEV_CAPABILITY_BODY: &str = include_str!("capabilities.dev.template.json");
 
 fn main() {
+    // Features of the *package being built* are not passed through to
+    // the build-script's own compilation, so `cfg!(feature = "...")`
+    // evaluates against the build-script crate's (empty) feature set
+    // and is always `false`. Cargo does expose the package's active
+    // features as `CARGO_FEATURE_<UPPER_SNAKE>` environment variables,
+    // which is the sanctioned way to read them from build.rs.
+    // See: https://doc.rust-lang.org/cargo/reference/environment-variables.html#environment-variables-cargo-sets-for-build-scripts
+    let dev_commands = std::env::var_os("CARGO_FEATURE_DEV_COMMANDS").is_some();
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_DEV_COMMANDS");
+    println!("cargo:rerun-if-changed=capabilities.dev.template.json");
+
     let manifest_dir = PathBuf::from(
         std::env::var_os("CARGO_MANIFEST_DIR").expect("CARGO_MANIFEST_DIR must be set by cargo"),
     );
@@ -48,19 +57,23 @@ fn main() {
         .join("capabilities")
         .join(DEV_CAPABILITY_FILENAME);
 
-    if cfg!(feature = "dev-commands") {
-        std::fs::write(&dev_capability, DEV_CAPABILITY_BODY)
-            .expect("failed to write capabilities/dev.json");
-    } else if dev_capability.exists() {
+    // Remove any stale dev capability eagerly so a release build can
+    // never accidentally ship a grant left over from a prior dev
+    // build. Writing the fresh file (when the feature is on) is
+    // deferred until *after* `tauri_build::try_build` runs, because
+    // tauri-build scans `capabilities/**/*` at the start of its own
+    // pipeline and scrubs files whose identifiers it didn't resolve
+    // against the command manifest we pass in.
+    if !dev_commands && dev_capability.exists() {
         std::fs::remove_file(&dev_capability)
             .expect("failed to remove stale capabilities/dev.json");
     }
 
-    // `AppManifest::commands` takes a `&'static [&'static str]`, so we
-    // can't build the list dynamically with a `Vec`. Two static slices
-    // keep the dev-commands gate visible at a glance.
-    #[cfg(feature = "dev-commands")]
-    const COMMANDS: &[&str] = &[
+    // `AppManifest::commands` wants a `&'static [&'static str]`, so
+    // we pick between two static slices at runtime. Keeping two
+    // literal arrays — rather than assembling one dynamically — makes
+    // the dev-commands gate visible at a glance when diffing build.rs.
+    const PROD_COMMANDS: &[&str] = &[
         "settings_get",
         "settings_update",
         "logs_tail",
@@ -82,35 +95,52 @@ fn main() {
         "report_get",
         "report_save",
         "retention_sweep_now",
+        "activity_events_get",
+        "shell_open",
+    ];
+    const DEV_COMMANDS: &[&str] = &[
+        "settings_get",
+        "settings_update",
+        "logs_tail",
+        "persons_get_self",
+        "sources_list",
+        "sources_add",
+        "sources_update",
+        "sources_delete",
+        "sources_healthcheck",
+        "identities_list_for",
+        "identities_upsert",
+        "identities_delete",
+        "local_repos_list",
+        "local_repos_set_private",
+        "sinks_list",
+        "sinks_add",
+        "report_generate",
+        "report_cancel",
+        "report_get",
+        "report_save",
+        "retention_sweep_now",
+        "activity_events_get",
+        "shell_open",
         "dev_emit_toast",
         "dev_start_demo_run",
     ];
-    #[cfg(not(feature = "dev-commands"))]
-    const COMMANDS: &[&str] = &[
-        "settings_get",
-        "settings_update",
-        "logs_tail",
-        "persons_get_self",
-        "sources_list",
-        "sources_add",
-        "sources_update",
-        "sources_delete",
-        "sources_healthcheck",
-        "identities_list_for",
-        "identities_upsert",
-        "identities_delete",
-        "local_repos_list",
-        "local_repos_set_private",
-        "sinks_list",
-        "sinks_add",
-        "report_generate",
-        "report_cancel",
-        "report_get",
-        "report_save",
-        "retention_sweep_now",
-    ];
 
+    let commands: &'static [&'static str] = if dev_commands {
+        DEV_COMMANDS
+    } else {
+        PROD_COMMANDS
+    };
     let attributes = tauri_build::Attributes::new()
-        .app_manifest(tauri_build::AppManifest::new().commands(COMMANDS));
+        .app_manifest(tauri_build::AppManifest::new().commands(commands));
     tauri_build::try_build(attributes).expect("tauri-build failed");
+
+    // Written after `try_build` intentionally — see the note above the
+    // stale-removal block. The file is loaded at app startup by Tauri's
+    // runtime capability resolver, which walks `capabilities/*.json` at
+    // launch, so the build-time rescan order is fine.
+    if dev_commands {
+        std::fs::write(&dev_capability, DEV_CAPABILITY_BODY)
+            .expect("failed to write capabilities/dev.json");
+    }
 }

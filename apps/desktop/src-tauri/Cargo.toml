@@ -39,6 +39,17 @@ dayseam-orchestrator = { path = "../../../crates/dayseam-orchestrator", version 
 dayseam-report = { path = "../../../crates/dayseam-report", version = "0.0.0" }
 connectors-sdk = { path = "../../../crates/connectors-sdk", version = "0.0.0" }
 connector-local-git = { path = "../../../crates/connectors/connector-local-git", version = "0.0.0" }
+# Cross-platform "open this URL in the default handler" helper. Kept
+# as a direct dep of the desktop crate (not the workspace) because
+# only the Tauri shell ever needs to shell out to the OS opener — the
+# orchestrator and connectors stay pure.
+opener = "0.7"
+url = "2"
+# Native folder/file picker — fronts the shell's directory chooser so
+# users can select scan roots in `AddLocalGitSourceDialog` instead of
+# pasting absolute paths. We pair this with `dialog:allow-open` in
+# `capabilities/default.json`; nothing else in the plugin is exposed.
+tauri-plugin-dialog = "2"
 
 [dev-dependencies]
 tempfile = "3"

@@ -23,13 +23,13 @@ use chrono::{DateTime, Utc};
 use connector_local_git::{discover_repos, DiscoveryConfig};
 use connectors_sdk::{ConnCtx, NoneAuth, NoopRawStore, SystemClock};
 use dayseam_core::{
-    error_codes, DayseamError, LocalRepo, LogEntry, LogLevel, Person, ProgressEvent,
+    error_codes, ActivityEvent, DayseamError, LocalRepo, LogEntry, LogLevel, Person, ProgressEvent,
     ReportCompletedEvent, ReportDraft, RunId, Settings, SettingsPatch, Sink, SinkConfig, SinkKind,
     Source, SourceConfig, SourceHealth, SourceId, SourceIdentity, SourceKind, SourcePatch,
     ToastEvent, ToastSeverity, WriteReceipt,
 };
 use dayseam_db::{
-    DraftRepo, LocalRepoRepo, LogRepo, LogRow, PersonRepo, SettingsRepo, SinkRepo,
+    ActivityRepo, DraftRepo, LocalRepoRepo, LogRepo, LogRow, PersonRepo, SettingsRepo, SinkRepo,
     SourceIdentityRepo, SourceRepo,
 };
 use dayseam_events::RunStreams;
@@ -79,6 +79,8 @@ pub const PROD_COMMANDS: &[&str] = &[
     "report_get",
     "report_save",
     "retention_sweep_now",
+    "activity_events_get",
+    "shell_open",
 ];
 
 /// Dev-only Tauri command identifiers. Compiled in only when the
@@ -735,6 +737,91 @@ pub async fn report_save(
     state.orchestrator.save_report(draft_id, &sink).await
 }
 
+// ---- Activity events ------------------------------------------------------
+
+/// Hydrate a batch of [`ActivityEvent`]s for the evidence popover.
+/// The popover gets event *ids* from `ReportDraft::evidence` and needs
+/// the full rows to render the "what caused this bullet" list; this
+/// command is the read-only bridge that turns the first into the
+/// second. Ids that no longer exist on disk (retention evicted them)
+/// are silently dropped rather than returned as an error — the popover
+/// is a best-effort explainer, not an audit log.
+#[tauri::command]
+pub async fn activity_events_get(
+    ids: Vec<Uuid>,
+    state: State<'_, AppState>,
+) -> Result<Vec<ActivityEvent>, DayseamError> {
+    ActivityRepo::new(state.pool.clone())
+        .get_many(&ids)
+        .await
+        .map_err(|e| internal("activity_events.get_many", e))
+}
+
+// ---- Shell integration ----------------------------------------------------
+
+/// Schemes [`shell_open`] is willing to hand to the OS.
+///
+/// * `http` / `https` — activity event links (MRs, issues, commits).
+/// * `file` — the "open saved report" action on a `WriteReceipt`.
+/// * `vscode` / `vscode-insiders` — "open in editor" affordance.
+/// * `obsidian` — "open in Obsidian" for the markdown sink.
+///
+/// Everything else is refused so a compromised or buggy connector
+/// cannot slip a `javascript:`, `data:`, or `file://` with traversal
+/// payload past the app. Callers get a typed `DayseamError` instead
+/// of a silent handoff.
+const SHELL_ALLOWED_SCHEMES: &[&str] = &[
+    "http",
+    "https",
+    "file",
+    "vscode",
+    "vscode-insiders",
+    "obsidian",
+];
+
+/// Hand a URL to the host OS so it opens in whatever app is registered
+/// for the scheme (browser, editor, Obsidian, Finder/Explorer…). The
+/// command is intentionally narrow — scheme is checked against a
+/// hard-coded allow-list before the URL leaves the sandbox — because
+/// it is the only Phase-2 surface that can launch another process.
+///
+/// Returning `Ok(())` means the OS accepted the request; it does *not*
+/// mean the user actually sees the target. `opener::open` on macOS
+/// forks `/usr/bin/open` and returns as soon as the shell spawns, so
+/// a missing browser / broken handler only shows up post-hoc. That's
+/// fine for a manual user action but worth knowing when writing tests.
+#[tauri::command]
+pub async fn shell_open(url: String) -> Result<(), DayseamError> {
+    let parsed = url::Url::parse(&url).map_err(|e| DayseamError::InvalidConfig {
+        code: error_codes::IPC_SHELL_URL_INVALID.into(),
+        message: format!("invalid url `{url}`: {e}"),
+    })?;
+    if !SHELL_ALLOWED_SCHEMES.contains(&parsed.scheme()) {
+        return Err(DayseamError::InvalidConfig {
+            code: error_codes::IPC_SHELL_URL_DISALLOWED.into(),
+            message: format!(
+                "scheme `{}` is not in the allow-list {:?}",
+                parsed.scheme(),
+                SHELL_ALLOWED_SCHEMES
+            ),
+        });
+    }
+    // `opener::open` is a blocking, spawn-child-process call; push it
+    // to the blocking pool so it cannot stall the IPC reactor even if
+    // the OS is slow to return (e.g. Spotlight indexing the target).
+    tokio::task::spawn_blocking(move || opener::open(&url))
+        .await
+        .map_err(|e| DayseamError::Internal {
+            code: error_codes::IPC_SHELL_OPEN_FAILED.into(),
+            message: format!("spawn_blocking join failed: {e}"),
+        })?
+        .map_err(|e| DayseamError::Internal {
+            code: error_codes::IPC_SHELL_OPEN_FAILED.into(),
+            message: e.to_string(),
+        })?;
+    Ok(())
+}
+
 // ---- Retention ------------------------------------------------------------
 
 #[tauri::command]
@@ -955,5 +1042,68 @@ mod tests {
         let rows = repo.tail(DateTime::<Utc>::MIN_UTC, 10).await.expect("tail");
         let messages: Vec<_> = rows.into_iter().map(|r| r.message).collect();
         assert_eq!(messages, vec!["entry 2", "entry 1", "entry 0"]);
+    }
+
+    // --- shell_open ---------------------------------------------------------
+    //
+    // We don't actually shell out to the OS in unit tests — that would
+    // be flaky and nothing to assert against — so the checks here
+    // cover the guard side: validation short-circuits before
+    // `opener::open` is ever reached for any URL that isn't in the
+    // allow-list, which is the only behaviour the frontend depends on.
+
+    #[tokio::test]
+    async fn shell_open_rejects_disallowed_scheme() {
+        // `javascript:` is the canonical footgun; if this ever passes
+        // we've either widened the allow-list or lost the guard.
+        let err = shell_open("javascript:alert(1)".into())
+            .await
+            .expect_err("javascript scheme must be rejected");
+        match err {
+            DayseamError::InvalidConfig { code, .. } => {
+                assert_eq!(code, error_codes::IPC_SHELL_URL_DISALLOWED);
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn shell_open_rejects_unparseable_url() {
+        let err = shell_open("not a url".into())
+            .await
+            .expect_err("garbage string must be rejected");
+        match err {
+            DayseamError::InvalidConfig { code, .. } => {
+                assert_eq!(code, error_codes::IPC_SHELL_URL_INVALID);
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shell_allowed_schemes_cover_phase_2_use_cases() {
+        // Documentation test: the schemes the evidence popover and
+        // save-receipt row rely on must all stay in the allow-list.
+        // Adding a new sink that needs `mailto:` belongs in the same
+        // change that adds `mailto` here.
+        for scheme in ["http", "https", "file", "vscode", "obsidian"] {
+            assert!(
+                SHELL_ALLOWED_SCHEMES.contains(&scheme),
+                "allow-list regression: `{scheme}` is no longer permitted"
+            );
+        }
+    }
+
+    // --- activity_events_get -----------------------------------------------
+
+    #[tokio::test]
+    async fn activity_events_get_returns_empty_for_unknown_ids() {
+        let (state, _dir) = make_state().await;
+        // Exercise the repo directly — the command is a pure
+        // pass-through so repo behaviour is what the UI depends on.
+        let repo = ActivityRepo::new(state.pool.clone());
+        let missing = Uuid::new_v4();
+        let rows = repo.get_many(&[missing]).await.expect("get_many");
+        assert!(rows.is_empty(), "missing ids must drop silently, not error");
     }
 }

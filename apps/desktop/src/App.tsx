@@ -1,29 +1,44 @@
-import { useCallback, useEffect, useState } from "react";
-import { ActionBar } from "./components/ActionBar";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Footer } from "./components/Footer";
 import { LogDrawer } from "./components/LogDrawer";
-import { ReportPreview } from "./components/ReportPreview";
 import { TitleBar } from "./components/TitleBar";
 import { ToastHost } from "./components/ToastHost";
 import { IdentityManagerDialog } from "./features/identities/IdentityManagerDialog";
+import { ActionRow } from "./features/report/ActionRow";
+import { SaveReportDialog } from "./features/report/SaveReportDialog";
+import { StreamingPreview } from "./features/report/StreamingPreview";
 import { SinksDialog } from "./features/sinks/SinksDialog";
 import { SourcesSidebar } from "./features/sources/SourcesSidebar";
+import { useReport } from "./ipc";
 import { dismissSplash } from "./splash";
 import { ThemeProvider } from "./theme";
+
+function lastProgressMessage(
+  progress: ReturnType<typeof useReport>["progress"],
+): string | null {
+  const last = progress[progress.length - 1];
+  if (!last) return null;
+  const phase = last.phase;
+  if ("message" in phase) return phase.message;
+  return null;
+}
 
 export default function App() {
   const [logsOpen, setLogsOpen] = useState(false);
   const [identitiesOpen, setIdentitiesOpen] = useState(false);
   const [sinksOpen, setSinksOpen] = useState(false);
+  const [saveOpen, setSaveOpen] = useState(false);
+
+  const report = useReport();
 
   const toggleLogs = useCallback(() => setLogsOpen((prev) => !prev), []);
   const closeLogs = useCallback(() => setLogsOpen(false), []);
 
-  // Remove the inline splash defined in `index.html` the moment the
-  // app has rendered. Running this in an effect (rather than at
-  // module scope) guarantees the user sees the rendered UI at least
-  // one frame before the splash starts fading, so there's no
-  // "splash gone, nothing in its place" flicker.
+  const progressMessage = useMemo(
+    () => lastProgressMessage(report.progress),
+    [report.progress],
+  );
+
   useEffect(() => {
     dismissSplash();
   }, []);
@@ -45,25 +60,62 @@ export default function App() {
     return () => window.removeEventListener("keydown", handler);
   }, [toggleLogs]);
 
+  const handleGenerate = useCallback(
+    (date: string, sourceIds: string[]) => {
+      void report.generate(date, sourceIds).catch(() => {
+        /* surfaced via report.error and StreamingPreview */
+      });
+    },
+    [report],
+  );
+
+  const handleCancel = useCallback(() => {
+    void report.cancel();
+  }, [report]);
+
+  const saveEnabled = report.status === "completed" && report.draft !== null;
+
   return (
     <ThemeProvider>
       <div className="flex min-h-screen flex-col bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
         <TitleBar />
-        <ActionBar />
+        <ActionRow
+          status={report.status}
+          progressMessage={progressMessage}
+          onGenerate={handleGenerate}
+          onCancel={handleCancel}
+        />
         <SourcesSidebar />
-        <ReportPreview />
+        <StreamingPreview
+          status={report.status}
+          progress={report.progress}
+          draft={report.draft}
+          error={report.error}
+        />
         <Footer
           onOpenLogs={toggleLogs}
           onOpenIdentities={() => setIdentitiesOpen(true)}
           onOpenSinks={() => setSinksOpen(true)}
+          onOpenSave={saveEnabled ? () => setSaveOpen(true) : undefined}
         />
       </div>
-      <LogDrawer open={logsOpen} onClose={closeLogs} />
+      <LogDrawer
+        open={logsOpen}
+        onClose={closeLogs}
+        currentRunId={report.runId}
+        liveLogs={report.logs}
+      />
       <IdentityManagerDialog
         open={identitiesOpen}
         onClose={() => setIdentitiesOpen(false)}
       />
       <SinksDialog open={sinksOpen} onClose={() => setSinksOpen(false)} />
+      <SaveReportDialog
+        open={saveOpen}
+        onClose={() => setSaveOpen(false)}
+        hasDraft={saveEnabled}
+        onSave={(sinkId) => report.save(sinkId)}
+      />
       <ToastHost />
     </ThemeProvider>
   );

@@ -4,13 +4,14 @@
 // `ApproveReposDialog` so the user can toggle `is_private` on the
 // freshly-discovered repos before they're ever scanned.
 //
-// v0.1 deliberately keeps the UI textual: the user types or pastes
-// an absolute path, one per line. A native directory picker
-// (`tauri-plugin-dialog`) shows up in Phase 3; until then we avoid
-// the extra capability grant and the cross-platform quirks of
-// webview-driven folder pickers.
+// The user can either type/paste absolute paths (one per line) or
+// use the "Browse…" button to pick a folder through the OS's native
+// directory chooser (`@tauri-apps/plugin-dialog`). The picked path
+// is appended to the textarea, so power users retain full edit
+// control and the parser stays the single source of truth.
 
 import { useCallback, useMemo, useRef, useState } from "react";
+import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
 import type { Source } from "@dayseam/ipc-types";
 import { useSources } from "../../ipc";
 import { Dialog, DialogButton } from "../../components/Dialog";
@@ -55,6 +56,30 @@ export function AddLocalGitSourceDialog({
     reset();
     onClose();
   }, [submitting, reset, onClose]);
+
+  const handleBrowse = useCallback(async () => {
+    // `open({ directory: true })` returns the absolute path string,
+    // or `null` if the user cancelled. We don't surface cancellation
+    // as an error; we just leave the textarea as-is. Picker errors
+    // (sandbox denial, missing permission grant) land in `error` so
+    // the user sees why Browse… did nothing.
+    try {
+      const picked = await openFolderPicker({
+        directory: true,
+        multiple: false,
+        title: "Select a folder to scan for git repos",
+      });
+      if (typeof picked !== "string" || picked.length === 0) return;
+      setRootsRaw((prev) => {
+        const existing = parseScanRoots(prev);
+        if (existing.includes(picked)) return prev;
+        if (prev.length === 0) return picked;
+        return prev.endsWith("\n") ? `${prev}${picked}` : `${prev}\n${picked}`;
+      });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : JSON.stringify(err));
+    }
+  }, []);
 
   const handleSubmit = useCallback(async () => {
     if (!canSubmit) return;
@@ -117,11 +142,26 @@ export function AddLocalGitSourceDialog({
           />
         </label>
 
-        <label className="flex flex-col gap-1">
-          <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-            Scan roots (one absolute path per line)
-          </span>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between">
+            <label
+              htmlFor="add-local-git-scan-roots"
+              className="text-xs font-medium text-neutral-700 dark:text-neutral-300"
+            >
+              Scan roots (one folder per line)
+            </label>
+            <button
+              type="button"
+              onClick={() => void handleBrowse()}
+              disabled={submitting}
+              data-testid="add-local-git-browse"
+              className="rounded border border-neutral-300 bg-white px-2 py-0.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
+            >
+              Browse…
+            </button>
+          </div>
           <textarea
+            id="add-local-git-scan-roots"
             rows={4}
             value={rootsRaw}
             onChange={(e) => setRootsRaw(e.target.value)}
@@ -130,9 +170,10 @@ export function AddLocalGitSourceDialog({
           />
           <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
             {scanRoots.length} root{scanRoots.length === 1 ? "" : "s"} · each
-            root is walked recursively for `.git` directories
+            root is walked recursively for `.git` directories. Use
+            Browse… to pick a folder, or paste absolute paths directly.
           </span>
-        </label>
+        </div>
 
         {error ? (
           <p
