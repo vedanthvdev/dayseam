@@ -184,4 +184,23 @@ export function registerOnboardingComplete(): void {
       last_write_at: null,
     },
   ]);
+  // The source chip now surfaces the discovered-repo count, so the
+  // fully-onboarded fixture needs a populated `local_repos_list`
+  // response — otherwise the chip would stay on "…" or "0 repos"
+  // and every rendered snapshot would include that unrealistic
+  // state.
+  registerInvokeHandler("local_repos_list", async () => [
+    {
+      path: "/Users/me/code/alpha",
+      label: "alpha",
+      is_private: false,
+      discovered_at: "2026-04-17T12:00:00Z",
+    },
+    {
+      path: "/Users/me/code/beta",
+      label: "beta",
+      is_private: false,
+      discovered_at: "2026-04-17T12:00:00Z",
+    },
+  ]);
 }

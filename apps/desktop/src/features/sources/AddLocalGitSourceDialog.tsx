@@ -1,8 +1,16 @@
 // Dialog: capture a label + one or more scan roots for a new
-// `LocalGit` source and call `sources_add`. On success the parent
-// (SourcesSidebar) takes the returned `Source` and opens
-// `ApproveReposDialog` so the user can toggle `is_private` on the
-// freshly-discovered repos before they're ever scanned.
+// `LocalGit` source and call `sources_add`, OR edit the label /
+// scan-roots of an existing source via `sources_update`.
+//
+// The same dialog drives both create and edit because the form
+// shape is identical — only the commit action and the title vary.
+// In create mode, on success the parent (SourcesSidebar) takes the
+// returned `Source` and opens `ApproveReposDialog` so the user can
+// toggle `is_private` on the freshly-discovered repos before they're
+// ever scanned. In edit mode, the approve dialog doesn't open —
+// repos discovered via new scan roots surface through the normal
+// rescan flow (↻ button on the chip) to keep this dialog's remit
+// small.
 //
 // The user can either type/paste absolute paths (one per line) or
 // use the "Browse…" button to pick a folder through the OS's native
@@ -10,7 +18,7 @@
 // is appended to the textarea, so power users retain full edit
 // control and the parser stays the single source of truth.
 
-import { useCallback, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
 import type { Source } from "@dayseam/ipc-types";
 import { useSources } from "../../ipc";
@@ -20,6 +28,15 @@ interface AddLocalGitSourceDialogProps {
   open: boolean;
   onClose: () => void;
   onAdded: (source: Source) => void;
+  /**
+   * When present, the dialog opens in edit mode: the label and scan
+   * roots prefill from this source, the submit button calls
+   * `sources_update` instead of `sources_add`, and the parent is
+   * notified via `onSaved` rather than `onAdded` so it can skip the
+   * approve-repos dialog that only makes sense right after creation.
+   */
+  editing?: Source | null;
+  onSaved?: (source: Source) => void;
 }
 
 function parseScanRoots(raw: string): string[] {
@@ -29,17 +46,38 @@ function parseScanRoots(raw: string): string[] {
     .filter((line) => line.length > 0);
 }
 
+function initialRootsForEdit(source: Source | null | undefined): string {
+  if (!source) return "";
+  if ("LocalGit" in source.config) {
+    return source.config.LocalGit.scan_roots.join("\n");
+  }
+  return "";
+}
+
 export function AddLocalGitSourceDialog({
   open,
   onClose,
   onAdded,
+  editing,
+  onSaved,
 }: AddLocalGitSourceDialogProps) {
-  const { add } = useSources();
-  const [label, setLabel] = useState("");
-  const [rootsRaw, setRootsRaw] = useState("");
+  const { add, update } = useSources();
+  const isEdit = editing != null;
+  const [label, setLabel] = useState(editing?.label ?? "");
+  const [rootsRaw, setRootsRaw] = useState(() => initialRootsForEdit(editing));
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const labelRef = useRef<HTMLInputElement>(null);
+
+  // Re-seed form state whenever the caller swaps the `editing` source
+  // (e.g. closes the dialog, picks a different chip, reopens). Without
+  // this the dialog would keep the previous source's fields.
+  useEffect(() => {
+    if (!open) return;
+    setLabel(editing?.label ?? "");
+    setRootsRaw(initialRootsForEdit(editing));
+    setError(null);
+  }, [open, editing]);
 
   const scanRoots = useMemo(() => parseScanRoots(rootsRaw), [rootsRaw]);
   const canSubmit = label.trim().length > 0 && scanRoots.length > 0 && !submitting;
@@ -86,23 +124,36 @@ export function AddLocalGitSourceDialog({
     setSubmitting(true);
     setError(null);
     try {
-      const source = await add("LocalGit", label.trim(), {
-        LocalGit: { scan_roots: scanRoots },
-      });
-      reset();
-      onAdded(source);
+      if (isEdit && editing) {
+        const saved = await update(editing.id, {
+          label: label.trim(),
+          config: { LocalGit: { scan_roots: scanRoots } },
+        });
+        reset();
+        onSaved?.(saved);
+      } else {
+        const source = await add("LocalGit", label.trim(), {
+          LocalGit: { scan_roots: scanRoots },
+        });
+        reset();
+        onAdded(source);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : JSON.stringify(err));
       setSubmitting(false);
     }
-  }, [add, label, scanRoots, canSubmit, reset, onAdded]);
+  }, [add, update, isEdit, editing, label, scanRoots, canSubmit, reset, onAdded, onSaved]);
 
   return (
     <Dialog
       open={open}
       onClose={handleClose}
-      title="Add local git source"
-      description="Dayseam scans each root for `.git` directories and creates one repo row per discovery. Everything stays local."
+      title={isEdit ? "Edit local git source" : "Add local git source"}
+      description={
+        isEdit
+          ? "Update the label or scan roots for this source. Existing approved repos stay approved; new scan roots surface new repos the next time you rescan."
+          : "Dayseam scans each root for `.git` directories and creates one repo row per discovery. Everything stays local."
+      }
       testId="add-local-git-dialog"
       footer={
         <>
@@ -115,7 +166,13 @@ export function AddLocalGitSourceDialog({
             disabled={!canSubmit}
             onClick={() => void handleSubmit()}
           >
-            {submitting ? "Scanning…" : "Add and scan"}
+            {submitting
+              ? isEdit
+                ? "Saving…"
+                : "Scanning…"
+              : isEdit
+                ? "Save"
+                : "Add and scan"}
           </DialogButton>
         </>
       }

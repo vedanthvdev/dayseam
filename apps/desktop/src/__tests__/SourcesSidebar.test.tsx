@@ -1,6 +1,6 @@
 import { render, screen, waitFor, fireEvent } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { Source, SourceHealth } from "@dayseam/ipc-types";
+import type { LocalRepo, Source, SourceHealth } from "@dayseam/ipc-types";
 import { SourcesSidebar } from "../features/sources/SourcesSidebar";
 import {
   registerInvokeHandler,
@@ -25,9 +25,26 @@ const SOURCE: Source = {
   last_health: HEALTHY,
 };
 
+const REPO_A: LocalRepo = {
+  path: "/Users/me/code/project-a",
+  label: "project-a",
+  is_private: false,
+  discovered_at: "2026-04-10T12:00:00Z",
+};
+
+const REPO_B: LocalRepo = {
+  path: "/Users/me/work/project-b",
+  label: "project-b",
+  is_private: false,
+  discovered_at: "2026-04-10T12:00:00Z",
+};
+
 describe("SourcesSidebar", () => {
   beforeEach(() => {
     resetTauriMocks();
+    // Default: no discovered repos. Individual tests override when
+    // they want to assert on the count label.
+    registerInvokeHandler("local_repos_list", async () => []);
   });
   afterEach(() => {
     resetTauriMocks();
@@ -44,14 +61,19 @@ describe("SourcesSidebar", () => {
     ).toBeInTheDocument();
   });
 
-  it("renders a configured source with its root count and a healthy dot", async () => {
+  it("renders a configured source with its discovered repo count and a healthy dot", async () => {
     registerInvokeHandler("sources_list", async () => [SOURCE]);
+    // The chip count surfaces `local_repos_list` — the number of
+    // `.git` directories actually discovered under the scan roots —
+    // not the raw scan-roots count.
+    registerInvokeHandler("local_repos_list", async () => [REPO_A, REPO_B]);
     render(<SourcesSidebar />);
     await waitFor(() =>
       expect(screen.getByText("Work repos")).toBeInTheDocument(),
     );
-    // "· 2 roots" — scan_roots has length 2.
-    expect(screen.getByText(/· 2 roots/i)).toBeInTheDocument();
+    await waitFor(() =>
+      expect(screen.getByText(/· 2 repos/i)).toBeInTheDocument(),
+    );
     expect(screen.getByTestId("source-chip-src-1")).toHaveAttribute(
       "title",
       expect.stringMatching(/healthy/i),

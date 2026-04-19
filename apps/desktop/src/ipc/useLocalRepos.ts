@@ -12,6 +12,7 @@
 import { useCallback, useEffect, useState } from "react";
 import type { LocalRepo } from "@dayseam/ipc-types";
 import { invoke } from "./invoke";
+import { SOURCES_CHANGED, sourcesBus } from "./useSources";
 
 export interface UseLocalReposState {
   repos: LocalRepo[];
@@ -45,8 +46,20 @@ export function useLocalRepos(sourceId: string | null): UseLocalReposState {
   }, [sourceId]);
 
   useEffect(() => {
+    // Initial fetch plus a subscription to the sources bus. Discovery
+    // re-runs on `sources_add` / `sources_update`, so any consumer
+    // rendering a repo count for a live source needs to re-query
+    // after the sources-side notification lands. Healthcheck also
+    // pings this but the resulting extra fetch is a cheap local
+    // SQLite read, so we don't bother filtering event types.
     void refresh();
-  }, [refresh]);
+    if (sourceId === null) return;
+    const handler = () => {
+      void refresh();
+    };
+    sourcesBus.addEventListener(SOURCES_CHANGED, handler);
+    return () => sourcesBus.removeEventListener(SOURCES_CHANGED, handler);
+  }, [refresh, sourceId]);
 
   const setPrivate = useCallback(
     async (path: string, isPrivate: boolean) => {

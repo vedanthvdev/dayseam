@@ -6,6 +6,7 @@
 // selection becomes user-facing.
 
 import { useCallback, useMemo, useState } from "react";
+import { open as openFolderPicker } from "@tauri-apps/plugin-dialog";
 import type { Sink } from "@dayseam/ipc-types";
 import { useSinks } from "../../ipc";
 import { Dialog, DialogButton } from "../../components/Dialog";
@@ -48,6 +49,32 @@ export function SinksDialog({ open, onClose }: SinksDialogProps) {
     destDirs.length >= 1 &&
     destDirs.length <= 2 &&
     !submitting;
+
+  const handleBrowse = useCallback(async () => {
+    // Matches `AddLocalGitSourceDialog.handleBrowse`: picker returns
+    // the absolute path string or `null` on cancel. Cancel is silent;
+    // real picker errors (sandbox denial, missing permission grant)
+    // surface through `formError` so the user sees why Browse… did
+    // nothing. The picked path is appended rather than replacing the
+    // textarea, because markdown sinks accept up to two dest dirs and
+    // we don't want Browse… to silently nuke the first one.
+    try {
+      const picked = await openFolderPicker({
+        directory: true,
+        multiple: false,
+        title: "Select a destination folder for saved reports",
+      });
+      if (typeof picked !== "string" || picked.length === 0) return;
+      setDestRaw((prev) => {
+        const existing = parseDestDirs(prev);
+        if (existing.includes(picked)) return prev;
+        if (prev.length === 0) return picked;
+        return prev.endsWith("\n") ? `${prev}${picked}` : `${prev}\n${picked}`;
+      });
+    } catch (err) {
+      setFormError(err instanceof Error ? err.message : JSON.stringify(err));
+    }
+  }, []);
 
   const handleAdd = useCallback(async () => {
     if (!canSubmit) return;
@@ -106,11 +133,26 @@ export function SinksDialog({ open, onClose }: SinksDialogProps) {
             className="rounded border border-neutral-300 bg-white px-2 py-1 text-sm dark:border-neutral-700 dark:bg-neutral-900"
           />
         </label>
-        <label className="flex flex-col gap-1">
-          <span className="text-[11px] text-neutral-600 dark:text-neutral-400">
-            Destination directories (one or two absolute paths)
-          </span>
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center justify-between">
+            <label
+              htmlFor="sinks-dialog-dest-dirs"
+              className="text-[11px] text-neutral-600 dark:text-neutral-400"
+            >
+              Destination directories (one or two absolute paths)
+            </label>
+            <button
+              type="button"
+              onClick={() => void handleBrowse()}
+              disabled={submitting}
+              data-testid="sinks-dialog-browse"
+              className="rounded border border-neutral-300 bg-white px-2 py-0.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
+            >
+              Browse…
+            </button>
+          </div>
           <textarea
+            id="sinks-dialog-dest-dirs"
             rows={2}
             value={destRaw}
             onChange={(e) => setDestRaw(e.target.value)}
@@ -122,7 +164,7 @@ export function SinksDialog({ open, onClose }: SinksDialogProps) {
               Markdown sinks accept at most two destination directories.
             </span>
           ) : null}
-        </label>
+        </div>
         <label className="flex items-center gap-2 text-xs">
           <input
             type="checkbox"

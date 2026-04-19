@@ -3,18 +3,35 @@
 // chips with live rows fed by `useSources()`.
 //
 // Each row renders a dashed-border chip plus a health dot (green =
-// `ok`, amber = never checked, red = last probe failed) and a repo
-// count for `LocalGit` sources. Hovering a chip reveals a "Rescan"
-// affordance that fires `sources_healthcheck(id)`.
+// `ok`, amber = never checked, red = last probe failed) and, for
+// `LocalGit` sources, the number of `.git` repos that were actually
+// discovered under the configured scan roots. That count comes from
+// `local_repos_list`, so it reflects what sync would actually walk —
+// more useful than surfacing the raw scan-roots count which told
+// the user nothing about whether the roots contained any repos.
+//
+// Hovering (or keyboard-focusing) a chip reveals three affordances:
+// Rescan (↻), Edit (✎), and Delete (✕). Rescan fires
+// `sources_healthcheck(id)`; Edit reopens `AddLocalGitSourceDialog`
+// in edit mode; Delete asks for confirmation before calling
+// `sources_delete(id)`.
+//
+// The action cluster sits in a sibling that collapses to `width: 0`
+// via `w-0 overflow-hidden`, so a row of idle chips only reserves
+// the label + dot + repo-count space. The buttons expand on
+// `group-hover:` (pointer users) and `group-focus-within:` (keyboard
+// users), so the affordance is discoverable by both. Keeping the
+// buttons in the DOM — rather than `display:none`'d — preserves tab
+// order and screen-reader discovery.
 //
 // Phase 2 intentionally leaves the chip non-clickable for selection
 // — the generate-report view (PR-B2) owns source selection via its
-// own multi-select. Keeping this row read-only avoids accidentally
-// teaching users two different selection gestures.
+// own multi-select. Keeping this row read-only for selection avoids
+// accidentally teaching users two different selection gestures.
 
 import { useCallback, useState } from "react";
 import type { Source, SourceHealth } from "@dayseam/ipc-types";
-import { useSources } from "../../ipc";
+import { useLocalRepos, useSources } from "../../ipc";
 import { AddLocalGitSourceDialog } from "./AddLocalGitSourceDialog";
 import { ApproveReposDialog } from "./ApproveReposDialog";
 
@@ -27,7 +44,7 @@ function healthDotClass(health: SourceHealth): string {
 
 function healthTitle(health: SourceHealth): string {
   if (!health.checked_at) return "Not yet probed";
-  if (health.ok) return `Healthy — last checked ${formatWhen(health.checked_at)}`;
+  if (health.ok) return `Healthy · last checked ${formatWhen(health.checked_at)}`;
   // Every `DayseamError` variant carries a `code` in its `data` blob;
   // the discriminated-union shape means we read it through the nested
   // `.data` rather than a flat `.code`.
@@ -45,21 +62,22 @@ function formatWhen(ts: string): string {
   }
 }
 
-function repoCount(source: Source): number | null {
-  if ("LocalGit" in source.config) {
-    return source.config.LocalGit.scan_roots.length;
-  }
-  return null;
-}
 
 export function SourcesSidebar() {
-  const { sources, loading, error, refresh, healthcheck } = useSources();
+  const { sources, loading, error, refresh, healthcheck, remove } = useSources();
   const [addOpen, setAddOpen] = useState(false);
   // When `AddLocalGitSourceDialog` resolves successfully it hands the
   // newly-created source here so we can open ApproveReposDialog on
   // top; keeping the two dialogs coordinated at the parent avoids
   // callback choreography across siblings.
   const [approving, setApproving] = useState<Source | null>(null);
+  // Non-null while the edit dialog is open. The same dialog component
+  // drives both add and edit, distinguished by the `editing` prop.
+  const [editing, setEditing] = useState<Source | null>(null);
+  // Non-null while the delete confirmation is showing.
+  const [deleting, setDeleting] = useState<Source | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+  const [deleteInFlight, setDeleteInFlight] = useState(false);
 
   const handleHealthcheck = useCallback(
     (id: string) => {
@@ -67,6 +85,20 @@ export function SourcesSidebar() {
     },
     [healthcheck],
   );
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!deleting) return;
+    setDeleteInFlight(true);
+    setDeleteError(null);
+    try {
+      await remove(deleting.id);
+      setDeleting(null);
+    } catch (err) {
+      setDeleteError(err instanceof Error ? err.message : JSON.stringify(err));
+    } finally {
+      setDeleteInFlight(false);
+    }
+  }, [deleting, remove]);
 
   return (
     <section
@@ -93,37 +125,18 @@ export function SourcesSidebar() {
         </span>
       ) : null}
 
-      {sources.map((source) => {
-        const count = repoCount(source);
-        return (
-          <span
-            key={source.id}
-            title={healthTitle(source.last_health)}
-            className="group inline-flex items-center gap-1.5 rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-700 dark:border-neutral-700 dark:text-neutral-200"
-            data-testid={`source-chip-${source.id}`}
-          >
-            <span
-              aria-hidden="true"
-              className={`h-1.5 w-1.5 rounded-full ${healthDotClass(source.last_health)}`}
-            />
-            <span>{source.label}</span>
-            {count !== null ? (
-              <span className="text-neutral-500 dark:text-neutral-400">
-                · {count} root{count === 1 ? "" : "s"}
-              </span>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => handleHealthcheck(source.id)}
-              className="rounded px-1 text-[11px] text-neutral-500 opacity-0 transition group-hover:opacity-100 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
-              aria-label={`Rescan ${source.label}`}
-              title="Rescan"
-            >
-              ↻
-            </button>
-          </span>
-        );
-      })}
+      {sources.map((source) => (
+        <SourceChip
+          key={source.id}
+          source={source}
+          onHealthcheck={handleHealthcheck}
+          onEdit={() => setEditing(source)}
+          onRequestDelete={() => {
+            setDeleteError(null);
+            setDeleting(source);
+          }}
+        />
+      ))}
 
       {sources.length === 0 && !loading && !error ? (
         <span className="text-xs text-neutral-400 dark:text-neutral-500">
@@ -151,6 +164,21 @@ export function SourcesSidebar() {
         }}
       />
 
+      <AddLocalGitSourceDialog
+        open={editing !== null}
+        editing={editing}
+        onClose={() => setEditing(null)}
+        onAdded={() => {
+          // Edit mode never reaches onAdded, but the prop is required
+          // by the dialog's create-mode contract, so we provide a
+          // harmless no-op.
+        }}
+        onSaved={() => {
+          setEditing(null);
+          void refresh();
+        }}
+      />
+
       {approving ? (
         <ApproveReposDialog
           source={approving}
@@ -160,6 +188,196 @@ export function SourcesSidebar() {
           }}
         />
       ) : null}
+
+      {deleting ? (
+        <DeleteSourceConfirmDialog
+          source={deleting}
+          inFlight={deleteInFlight}
+          error={deleteError}
+          onCancel={() => {
+            if (deleteInFlight) return;
+            setDeleting(null);
+            setDeleteError(null);
+          }}
+          onConfirm={() => void handleConfirmDelete()}
+        />
+      ) : null}
     </section>
+  );
+}
+
+interface SourceChipProps {
+  source: Source;
+  onHealthcheck: (id: string) => void;
+  onEdit: () => void;
+  onRequestDelete: () => void;
+}
+
+/**
+ * One row in the sources strip. Factored out of `SourcesSidebar` so
+ * each chip can own its own `useLocalRepos(sourceId)` call and show
+ * the count of discovered `.git` repos under the source's scan
+ * roots. That number — rather than the raw scan-roots count — is
+ * what sync actually walks, so it's the useful thing to surface.
+ *
+ * Per-chip fetch keeps the wiring simple; `useLocalRepos` already
+ * listens to the sources bus, so repo counts stay accurate after an
+ * edit that changes scan roots. For non-LocalGit sources
+ * (placeholder: GitLab in Phase 3) we skip the query and omit the
+ * secondary label until that source kind has its own count model.
+ */
+function SourceChip({
+  source,
+  onHealthcheck,
+  onEdit,
+  onRequestDelete,
+}: SourceChipProps) {
+  const isLocalGit = "LocalGit" in source.config;
+  // `useLocalRepos(null)` short-circuits inside the hook, so we can
+  // always call it unconditionally and still avoid an IPC round-trip
+  // for non-LocalGit sources — keeping the rules-of-hooks happy.
+  const { repos, loading, error } = useLocalRepos(
+    isLocalGit ? source.id : null,
+  );
+  const showCount = isLocalGit;
+  const count = repos.length;
+
+  return (
+    <span
+      title={healthTitle(source.last_health)}
+      className="group inline-flex cursor-pointer items-center gap-1.5 rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-700 dark:border-neutral-700 dark:text-neutral-200"
+      data-testid={`source-chip-${source.id}`}
+    >
+      <span
+        aria-hidden="true"
+        className={`h-1.5 w-1.5 rounded-full ${healthDotClass(source.last_health)}`}
+      />
+      <span>{source.label}</span>
+      {showCount ? (
+        <span
+          className="text-neutral-500 dark:text-neutral-400"
+          // Error surfaces through the title, not the chip body, so
+          // a hiccup in `local_repos_list` doesn't scream at the
+          // user when the sync path itself is unaffected.
+          title={
+            error
+              ? `Could not read repos under this source: ${error}`
+              : undefined
+          }
+        >
+          · {loading && count === 0 ? "…" : `${count} repo${count === 1 ? "" : "s"}`}
+        </span>
+      ) : null}
+      <span
+        className="inline-flex w-0 items-center gap-0.5 overflow-hidden opacity-0 transition-all duration-150 group-hover:ml-1 group-hover:w-auto group-hover:opacity-100 group-focus-within:ml-1 group-focus-within:w-auto group-focus-within:opacity-100"
+      >
+        <button
+          type="button"
+          onClick={() => onHealthcheck(source.id)}
+          className="rounded px-1 text-[11px] text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
+          aria-label={`Rescan ${source.label}`}
+          title="Rescan"
+        >
+          ↻
+        </button>
+        {isLocalGit ? (
+          <button
+            type="button"
+            onClick={onEdit}
+            className="rounded px-1 text-[11px] text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
+            aria-label={`Edit ${source.label}`}
+            title="Edit"
+            data-testid={`source-chip-edit-${source.id}`}
+          >
+            ✎
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={onRequestDelete}
+          className="rounded px-1 text-[11px] text-neutral-500 hover:bg-red-50 hover:text-red-700 dark:text-neutral-400 dark:hover:bg-red-950/40 dark:hover:text-red-300"
+          aria-label={`Delete ${source.label}`}
+          title="Delete"
+          data-testid={`source-chip-delete-${source.id}`}
+        >
+          ✕
+        </button>
+      </span>
+    </span>
+  );
+}
+
+interface DeleteSourceConfirmDialogProps {
+  source: Source;
+  inFlight: boolean;
+  error: string | null;
+  onCancel: () => void;
+  onConfirm: () => void;
+}
+
+// Local to this file because the confirm flow is specific to the
+// source-chip strip. If a second surface (e.g. sinks row) grows the
+// same "confirm + inline error + in-flight spinner" shape we promote
+// this into `components/ConfirmDialog.tsx` rather than speculatively
+// abstracting now.
+function DeleteSourceConfirmDialog({
+  source,
+  inFlight,
+  error,
+  onCancel,
+  onConfirm,
+}: DeleteSourceConfirmDialogProps) {
+  // Inlined here (not reusing `Dialog`) because the confirmation is
+  // tiny and should not get the larger dialog's size / focus trap
+  // defaults. If the product grows more confirm dialogs we revisit.
+  return (
+    <div
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="delete-source-confirm-title"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/30 px-4"
+      data-testid={`source-chip-delete-confirm-${source.id}`}
+    >
+      <div className="w-full max-w-sm rounded-md border border-neutral-200 bg-white p-4 shadow-lg dark:border-neutral-800 dark:bg-neutral-950">
+        <h2
+          id="delete-source-confirm-title"
+          className="text-sm font-semibold text-neutral-900 dark:text-neutral-50"
+        >
+          Delete source?
+        </h2>
+        <p className="mt-2 text-xs text-neutral-600 dark:text-neutral-400">
+          This removes <span className="font-medium">{source.label}</span> and
+          every approved repo under it from Dayseam. The folders on disk are
+          untouched.
+        </p>
+        {error ? (
+          <p
+            role="alert"
+            className="mt-2 rounded border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+          >
+            {error}
+          </p>
+        ) : null}
+        <div className="mt-4 flex items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={inFlight}
+            className="rounded border border-neutral-300 bg-white px-3 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={inFlight}
+            data-testid={`source-chip-delete-confirm-${source.id}-submit`}
+            className="rounded bg-red-600 px-3 py-1 text-xs font-medium text-white hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-red-700 dark:hover:bg-red-600"
+          >
+            {inFlight ? "Deleting…" : "Delete"}
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

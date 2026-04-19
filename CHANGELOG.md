@@ -6,7 +6,62 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Source chip edit + delete.** Local-git source chips now expose an
+  Edit (✎) and Delete (✕) affordance on hover (or keyboard focus).
+  Edit reopens `AddLocalGitSourceDialog` in edit mode with the label
+  and scan roots prefilled and commits through `sources_update`;
+  Delete pops a confirmation before calling `sources_delete`. Fixes
+  the Phase 2 papercut where a user could add a source by mistake and
+  had no way to remove it from the UI. The action cluster collapses
+  to zero width when the chip is idle, so a row of idle chips only
+  occupies label + health-dot + repo-count space. The whole chip now
+  carries `cursor: pointer`, so the pointer-finger signals "hover me
+  for actions" across the entire row rather than only when the cursor
+  lands inside one of the three buttons.
+- **Source chip shows discovered repo count.** The secondary label on
+  a local-git chip now reads `N repos` — the number of `.git`
+  directories that `local_repos_list` surfaces under the configured
+  scan roots — instead of the raw `N roots`. Root count told the user
+  nothing about whether the chosen directories actually contained any
+  repos; repo count matches what sync will walk. `useLocalRepos` now
+  subscribes to the sources bus so the chip count updates immediately
+  after `sources_add` / `sources_update` re-runs discovery.
+- **Folder picker for sink destination directories.** `SinksDialog`
+  gained a `Browse…` button (mirroring `AddLocalGitSourceDialog`) that
+  appends an OS-picked absolute path to the destination-directories
+  textarea. Cancelling the picker is silent; picker errors surface in
+  the existing inline error region. Paste and typing still work — the
+  parser remains the single source of truth.
+
+### Fixed
+
+- **Sources list drift across consumers.** `useSources()` now fans
+  every successful `sources_add` / `update` / `remove` /
+  `healthcheck` out over a module-level event bus. Each mounted
+  instance re-fetches on notify, so the source-chip strip and the
+  ActionRow's source toggles stay in sync even though each component
+  owns its own local `useState`. Covered by a regression test that
+  mounts two hook instances and asserts the observer sees a delete
+  driven from the mutator.
+
 ### Changed
+
+- **Dark-mode calendar popover.** The pre-paint hydration script and
+  `applyResolvedTheme` now also set CSS `color-scheme` on `<html>`, so
+  the native `<input type="date">` calendar popover (and any other
+  UA-drawn form chrome) follows the app theme instead of always
+  painting light. The parity test was extended to snapshot
+  `color-scheme` alongside `data-theme` and the `.dark` class.
+- **Copy polish.** Removed the remaining user-visible em dashes from
+  the title bar tagline, the first-run empty-state body, the
+  streaming-preview "report ready" line, the `ActionRow` source-toggle
+  tooltip, and the source-chip health tooltip. Replaced with
+  interpuncts or restructured sentences so translators don't have to
+  deal with em dashes down the road.
+
+
 
 - **Phase 2 hardening + cross-cutting review.** Capstone review over
   every PR merged in Phase 2 (PRs #33 – #49, inventoried in

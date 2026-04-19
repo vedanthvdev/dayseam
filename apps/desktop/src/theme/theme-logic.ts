@@ -61,13 +61,23 @@ export function resolveTheme(theme: Theme): ResolvedTheme {
 }
 
 /**
- * Apply the resolved theme to `<html>` as a `data-theme` attribute
- * AND a `.dark` class (Tailwind's `dark:` variant relies on the
- * class). Kept together so every caller agrees on both channels.
+ * Apply the resolved theme to `<html>` as a `data-theme` attribute,
+ * a `.dark` class (Tailwind's `dark:` variant relies on the class),
+ * and the CSS `color-scheme` declaration. All three channels must
+ * agree so that:
+ *
+ * - Tailwind variants flip (`.dark` class),
+ * - existing attribute-based selectors still work (`data-theme`),
+ * - native form controls (`<input type="date">` calendar popover,
+ *   `<input type="color">`, scrollbars, etc.) are themed by the OS
+ *   in the same mode as the rest of the app. Without `color-scheme`
+ *   the WebView keeps drawing those in light mode even when every
+ *   other surface is dark.
  */
 export function applyResolvedTheme(resolved: ResolvedTheme): void {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   root.classList.toggle("dark", resolved === "dark");
   root.setAttribute("data-theme", resolved);
+  root.style.colorScheme = resolved;
 }

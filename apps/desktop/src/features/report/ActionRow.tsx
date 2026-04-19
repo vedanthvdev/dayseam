@@ -126,7 +126,7 @@ export function ActionRow({
                   ? "border-neutral-700 bg-neutral-900 text-white dark:border-neutral-300 dark:bg-neutral-100 dark:text-neutral-900"
                   : "border-neutral-300 text-neutral-600 hover:bg-neutral-100 dark:border-neutral-700 dark:text-neutral-300 dark:hover:bg-neutral-800"
               }`}
-              title={isOn ? "Included" : "Excluded — click to include"}
+              title={isOn ? "Included" : "Excluded (click to include)"}
             >
               <input
                 type="checkbox"

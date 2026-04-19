@@ -154,7 +154,7 @@ export function StreamingPreview({
         </article>
       ) : isCompleted ? (
         <p className="text-sm text-neutral-500 dark:text-neutral-400">
-          Report ready — loading draft…
+          Report ready, loading draft…
         </p>
       ) : null}
     </section>

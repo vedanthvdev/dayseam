@@ -46,14 +46,20 @@ function resetRoot() {
   const root = document.documentElement;
   root.removeAttribute("data-theme");
   root.classList.remove("dark");
+  root.style.colorScheme = "";
 }
 
-/** Snapshot of the two channels the theme ends up on. */
-function readRootTheme(): { dataTheme: string | null; dark: boolean } {
+/** Snapshot of the three channels the theme ends up on. */
+function readRootTheme(): {
+  dataTheme: string | null;
+  dark: boolean;
+  colorScheme: string;
+} {
   const root = document.documentElement;
   return {
     dataTheme: root.getAttribute("data-theme"),
     dark: root.classList.contains("dark"),
+    colorScheme: root.style.colorScheme,
   };
 }
 
@@ -136,12 +142,20 @@ describe("hydrate-theme.js parity with theme-logic.ts", () => {
     try {
       resetRoot();
       expect(() => runShippedHydration()).not.toThrow();
-      expect(readRootTheme()).toEqual({ dataTheme: "light", dark: false });
+      expect(readRootTheme()).toEqual({
+        dataTheme: "light",
+        dark: false,
+        colorScheme: "light",
+      });
 
       // Parity: TS helpers must agree on the same input.
       resetRoot();
       runTsHydration();
-      expect(readRootTheme()).toEqual({ dataTheme: "light", dark: false });
+      expect(readRootTheme()).toEqual({
+        dataTheme: "light",
+        dark: false,
+        colorScheme: "light",
+      });
     } finally {
       Storage.prototype.getItem = originalGetItem;
     }
@@ -165,7 +179,11 @@ describe("hydrate-theme.js parity with theme-logic.ts", () => {
       const fromTs = readRootTheme();
 
       expect(fromShipped).toEqual(fromTs);
-      expect(fromShipped).toEqual({ dataTheme: "light", dark: false });
+      expect(fromShipped).toEqual({
+        dataTheme: "light",
+        dark: false,
+        colorScheme: "light",
+      });
     } finally {
       window.matchMedia = originalMatchMedia;
     }
@@ -198,7 +216,11 @@ describe("hydrate-theme.js parity with theme-logic.ts", () => {
       const fromTs = readRootTheme();
 
       expect(fromShipped).toEqual(fromTs);
-      expect(fromShipped).toEqual({ dataTheme: "light", dark: false });
+      expect(fromShipped).toEqual({
+        dataTheme: "light",
+        dark: false,
+        colorScheme: "light",
+      });
     } finally {
       if (originalDescriptor) {
         Object.defineProperty(window, "localStorage", originalDescriptor);

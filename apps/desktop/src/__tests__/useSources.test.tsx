@@ -50,6 +50,37 @@ describe("useSources", () => {
     expect(result.current.sources).toEqual([SOURCE_A]);
   });
 
+  it("propagates mutations across separate hook instances via the bus", async () => {
+    // Regression for the Phase 2 bug where the ActionRow's copy of
+    // `sources` never updated after the SourcesSidebar deleted a
+    // source, because each `useSources()` kept its own local state.
+    let callCount = 0;
+    registerInvokeHandler("sources_list", async () => {
+      callCount += 1;
+      // First render of each hook sees the full list; after delete
+      // is dispatched the shared bus asks both to refetch, and the
+      // list is now empty.
+      return callCount <= 2 ? [SOURCE_A] : [];
+    });
+    registerInvokeHandler("sources_delete", async () => null);
+
+    const observer = renderHook(() => useSources());
+    const mutator = renderHook(() => useSources());
+    await waitFor(() => expect(observer.result.current.loading).toBe(false));
+    await waitFor(() => expect(mutator.result.current.loading).toBe(false));
+    expect(observer.result.current.sources).toEqual([SOURCE_A]);
+    expect(mutator.result.current.sources).toEqual([SOURCE_A]);
+
+    await act(async () => {
+      await mutator.result.current.remove(SOURCE_A.id);
+    });
+
+    // The observer instance, which never called `remove` itself,
+    // must still reflect the deletion.
+    await waitFor(() => expect(observer.result.current.sources).toEqual([]));
+    expect(mutator.result.current.sources).toEqual([]);
+  });
+
   it("surfaces errors from `refresh` without clobbering the existing list", async () => {
     const { result } = renderHook(() => useSources());
     await waitFor(() => expect(result.current.loading).toBe(false));

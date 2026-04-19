@@ -36,7 +36,7 @@ export function FirstRunEmptyState({ checklist }: FirstRunEmptyStateProps) {
           </h1>
           <p className="text-sm text-neutral-600 dark:text-neutral-400">
             Four quick steps and you&rsquo;re ready to generate your first
-            end-of-day report — all locally, nothing leaves this machine.
+            end-of-day report, all locally. Nothing leaves this machine.
           </p>
           {checklist.loading ? (
             <span

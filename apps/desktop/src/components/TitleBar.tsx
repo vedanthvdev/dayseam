@@ -15,7 +15,7 @@ export function TitleBar() {
           Dayseam
         </h1>
         <p className="text-xs text-neutral-500 dark:text-neutral-400">
-          Local-first automated work reporting — early scaffold
+          Local-first automated work reporting · early scaffold
         </p>
       </div>
       <ThemeToggle />

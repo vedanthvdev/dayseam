@@ -59,10 +59,13 @@
   try {
     var root = document.documentElement;
     // Order matches `applyResolvedTheme` in `src/theme/theme-logic.ts`
-    // (classList first, attribute second) so the parity claim is
-    // literal at the side-effect level, not just at end-state.
+    // (classList, attribute, then color-scheme) so the parity claim
+    // is literal at the side-effect level, not just at end-state.
+    // `color-scheme` teaches the WebView to draw native form
+    // controls (date picker popover, scrollbars) in the same mode.
     root.classList.toggle("dark", resolved === "dark");
     root.setAttribute("data-theme", resolved);
+    root.style.colorScheme = resolved;
   } catch (_domErr) {
     // If we can't touch `document`, the page isn't going to render
     // anyway; nothing actionable here.
