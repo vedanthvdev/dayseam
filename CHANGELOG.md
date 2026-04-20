@@ -6,6 +6,38 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **`graphify` adopt-or-defer decision: deferred to v0.2 (DAY-60).**
+  Phase 3 Task 7 resolves the
+  [`docs/plan/README.md`](docs/plan/README.md) question about whether
+  to adopt [`safishamsi/graphify`](https://github.com/safishamsi/graphify)
+  as a committed knowledge-graph index for Dayseam. Scored against
+  the plan's three-axis rubric on current `master` (12 crates, ~294
+  source files, ~37 800 LOC, ~6 000 lines of hand-curated
+  design+plan+review+architecture docs, two committers) the
+  evaluation came back 0/3 positive: (a) nothing a combined
+  `cargo doc` + `rust-analyzer` + `rg` + the explicit cross-references
+  in the design doc cannot already surface; (b) `graphify`'s
+  staleness signal is AST-only on the code half but requires an
+  LLM-backed `graphify --update` on the docs half, and our canonical
+  architecture lives in markdown, so every doc-touching merge would
+  stale the graph until the next paid regen; (c) committing
+  LLM-summarised artefacts adjacent to PAT fixtures, capability
+  allowlists, and `dayseam-secrets` call sites is a net-negative
+  review and security surface. The decision, its scoring, and the
+  five re-evaluation triggers (workspace size doubling, concurrent
+  contributor count > ~3, drift between code and architecture docs,
+  first-class LLM-agent orchestration in Dayseam itself, or a
+  zero-token alternative shipping) are recorded in the new
+  [`docs/decisions/2026-04-20-graphify-deferred.md`](docs/decisions/2026-04-20-graphify-deferred.md);
+  the v0.2 re-evaluation is tracked in
+  [#61](https://github.com/vedanthvdev/dayseam/issues/61). No
+  `graphify-out/` artefacts, `scripts/graphify/`, or freshness CI
+  guard land in this PR; contributors remain free to run `graphify`
+  against their own checkout, and this decision only blocks
+  *committing* generated artefacts into `master`.
+
 ### Added
 
 - **Release engineering — universal `.dmg`, GitHub Release workflow,

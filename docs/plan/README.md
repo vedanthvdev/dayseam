@@ -45,6 +45,15 @@ Per the design doc, the repo starts at `VERSION=0.0.0` and "0.1.0 is reserved fo
 
 ## Deferred to Phase 3: graphify indexing for AI agents
 
+> **Resolved 2026-04-20 (Phase 3 Task 7 / DAY-60):** scored against the
+> three-axis rubric below on then-current `master` and resolved as
+> **defer to v0.2**. Full scoring, repo-shape signal, and the five
+> re-evaluation triggers live in
+> [`docs/decisions/2026-04-20-graphify-deferred.md`](../decisions/2026-04-20-graphify-deferred.md);
+> v0.2 follow-up is tracked in
+> [#61](https://github.com/vedanthvdev/dayseam/issues/61). The
+> original framing is preserved below for historical context.
+
 A collaborator flagged [`safishamsi/graphify`](https://github.com/safishamsi/graphify) as a tool that can turn the repo into a queryable knowledge graph for AI coding agents working on Dayseam. We are **not** wiring it into Phase 1 or Phase 2, for three reasons:
 
 - **Too early to be useful.** Through Phase 2 the workspace is small enough that `rg`, `cargo tree`, and `cargo doc` are faster and more accurate than any generated graph. A stale graph is actively worse than no graph, and nothing in the current toolchain keeps `graphify-out/` refreshed automatically.
