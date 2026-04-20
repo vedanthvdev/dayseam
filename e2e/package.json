@@ -1,0 +1,27 @@
+{
+  "name": "@dayseam/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Dayseam end-to-end suite: Gherkin features driven by Playwright + Chromium (via playwright-bdd) against the desktop app's Vite bundle, Tauri IPC boundary mocked in-page.",
+  "scripts": {
+    "lint": "eslint .",
+    "typecheck": "tsc --noEmit",
+    "bddgen": "bddgen",
+    "e2e": "bddgen && playwright test",
+    "e2e:headed": "bddgen && playwright test --headed",
+    "e2e:ui": "bddgen && playwright test --ui",
+    "playwright:install": "playwright install --with-deps chromium"
+  },
+  "devDependencies": {
+    "@dayseam/ipc-types": "workspace:*",
+    "@eslint/js": "^9.9.0",
+    "@playwright/test": "^1.59.1",
+    "@types/node": "^25.6.0",
+    "eslint": "^9.9.0",
+    "globals": "^15.9.0",
+    "playwright-bdd": "^8.5.0",
+    "typescript": "^5.5.4",
+    "typescript-eslint": "^8.1.0"
+  }
+}

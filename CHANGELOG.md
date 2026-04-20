@@ -63,6 +63,54 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **Playwright BDD E2E happy path + `pnpm e2e` CI job (DAY-58).**
+  Phase 3 Task 5 adds a Gherkin-driven end-to-end suite: scenarios
+  live in `.feature` files under `e2e/features/` and are compiled
+  into Playwright specs at test time by
+  [`playwright-bdd`](https://vitalets.github.io/playwright-bdd/).
+  The one shipped scenario boots the production Vite bundle in a
+  real Chromium and walks generate-report → save-to-markdown-sink →
+  receipt, asserting the captured save-IPC payload so a drift
+  between the renderer wiring and the Rust-side contract fails the
+  test with a specific message rather than a timeout. The Tauri IPC
+  boundary is mocked in-page via an `addInitScript`-injected shim
+  that mirrors `@tauri-apps/api/mocks`'s public surface (invoke,
+  `transformCallback`, the `plugin:event|*` routes) and exposes the
+  captured state on `window.__DAYSEAM_E2E__` so a Then step can
+  reach back in for end-of-run assertions. The suite's layout
+  (`features/`, `steps/ui-steps/`, `page-objects/<domain>/`,
+  `fixtures/`) and naming conventions (`<domain>-steps.ts`,
+  `<domain>-page.ts`, `<domain>-page-locators.ts`, `@tag` scenarios)
+  match Modulr's `customer-portal-v2` Playwright suite so any
+  reader familiar with one can navigate the other immediately;
+  page objects keep selectors out of step bodies and the single
+  `mergeTests` entry point in `fixtures/base-fixtures.ts` is the
+  only place steps import Given/When/Then from. A new
+  `.github/workflows/e2e.yml` (Ubuntu, Chromium-only, with a cached
+  `~/.cache/ms-playwright` keyed off `pnpm-lock.yaml`) runs the
+  suite on every PR in under ten minutes (typical: ~30s including
+  browser install cache hit, sub-second per scenario), uploads the
+  Playwright HTML report on failure with 14-day retention, and
+  enforces a per-test three-minute wall-clock budget so a future
+  regression that pushes the run past the budget shows up as a CI
+  red instead of slow-creep drift. The plan's original intent of
+  driving the real `.app` bundle via `tauri-driver` was swapped for
+  the mocked-IPC variant because WKWebView's WebDriver story on
+  macOS 13+ is still thin enough to make per-PR native-driver runs
+  flaky; the Rust side retains its own coverage
+  (`multi_source_dedups_commitauthored`, `sink-markdown-file`'s
+  marker-block round-trip), and a follow-up issue tracks the
+  native-driver path. See `e2e/README.md` for the full rationale,
+  the authoring recipe for new scenarios, the local-run commands
+  (`pnpm --filter @dayseam/e2e e2e`,
+  `pnpm --filter @dayseam/e2e e2e:headed`,
+  `pnpm --filter @dayseam/e2e e2e:ui`), and the fixture-refresh
+  process. The suite is a root-level pnpm workspace package
+  (`@dayseam/e2e`) sitting alongside `apps/`, `crates/`, and
+  `packages/` — promoted out of `apps/desktop/` so the folder tree
+  makes the test layer visible at a glance and neither
+  `@playwright/test` nor `playwright-bdd` sits in the desktop app's
+  dep closure.
 - **GitLab admin UI, per-source error cards, and Reconnect deep link
   (DAY-56).** Phase 3 Task 3 adds `AddGitlabSourceDialog` (base-URL
   normalisation, token-page handoff, and a `gitlab_validate_pat` IPC

@@ -1,0 +1,71 @@
+name: e2e
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Playwright + Chromium against the Vite preview bundle with the
+  # Tauri IPC boundary mocked in-page. Ubuntu because Chromium headed
+  # runs cheapest and fastest here; the Rust/Tauri side has its own
+  # macOS coverage via the `rust` job in `ci.yml`. A real `.app`
+  # bundle driver (tauri-driver + WebDriverIO) is tracked as a
+  # follow-up — see `apps/desktop/e2e/README.md`.
+  playwright:
+    name: playwright
+    runs-on: ubuntu-latest
+    # The happy path's own per-test budget is three minutes; this
+    # pad accommodates dependency install + browser download on a
+    # cold runner without masking a runaway test.
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        id: playwright-cache
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+
+      - name: Install Playwright Chromium
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        run: pnpm --filter @dayseam/e2e exec playwright install --with-deps chromium
+
+      - name: Install Playwright system deps (cache hit path)
+        if: steps.playwright-cache.outputs.cache-hit == 'true'
+        run: pnpm --filter @dayseam/e2e exec playwright install-deps chromium
+
+      - name: Build frontend bundle
+        run: pnpm --filter @dayseam/desktop build
+
+      - name: Run Playwright happy path
+        run: pnpm --filter @dayseam/e2e e2e
+
+      # Upload the HTML report on failure so the PR author can
+      # download the trace, screenshots, and video for post-mortem
+      # without re-running CI locally.
+      - name: Upload Playwright report
+        if: ${{ !cancelled() && failure() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: e2e/report
+          retention-days: 14

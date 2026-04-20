@@ -1,0 +1,29 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["@playwright/test", "node"]
+  },
+  "include": [
+    "playwright.config.ts",
+    "features/**/*.ts",
+    "fixtures/**/*.ts",
+    "hooks/**/*.ts",
+    "page-objects/**/*.ts",
+    "steps/**/*.ts"
+  ],
+  "exclude": [".features-gen", "report", "test-results", "node_modules"]
+}

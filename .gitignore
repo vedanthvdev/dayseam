@@ -37,6 +37,16 @@ coverage/
 .nyc_output/
 playwright-report/
 test-results/
+# Playwright output dirs under the root `e2e/` workspace package
+# (configured in `e2e/playwright.config.ts`). Reports are regenerated
+# on every run and uploaded as a CI artifact on failure.
+/e2e/report/
+/e2e/test-results/
+# `playwright-bdd`'s `bddgen` compiles every `.feature` into a runnable
+# `.spec.ts` here before Playwright picks them up. Fully regenerated
+# each run — committing the artefacts would cause drift against the
+# hand-written `.feature` and step files.
+/e2e/.features-gen/
 
 # --- Tauri bundle output ---
 **/src-tauri/target/
