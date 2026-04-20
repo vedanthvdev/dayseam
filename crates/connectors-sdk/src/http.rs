@@ -205,7 +205,10 @@ impl HttpClient {
                         self.sleep_cancellable(wait, cancel).await?;
                         continue;
                     }
-                    // Not retriable, or budget exhausted.
+                    // Retriable status that exhausted the retry budget —
+                    // these are the only non-success paths the SDK classifies
+                    // on the caller's behalf, because the retry contract is
+                    // the SDK's responsibility, not the connector's.
                     if status == StatusCode::TOO_MANY_REQUESTS {
                         return Err(DayseamError::RateLimited {
                             code: error_codes::HTTP_RETRY_BUDGET_EXHAUSTED.to_string(),
@@ -220,10 +223,17 @@ impl HttpClient {
                             message: format!("upstream returned {status} after {attempt} attempts"),
                         });
                     }
-                    return Err(DayseamError::Network {
-                        code: error_codes::HTTP_TRANSPORT.to_string(),
-                        message: format!("upstream returned {status}"),
-                    });
+                    // Non-retriable non-success (e.g. 401, 403, 404, 400):
+                    // return the response so the caller's resource-aware
+                    // classifier can map the status to a domain-specific
+                    // error code (see `connector-gitlab::errors::map_status`
+                    // which routes 401 → `gitlab.auth.invalid_token`,
+                    // 403 → `gitlab.auth.missing_scope`). Converting these
+                    // inside `HttpClient` was the Phase-3 CORR-01 bug: it
+                    // collapsed every mid-sync PAT rotation into
+                    // `http.transport`, and the Reconnect error card never
+                    // fired because it keys on `gitlab.auth.*`.
+                    return Ok(res);
                 }
                 Err(err) => {
                     let retriable = Self::is_retriable_transport(&err);

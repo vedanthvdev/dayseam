@@ -145,7 +145,11 @@ async fn client_retries_5xx_and_eventually_returns_network_error() {
 }
 
 #[tokio::test]
-async fn non_retriable_status_returns_immediately_without_retries() {
+async fn non_retriable_status_returns_response_without_retries() {
+    // Contract (Phase 3 CORR-01 fix): non-retriable non-success statuses
+    // (4xx except 429) return `Ok(res)` so the caller can classify the
+    // status with resource-specific knowledge. The generic SDK does not
+    // own "what does a 401 mean for this resource" — the connector does.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/gone"))
@@ -160,7 +164,7 @@ async fn non_retriable_status_returns_immediately_without_retries() {
     let streams = RunStreams::new(RunId::new());
     let ((progress_tx, log_tx), (progress_rx, _log_rx)) = streams.split();
 
-    let err = client
+    let res = client
         .send(
             client.reqwest().get(server.uri() + "/gone"),
             &CancellationToken::new(),
@@ -168,14 +172,65 @@ async fn non_retriable_status_returns_immediately_without_retries() {
             Some(&log_tx),
         )
         .await
-        .expect_err("404 is a hard failure");
-    assert!(matches!(err, DayseamError::Network { .. }));
+        .expect("404 is returned as Ok(res); callers map the status themselves");
+    assert_eq!(res.status(), 404);
 
     drop(progress_tx);
     drop(log_tx);
     let events = drain_progress(progress_rx).await;
     assert!(
         events.is_empty(),
-        "non-retriable error must not emit InProgress events"
+        "non-retriable non-success must not emit InProgress events"
     );
+}
+
+#[tokio::test]
+async fn status_401_and_403_return_response_so_caller_can_classify() {
+    // CORR-01 regression: before the fix, the SDK collapsed 401/403 into
+    // `DayseamError::Network { code: "http.transport" }`, which broke the
+    // Reconnect error-card contract in `connector-gitlab` because the UI
+    // keys on `gitlab.auth.invalid_token` / `gitlab.auth.missing_scope`.
+    // The walker's `map_status` is the only caller qualified to say what
+    // 401 or 403 means for the GitLab Events API; the SDK must hand it
+    // the raw response.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/401"))
+        .respond_with(ResponseTemplate::new(401))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/403"))
+        .respond_with(ResponseTemplate::new(403))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let client = HttpClient::new()
+        .expect("build")
+        .with_policy(RetryPolicy::instant());
+
+    let cancel = CancellationToken::new();
+    let res = client
+        .send(
+            client.reqwest().get(server.uri() + "/401"),
+            &cancel,
+            None,
+            None,
+        )
+        .await
+        .expect("401 is returned as Ok(res)");
+    assert_eq!(res.status(), 401);
+
+    let res = client
+        .send(
+            client.reqwest().get(server.uri() + "/403"),
+            &cancel,
+            None,
+            None,
+        )
+        .await
+        .expect("403 is returned as Ok(res)");
+    assert_eq!(res.status(), 403);
 }

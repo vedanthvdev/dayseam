@@ -40,8 +40,13 @@ export interface UseSourcesState {
     kind: SourceKind,
     label: string,
     config: SourceConfig,
+    pat?: string | null,
   ) => Promise<Source>;
-  update: (id: string, patch: SourcePatch) => Promise<Source>;
+  update: (
+    id: string,
+    patch: SourcePatch,
+    pat?: string | null,
+  ) => Promise<Source>;
   remove: (id: string) => Promise<void>;
   healthcheck: (id: string) => Promise<SourceHealth>;
 }
@@ -92,19 +97,32 @@ export function useSources(): UseSourcesState {
   }, [refresh]);
 
   const add = useCallback(
-    async (kind: SourceKind, label: string, config: SourceConfig) => {
-      const source = await invoke("sources_add", { kind, label, config });
+    async (
+      kind: SourceKind,
+      label: string,
+      config: SourceConfig,
+      pat: string | null = null,
+    ) => {
+      const source = await invoke("sources_add", {
+        kind,
+        label,
+        config,
+        pat,
+      });
       notifySourcesChanged();
       return source;
     },
     [],
   );
 
-  const update = useCallback(async (id: string, patch: SourcePatch) => {
-    const source = await invoke("sources_update", { id, patch });
-    notifySourcesChanged();
-    return source;
-  }, []);
+  const update = useCallback(
+    async (id: string, patch: SourcePatch, pat: string | null = null) => {
+      const source = await invoke("sources_update", { id, patch, pat });
+      notifySourcesChanged();
+      return source;
+    },
+    [],
+  );
 
   const remove = useCallback(async (id: string) => {
     await invoke("sources_delete", { id });

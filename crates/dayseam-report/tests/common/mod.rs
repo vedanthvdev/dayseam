@@ -67,6 +67,66 @@ pub fn self_git_identity(source_id: SourceId, email: &str) -> SourceIdentity {
     }
 }
 
+/// The render-stage self-filter keys GitLab events off
+/// [`SourceIdentityKind::GitLabUserId`] matching `actor.external_id`.
+/// Tests that exercise that path use this helper the same way
+/// [`self_git_identity`] is used for bare-git events.
+pub fn self_gitlab_user_id_identity(source_id: SourceId, user_id: &str) -> SourceIdentity {
+    SourceIdentity {
+        id: Uuid::new_v4(),
+        person_id: self_person().id,
+        source_id: Some(source_id),
+        kind: SourceIdentityKind::GitLabUserId,
+        external_actor_id: user_id.into(),
+    }
+}
+
+/// GitLab-shaped commit event: `actor.external_id` carries the numeric
+/// user id the render-stage filter keys off, and `actor.email` is
+/// deliberately `None` because the upstream `/events` payload does
+/// not include email addresses. This mirrors the shape
+/// `connector_gitlab::normalise::normalise_event` produces in
+/// production.
+pub fn gitlab_commit_event(
+    source_id: SourceId,
+    sha: &str,
+    repo_path: &str,
+    actor_user_id: &str,
+    occurred_at_hour: u32,
+    title: &str,
+    privacy: Privacy,
+) -> ActivityEvent {
+    ActivityEvent {
+        id: ActivityEvent::deterministic_id(&source_id.to_string(), sha, "CommitAuthored"),
+        source_id,
+        external_id: sha.into(),
+        kind: ActivityKind::CommitAuthored,
+        occurred_at: Utc
+            .with_ymd_and_hms(2026, 4, 18, occurred_at_hour, 0, 0)
+            .unwrap(),
+        actor: Actor {
+            display_name: "Self".into(),
+            email: None,
+            external_id: Some(actor_user_id.into()),
+        },
+        title: title.into(),
+        body: None,
+        links: vec![],
+        entities: vec![EntityRef {
+            kind: "repo".into(),
+            external_id: repo_path.into(),
+            label: None,
+        }],
+        parent_external_id: None,
+        metadata: serde_json::Value::Null,
+        raw_ref: RawRef {
+            storage_key: format!("gitlab-event:{sha}"),
+            content_type: "application/json".into(),
+        },
+        privacy,
+    }
+}
+
 pub fn commit_event(
     source_id: SourceId,
     sha: &str,

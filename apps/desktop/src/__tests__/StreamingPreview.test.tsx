@@ -144,6 +144,31 @@ describe("StreamingPreview", () => {
     expect(screen.getByTestId("bullet-b2")).toBeDisabled();
   });
 
+  it("hides the template version from the visible label so it cannot be confused with the report date", () => {
+    // DAY-68 Phase 3 Task 8: users kept reading the
+    // `template_version` (a YYYY-MM-DD schema revision) as the
+    // content date because it sat right next to `{draft.date}` in
+    // the header. The fix is to render only `template_id` visibly
+    // and move the revision into the tooltip + a data attribute.
+    render(
+      <StreamingPreview
+        status="completed"
+        progress={[]}
+        draft={DRAFT}
+        error={null}
+      />,
+    );
+
+    expect(screen.queryByText(/template v/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/1\.0\.0/)).not.toBeInTheDocument();
+
+    const label = screen.getByText("eod");
+    expect(label).toHaveAttribute("data-template-version", "1.0.0");
+    expect(label.getAttribute("title") ?? "").toContain(
+      "schema revision 1.0.0",
+    );
+  });
+
   it("opens the evidence popover for a bullet with evidence and invokes activity_events_get", async () => {
     registerInvokeHandler("activity_events_get", async () => [EVENT]);
     render(

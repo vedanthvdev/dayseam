@@ -194,6 +194,40 @@ async fn sources_round_trip_and_delete_cascades() {
 }
 
 #[tokio::test]
+async fn source_update_secret_ref_round_trips() {
+    // DAY-70 regression: `sources_add` used to hardcode `secret_ref: None`
+    // and there was no way to associate a GitLab source with its PAT
+    // slot in Keychain after the row was written. The repo needs to be
+    // able to install (and clear) the secret_ref so the IPC layer can
+    // finish the GitLab add flow atomically.
+    let (pool, _dir) = test_pool().await;
+    let repo = SourceRepo::new(pool.clone());
+
+    // Start from a GitLab source whose PAT slot was not set at insert.
+    let mut src = fixture_source();
+    src.secret_ref = None;
+    repo.insert(&src).await.unwrap();
+    let got = repo.get(&src.id).await.unwrap().unwrap();
+    assert!(got.secret_ref.is_none(), "baseline: no secret_ref yet");
+
+    // Install the keychain pointer the IPC layer will compute after
+    // `gitlab_validate_pat` succeeds.
+    let sr = SecretRef {
+        keychain_service: "app.dayseam.desktop".into(),
+        keychain_account: format!("gitlab:{}", src.id),
+    };
+    repo.update_secret_ref(&src.id, Some(&sr)).await.unwrap();
+    let got = repo.get(&src.id).await.unwrap().unwrap();
+    assert_eq!(got.secret_ref.as_ref(), Some(&sr));
+
+    // And make sure we can clear it (used on `sources_delete` + as a
+    // safety net if the keychain write fails mid-add).
+    repo.update_secret_ref(&src.id, None).await.unwrap();
+    let got = repo.get(&src.id).await.unwrap().unwrap();
+    assert!(got.secret_ref.is_none(), "cleared secret_ref");
+}
+
+#[tokio::test]
 async fn source_update_health_persists() {
     let (pool, _dir) = test_pool().await;
     let repo = SourceRepo::new(pool.clone());
@@ -275,10 +309,13 @@ async fn activity_events_round_trip_and_reinsert_is_idempotent() {
     let got = events.list_by_source_date(&src.id, date).await.unwrap();
     assert_eq!(got, vec![event.clone()]);
 
-    // DAY-52: `insert_many` is now `INSERT OR IGNORE`. Re-inserting the
-    // same deterministic-id event on a second generate run must succeed
-    // silently (first write wins) rather than erroring, otherwise every
-    // regeneration of the same day would tear the sync down.
+    // DAY-52 + DAY-71: `insert_many` is now an upsert on
+    // `(source_id, external_id, kind)`. Re-inserting the same
+    // deterministic-id event on a second generate run must succeed
+    // silently (not error) so regenerations don't tear the sync down,
+    // *and* must refresh the row's payload so a connector-side bug fix
+    // (e.g. adding a previously-missing `repo` entity) lands on the
+    // next generate.
     events
         .insert_many(&[event.clone()])
         .await
@@ -290,6 +327,65 @@ async fn activity_events_round_trip_and_reinsert_is_idempotent() {
         vec![event.clone()],
         "idempotent re-insert must not duplicate rows",
     );
+}
+
+/// DAY-71 regression: `insert_many` must refresh non-key columns on
+/// re-sync of the same `(source_id, external_id, kind)`.
+///
+/// Before this change `INSERT OR IGNORE` left the first-written row
+/// untouched, so the GitLab connector's fix to emit a `repo` entity
+/// only took effect for *new* events — today's 16 rows that were
+/// already persisted without it kept rendering as `**/** — …` in the
+/// report. The upsert lands the new shape on the next generate.
+#[tokio::test]
+async fn activity_events_upsert_refreshes_payload_on_conflict() {
+    let (pool, _dir) = test_pool().await;
+    let sources = SourceRepo::new(pool.clone());
+    let events = ActivityRepo::new(pool.clone());
+
+    let src = fixture_source();
+    sources.insert(&src).await.unwrap();
+
+    let mut first = fixture_event_for(&src);
+    first.title = "stale title".to_string();
+    first.entities = Vec::new();
+    events
+        .insert_many(&[first.clone()])
+        .await
+        .expect("first insert");
+
+    // Second sync produces the same `(source_id, external_id, kind)`
+    // and therefore the same deterministic id, but with an enriched
+    // payload — the shape DAY-71's normaliser now emits.
+    let mut refreshed = first.clone();
+    refreshed.title = "refreshed title".to_string();
+    refreshed.entities = vec![EntityRef {
+        kind: "repo".into(),
+        external_id: "modulr/modulo-local-infra".into(),
+        label: Some("modulo-local-infra".into()),
+    }];
+    events
+        .insert_many(&[refreshed.clone()])
+        .await
+        .expect("upsert of same key must succeed");
+
+    let rows = events
+        .list_by_source_date(&src.id, first.occurred_at.date_naive())
+        .await
+        .unwrap();
+    assert_eq!(rows.len(), 1, "upsert must not duplicate rows");
+    let row = &rows[0];
+    assert_eq!(
+        row.id, first.id,
+        "stable deterministic id must survive the refresh so evidence edges still resolve"
+    );
+    assert_eq!(row.title, "refreshed title", "title must be refreshed");
+    let repo_entity = row
+        .entities
+        .iter()
+        .find(|e| e.kind == "repo")
+        .expect("repo entity must land on the row after upsert");
+    assert_eq!(repo_entity.external_id, "modulr/modulo-local-infra");
 }
 
 #[tokio::test]
@@ -860,4 +956,71 @@ async fn source_identities_resolve_and_cascade() {
         "source-scoped identity should cascade, source-agnostic one should stay"
     );
     assert_eq!(after_src_delete[0].kind, SourceIdentityKind::GitEmail);
+}
+
+/// `ensure` is the idempotent-upsert path added for DAY-71. Both
+/// `sources_add` / `sources_update` and the startup backfill call it
+/// on every invocation to guarantee a `GitLabUserId`
+/// [`SourceIdentity`] exists for every GitLab source, and the plain
+/// `insert` path would trip the UNIQUE constraint on the second call.
+#[tokio::test]
+async fn source_identities_ensure_is_idempotent_on_natural_key() {
+    let (pool, _dir) = test_pool().await;
+    let sources = SourceRepo::new(pool.clone());
+    let persons = PersonRepo::new(pool.clone());
+    let identities = SourceIdentityRepo::new(pool.clone());
+
+    let src = fixture_source();
+    sources.insert(&src).await.unwrap();
+    let me = persons.bootstrap_self("Vedanth").await.unwrap();
+
+    let first = SourceIdentity {
+        id: Uuid::new_v4(),
+        person_id: me.id,
+        source_id: Some(src.id),
+        kind: SourceIdentityKind::GitLabUserId,
+        external_actor_id: "291".into(),
+    };
+    let wrote = identities.ensure(&first).await.unwrap();
+    assert!(wrote, "first ensure must write the row");
+
+    // Same natural key, different surrogate id — the UNIQUE index on
+    // `(person_id, source_id, kind, external_actor_id)` should coalesce
+    // the second call into a no-op, and `ensure` should report that
+    // via `false` so the startup backfill can tell "seeded on this
+    // boot" from "already had it".
+    let twin = SourceIdentity {
+        id: Uuid::new_v4(),
+        ..first.clone()
+    };
+    let wrote_again = identities.ensure(&twin).await.unwrap();
+    assert!(
+        !wrote_again,
+        "repeat ensure must be a no-op, got rows_affected > 0"
+    );
+
+    let listed = identities.list_for_source(me.id, &src.id).await.unwrap();
+    assert_eq!(
+        listed.len(),
+        1,
+        "exactly one row must exist for the natural key"
+    );
+    assert_eq!(
+        listed[0].id, first.id,
+        "the surviving row must be the one we inserted first, not the twin"
+    );
+
+    // A different `external_actor_id` under the same kind / source
+    // is a *different* identity and must land as its own row.
+    let other = SourceIdentity {
+        id: Uuid::new_v4(),
+        person_id: me.id,
+        source_id: Some(src.id),
+        kind: SourceIdentityKind::GitLabUserId,
+        external_actor_id: "999".into(),
+    };
+    let wrote_other = identities.ensure(&other).await.unwrap();
+    assert!(wrote_other, "distinct natural key must insert a fresh row");
+    let listed = identities.list_for_source(me.id, &src.id).await.unwrap();
+    assert_eq!(listed.len(), 2);
 }

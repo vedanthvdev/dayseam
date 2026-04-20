@@ -147,11 +147,27 @@ export interface Commands {
     result: SourceT[];
   };
   sources_add: {
-    args: { kind: SourceKindT; label: string; config: SourceConfigT };
+    // DAY-70: `pat` is the Personal Access Token for GitLab sources.
+    // Required (non-empty) when `kind === "GitLab"`; ignored for
+    // LocalGit. Typed as `string` rather than a branded secret type
+    // because Tauri IPC serialises it as a plain JSON string, and
+    // the Rust side wraps the inbound value in `IpcSecretString` (a
+    // `ZeroizeOnDrop` wrapper that never implements `Serialize`)
+    // before anything else can observe it.
+    args: {
+      kind: SourceKindT;
+      label: string;
+      config: SourceConfigT;
+      pat: string | null;
+    };
     result: SourceT;
   };
   sources_update: {
-    args: { id: string; patch: SourcePatchT };
+    // DAY-70: `pat` lets the Reconnect flow rotate the stored GitLab
+    // token in the same round-trip as a config/label edit. `null`
+    // leaves the keychain entry untouched; a non-empty string
+    // overwrites it.
+    args: { id: string; patch: SourcePatchT; pat: string | null };
     result: SourceT;
   };
   sources_delete: {

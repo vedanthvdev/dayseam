@@ -321,16 +321,22 @@ EOF
   } >"$cl"
   local out
   out="$(run_helper "$cl" "0.1.0")"
-  if ! printf '%s' "$out" | grep -q 'fixture bullet 0001:'; then
-    echo "  FAIL: expected body to start with 'fixture bullet 0001:', got:" >&2
+  # Use bash's [[ == *pat* ]] rather than `printf ... | grep -q` so the
+  # assertion itself doesn't recreate the SIGPIPE+pipefail race this
+  # test exists to guard against: with a ~40 KB $out, grep -q matches
+  # early and closes its stdin, printf's still-pending write fails
+  # with EPIPE, and under `set -o pipefail` the whole pipeline exits
+  # non-zero, which previously made the "happy" assertion report FAIL.
+  if [[ "$out" != *"fixture bullet 0001:"* ]]; then
+    echo "  FAIL: expected body to contain 'fixture bullet 0001:', got:" >&2
     printf '%s\n' "$out" | head -5 >&2
     return 1
   fi
-  if ! printf '%s' "$out" | grep -q 'fixture bullet 0500:'; then
+  if [[ "$out" != *"fixture bullet 0500:"* ]]; then
     echo "  FAIL: expected body to contain last bullet 'fixture bullet 0500:'" >&2
     return 1
   fi
-  if printf '%s' "$out" | grep -q 'sentinel from the next section'; then
+  if [[ "$out" == *"sentinel from the next section"* ]]; then
     echo "  FAIL: bled into next [0.0.1] section" >&2
     return 1
   fi

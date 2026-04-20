@@ -3,7 +3,7 @@
 //! activity events, raw payloads, local repos — cascades on delete so a
 //! user "forgetting" a source genuinely clears it out.
 
-use dayseam_core::{Source, SourceConfig, SourceHealth, SourceId, SourceKind};
+use dayseam_core::{SecretRef, Source, SourceConfig, SourceHealth, SourceId, SourceKind};
 use sqlx::{Row, SqlitePool};
 use uuid::Uuid;
 
@@ -93,6 +93,31 @@ impl SourceRepo {
         let config_json = serde_json::to_string(config)?;
         sqlx::query("UPDATE sources SET config_json = ? WHERE id = ?")
             .bind(config_json)
+            .bind(id.to_string())
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    /// Overwrite the `secret_ref` column for `id`. `None` clears it.
+    ///
+    /// Introduced in DAY-70 to fix the GitLab report-generation bug: prior
+    /// to this, `sources_add` always wrote `secret_ref = NULL` and the
+    /// keychain never held a PAT, so every `report_generate` run for a
+    /// GitLab source silently fell back to unauthenticated GET requests
+    /// — which on a self-hosted instance return HTTP 200 with an empty
+    /// `[]` array, and the user saw an empty report.
+    pub async fn update_secret_ref(
+        &self,
+        id: &SourceId,
+        secret_ref: Option<&SecretRef>,
+    ) -> DbResult<()> {
+        let secret_ref_json = match secret_ref {
+            Some(sr) => Some(serde_json::to_string(sr)?),
+            None => None,
+        };
+        sqlx::query("UPDATE sources SET secret_ref = ? WHERE id = ?")
+            .bind(secret_ref_json)
             .bind(id.to_string())
             .execute(&self.pool)
             .await?;

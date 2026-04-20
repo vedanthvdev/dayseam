@@ -40,6 +40,39 @@ impl SourceIdentityRepo {
         Ok(())
     }
 
+    /// Idempotent insert keyed on the natural uniqueness tuple
+    /// `(person_id, source_id, kind, external_actor_id)`. Returns
+    /// `true` when a new row was written, `false` when a matching row
+    /// already existed.
+    ///
+    /// DAY-71 introduced this helper because `sources_add` /
+    /// `sources_update` now auto-seed a `GitLabUserId`
+    /// [`SourceIdentity`] from the source config's `user_id` so the
+    /// render-stage "is this mine?" filter recognises GitLab events
+    /// as self-authored. The startup backfill hits the same path for
+    /// pre-DAY-71 installs that already have the source row but never
+    /// got the identity. Both call sites re-run on every boot / save,
+    /// so the plain `insert` path would trip the UNIQUE constraint on
+    /// the second invocation; `INSERT OR IGNORE` is how we keep the
+    /// intent ("there must be exactly one such row") while tolerating
+    /// repeat calls.
+    pub async fn ensure(&self, identity: &SourceIdentity) -> DbResult<bool> {
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO source_identities
+                (id, person_id, source_id, kind, external_actor_id)
+             VALUES (?, ?, ?, ?, ?)",
+        )
+        .bind(identity.id.to_string())
+        .bind(identity.person_id.to_string())
+        .bind(identity.source_id.map(|s| s.to_string()))
+        .bind(source_identity_kind_to_db(&identity.kind))
+        .bind(&identity.external_actor_id)
+        .execute(&self.pool)
+        .await
+        .map_err(|e| DbError::classify_sqlx(e, "source_identities.ensure"))?;
+        Ok(result.rows_affected() > 0)
+    }
+
     pub async fn delete(&self, id: Uuid) -> DbResult<()> {
         sqlx::query("DELETE FROM source_identities WHERE id = ?")
             .bind(id.to_string())

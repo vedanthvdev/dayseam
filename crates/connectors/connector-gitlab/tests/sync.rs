@@ -377,6 +377,10 @@ async fn walk_day_drops_unknown_target_type_without_error() {
 
 #[tokio::test]
 async fn walk_day_surfaces_401_as_invalid_token_from_walker_path() {
+    // CORR-01: before the Phase 3 fix, the SDK collapsed 401 into
+    // `http.transport`, breaking the Reconnect error card. With the fix,
+    // `HttpClient::send` hands the walker the raw response and the
+    // walker's `map_status` routes 401 → `gitlab.auth.invalid_token`.
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/v4/users/17/events"))
@@ -400,20 +404,46 @@ async fn walk_day_surfaces_401_as_invalid_token_from_walker_path() {
     .await
     .expect_err("401 during the walk must surface as an auth error");
 
-    // The SDK's HttpClient handled the 401 by returning Network /
-    // http.transport — the walker catches that path too. Either the
-    // `gitlab.auth.invalid_token` code (if the walker sees the status
-    // directly) or `http.transport` is acceptable; what matters is
-    // that the error bubbles up deterministically.
-    let code = err.code();
-    assert!(
-        code == error_codes::GITLAB_AUTH_INVALID_TOKEN || code.starts_with("http."),
-        "unexpected error code on 401: {code} ({err:?})"
+    assert_eq!(
+        err.code(),
+        error_codes::GITLAB_AUTH_INVALID_TOKEN,
+        "401 must surface as gitlab.auth.invalid_token so the Reconnect card keys on it; got {err:?}"
     );
-    let _ = DayseamError::Auth {
-        code: "unused".into(),
-        message: "unused".into(),
-        retryable: false,
-        action_hint: None,
-    };
+    assert!(matches!(err, DayseamError::Auth { .. }));
+}
+
+#[tokio::test]
+async fn walk_day_surfaces_403_as_missing_scope_from_walker_path() {
+    // CORR-01 sibling of the 401 case. 403 = PAT authenticates but the
+    // `read_api` scope is absent; the UI surfaces a dedicated copy for
+    // this via `gitlab.auth.missing_scope`.
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/v4/users/17/events"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount(&server)
+        .await;
+
+    let err = walk_day(
+        &http_for_tests(),
+        auth_for_tests(),
+        &server.uri(),
+        17,
+        source_id(),
+        &identity_for_user(17),
+        day(),
+        utc(),
+        &CancellationToken::new(),
+        None,
+        None,
+    )
+    .await
+    .expect_err("403 during the walk must surface as an auth error");
+
+    assert_eq!(
+        err.code(),
+        error_codes::GITLAB_AUTH_MISSING_SCOPE,
+        "403 must surface as gitlab.auth.missing_scope so the scope-hint copy renders; got {err:?}"
+    );
+    assert!(matches!(err, DayseamError::Auth { .. }));
 }

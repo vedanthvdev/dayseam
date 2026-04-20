@@ -13,6 +13,7 @@
 //! [`crate::events::GitlabEvent`], and per-push enrichment (Task 2)
 //! plugs in at the normalise layer.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use chrono::{DateTime, Duration as ChronoDuration, FixedOffset, NaiveDate, TimeZone, Utc};
@@ -28,6 +29,7 @@ use tracing::debug;
 use crate::errors::GitlabUpstreamError;
 use crate::events::GitlabEvent;
 use crate::normalise::normalise_event;
+use crate::project::{emit_project_lookup_warning, fetch_project_path};
 
 /// Page size we request. GitLab caps this at 100.
 const PAGE_SIZE: u32 = 100;
@@ -92,6 +94,13 @@ pub async fn walk_day(
     let mut filtered_by_identity: u64 = 0;
     let mut filtered_by_date: u64 = 0;
     let mut dropped_by_shape: u64 = 0;
+    // `project_paths[pid] == Some(path)` when the project-details
+    // lookup succeeded; `Some(None)` when the lookup ran and returned
+    // no path (404/403/missing field). A missing key means we have not
+    // yet attempted the lookup for this pid. The `Option<Option<_>>`
+    // shape avoids re-hitting `/projects/:id` on every page for the
+    // same pid after a negative lookup.
+    let mut project_paths: HashMap<i64, Option<String>> = HashMap::new();
 
     for page in 1..=MAX_PAGES {
         if cancel.is_cancelled() {
@@ -141,6 +150,38 @@ pub async fn walk_day(
             break;
         }
 
+        // Enrich each in-window event's project_id → path_with_namespace
+        // *before* normalising the page so the cache lookup in
+        // `compose_entities` is cheap and synchronous. We only fetch
+        // for project_ids we have not seen yet on this walk; the
+        // negative cache (`Some(None)`) keeps a 404/403/unknown project
+        // from being retried page-after-page.
+        for ev in page_events.iter() {
+            let Some(pid) = ev.project_id else { continue };
+            if project_paths.contains_key(&pid) {
+                continue;
+            }
+            if !identity_ids.is_empty() && !identity_ids.contains(&ev.author_id) {
+                // Skip the fetch for events we're about to filter out
+                // anyway — the cache entry is added only when the row
+                // would reach the normaliser.
+                continue;
+            }
+            let path =
+                fetch_project_path(http, auth.clone(), base, pid, cancel, progress, logs).await?;
+            if path.is_none() {
+                if let Some(log_tx) = logs {
+                    emit_project_lookup_warning(
+                        log_tx,
+                        source_id,
+                        pid,
+                        "non-success response or missing path_with_namespace",
+                    );
+                }
+            }
+            project_paths.insert(pid, path);
+        }
+
         let mut reached_window_floor = false;
         for ev in page_events.iter() {
             // Identity filter by numeric user id — the v0.1 invariant.
@@ -163,7 +204,7 @@ pub async fn walk_day(
                 continue;
             }
 
-            match normalise_event(source_id, base, ev) {
+            match normalise_event(source_id, base, ev, &project_paths) {
                 Some(n) => events.push(n),
                 None => dropped_by_shape = dropped_by_shape.saturating_add(1),
             }

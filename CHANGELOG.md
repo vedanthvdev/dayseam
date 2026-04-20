@@ -6,8 +6,56 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Phase 3 hardening pass (DAY-68, Task 8 capstone).** Closes Phase 3
+  against the published `v0.1.0` DMG. See
+  [`docs/review/phase-3-review.md`](docs/review/phase-3-review.md) for
+  the full 15-finding table and
+  [`docs/plan/2026-04-20-v0.1-phase-3-gitlab-release.md` "Phase 3
+  close-out"](docs/plan/2026-04-20-v0.1-phase-3-gitlab-release.md#phase-3-close-out-recorded-2026-04-20)
+  for the task-by-task status. Two High-severity correctness bugs
+  (CORR-01, CORR-02, documented under "Fixed" below) ship inside the
+  same PR because they degrade the very first thing a new v0.1.0 user
+  does ("add a GitLab source, click an evidence link"). Folds in the
+  three-day Phase 2 dogfood sweep (per the plan's Task 8 intro);
+  entries recorded in
+  [`docs/dogfood/phase-2-dogfood-notes.md`](docs/dogfood/phase-2-dogfood-notes.md)
+  §2. ARC-01 from Phase 2 re-deferred to v0.2 with fresh evidence.
+
 ### Fixed
 
+- **`HttpClient::send` returns non-retriable 4xx responses raw so the
+  GitLab walker can classify them (DAY-68 / Phase 3 Task 8 CORR-01).**
+  Before: any non-success HTTP status that was not retriable (401, 403,
+  404, …) was collapsed by `crates/connectors-sdk/src/http.rs` into
+  `DayseamError::Network { code: "http.transport" }` before the caller
+  saw it. This robbed `connector-gitlab::errors::map_status` of the
+  status code it needs to route 401 → `gitlab.auth.invalid_token` and
+  403 → `gitlab.auth.missing_scope`, which in turn meant the
+  `SourceErrorCard` UI fell back to the generic "Reconnect" copy
+  instead of the scope-specific copy it already had code for. The SDK
+  now returns the raw `reqwest::Response` on these statuses (retry
+  logic for 429 + 5xx is unchanged) and the walker does the
+  classification, matching the phase-3 design contract. Two new tests
+  pin the shape: `http_retry::status_401_and_403_return_response_so_caller_can_classify`
+  and `connector-gitlab::sync::walk_day_surfaces_403_as_missing_scope_from_walker_path`.
+  Ships `semver:none`.
+- **GitLab evidence links resolve to real API endpoints (DAY-68 /
+  Phase 3 Task 8 CORR-02).** `compose_links` in
+  `connector-gitlab/src/normalise.rs` used to build MR / issue / commit
+  URLs as `{base}/-/api/v4/projects/{id}/merge_requests/{iid}` — `/-/`
+  is GitLab's UI routing prefix, `api/v4/` is the REST API prefix, and
+  no real GitLab endpoint answers a request that mixes them. Every
+  evidence link clicked in the v0.1.0 report preview 404-ed. The `/-/`
+  segment is now dropped so the link points at a valid REST endpoint
+  (`{base}/api/v4/projects/{id}/merge_requests/{iid}`). This serves
+  JSON rather than the human-readable page — the richer UI-shaped
+  link via `web_url` is tracked as a v0.1.1 follow-up in the plan's
+  "What's next" section — but "JSON that loads" beats "404 that
+  doesn't" for the first public release. Test:
+  `normalise::tests::compose_links_emit_clean_api_paths_without_ui_prefix`.
+  Ships `semver:none`.
 - **Release assertions glob the actual `.app` main binary instead
   of assuming it matches `productName` (DAY-67).** Post-DAY-66 the
   universal `Dayseam.app` landed at the right path, but the lipo

@@ -21,12 +21,13 @@ use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
 use connector_local_git::{discover_repos, DiscoveryConfig};
-use connectors_sdk::{ConnCtx, NoneAuth, NoopRawStore, SystemClock};
+use connectors_sdk::{AuthStrategy, ConnCtx, NoneAuth, NoopRawStore, PatAuth, SystemClock};
 use dayseam_core::{
     error_codes, ActivityEvent, DayseamError, GitlabValidationResult, LocalRepo, LogEntry,
-    LogLevel, Person, ProgressEvent, ReportCompletedEvent, ReportDraft, RunId, Settings,
+    LogLevel, Person, ProgressEvent, ReportCompletedEvent, ReportDraft, RunId, SecretRef, Settings,
     SettingsPatch, Sink, SinkConfig, SinkKind, Source, SourceConfig, SourceHealth, SourceId,
-    SourceIdentity, SourceKind, SourcePatch, ToastEvent, ToastSeverity, WriteReceipt,
+    SourceIdentity, SourceIdentityKind, SourceKind, SourcePatch, ToastEvent, ToastSeverity,
+    WriteReceipt,
 };
 use dayseam_db::{
     ActivityRepo, DraftRepo, LocalRepoRepo, LogRepo, LogRow, PersonRepo, SettingsRepo, SinkRepo,
@@ -35,6 +36,7 @@ use dayseam_db::{
 use dayseam_events::RunStreams;
 use dayseam_orchestrator::{resolve_cutoff, retention_sweep, GenerateRequest, SourceHandle};
 use dayseam_report::{DEV_EOD_TEMPLATE_ID, DEV_EOD_TEMPLATE_VERSION};
+use dayseam_secrets::Secret;
 use tauri::ipc::Channel;
 use tauri::{AppHandle, Emitter, State};
 use tokio_util::sync::CancellationToken;
@@ -207,6 +209,225 @@ fn invalid_config(code: &str, message: impl Into<String>) -> DayseamError {
     }
 }
 
+/// Keychain `service` half for every GitLab PAT this app stores.
+///
+/// Picking a constant here — rather than threading the bundle id through
+/// each call site — keeps Keychain Access readable ("all `dayseam.gitlab`
+/// entries") and makes the `sources_delete` sweep trivial to audit.
+const GITLAB_KEYCHAIN_SERVICE: &str = "dayseam.gitlab";
+
+/// Compute the stable [`SecretRef`] for a GitLab source's PAT. Each
+/// configured GitLab source owns one keychain row keyed by its
+/// [`SourceId`]. The `account` half embeds the UUID so two sources
+/// targeting the same host cannot clobber each other's tokens.
+fn gitlab_secret_ref(source_id: SourceId) -> SecretRef {
+    SecretRef {
+        keychain_service: GITLAB_KEYCHAIN_SERVICE.to_string(),
+        keychain_account: format!("source:{source_id}"),
+    }
+}
+
+/// Render a [`SecretRef`] as the single-string key the
+/// [`dayseam_secrets::SecretStore`] trait expects (`service::account`).
+fn secret_store_key(sr: &SecretRef) -> String {
+    format!("{}::{}", sr.keychain_service, sr.keychain_account)
+}
+
+/// Build an [`AuthStrategy`] for `source`, reading the PAT out of the
+/// OS keychain on demand.
+///
+/// * `LocalGit` → [`NoneAuth`]. Git-on-disk walks never hit the network.
+/// * `GitLab` with a populated `secret_ref` and a PAT in the keychain
+///   → [`PatAuth::gitlab`]. The descriptor on the auth strategy
+///   matches the `secret_ref`, so [`AuthDescriptor`] traces the
+///   keychain row the token came from.
+/// * `GitLab` with a missing or empty keychain slot → `Err(Auth)`
+///   with `gitlab.auth.invalid_token`. The UI renders the Reconnect
+///   card, which reopens `AddGitlabSourceDialog` in edit-mode for the
+///   affected source.
+///
+/// Introduced in DAY-70. Before this helper, the IPC layer handed
+/// every `ConnCtx` a bare [`NoneAuth`]. For self-hosted GitLab that
+/// meant every `GET /api/v4/users/:id/events` went out without a
+/// `PRIVATE-TOKEN` header and came back `HTTP 200 []`, so
+/// `report_generate` silently produced empty reports with no visible
+/// error — the bug the original user report traced.
+fn build_source_auth(
+    state: &AppState,
+    source: &Source,
+) -> Result<Arc<dyn AuthStrategy>, DayseamError> {
+    match source.kind {
+        SourceKind::LocalGit => Ok(Arc::new(NoneAuth)),
+        SourceKind::GitLab => {
+            let secret_ref = source
+                .secret_ref
+                .clone()
+                .ok_or_else(|| DayseamError::Auth {
+                    code: error_codes::GITLAB_AUTH_INVALID_TOKEN.to_string(),
+                    message: format!(
+                        "no PAT on file for GitLab source {} — reconnect to add one",
+                        source.id
+                    ),
+                    retryable: false,
+                    action_hint: Some("reconnect".to_string()),
+                })?;
+            let key = secret_store_key(&secret_ref);
+            let pat_secret = state
+                .secrets
+                .get(&key)
+                .map_err(|e| DayseamError::Internal {
+                    code: error_codes::IPC_GITLAB_KEYCHAIN_READ_FAILED.to_string(),
+                    message: format!("keychain read for {key} failed: {e}"),
+                })?
+                .ok_or_else(|| DayseamError::Auth {
+                    code: error_codes::GITLAB_AUTH_INVALID_TOKEN.to_string(),
+                    message: format!(
+                        "keychain slot {key} is empty for source {} — reconnect to restore the PAT",
+                        source.id
+                    ),
+                    retryable: false,
+                    action_hint: Some("reconnect".to_string()),
+                })?;
+            let token = pat_secret.expose_secret();
+            Ok(Arc::new(PatAuth::gitlab(
+                token.as_str(),
+                secret_ref.keychain_service.clone(),
+                secret_ref.keychain_account.clone(),
+            )))
+        }
+    }
+}
+
+/// Validate the `pat` argument handed to `sources_update` against
+/// the `existing` source row. There are four relevant combinations:
+///
+/// | kind       | existing.secret_ref | pat arg          | verdict      |
+/// |------------|---------------------|------------------|--------------|
+/// | LocalGit   | —                   | None             | OK (no-op)   |
+/// | LocalGit   | —                   | Some(_)          | KindMismatch |
+/// | GitLab     | Some(_)             | None             | OK (no-op)   |
+/// | GitLab     | Some(_)             | Some(empty)      | PatMissing   |
+/// | GitLab     | Some(_)             | Some(non-empty)  | OK (rotate)  |
+/// | GitLab     | None                | None             | PatMissing*  |
+/// | GitLab     | None                | Some(empty)      | PatMissing   |
+/// | GitLab     | None                | Some(non-empty)  | OK (seed)    |
+///
+/// The starred row is the defense-in-depth case: a GitLab row whose
+/// `secret_ref` is already null cannot *also* get a null `pat` from
+/// `sources_update`, or the whole call becomes a silent no-op and
+/// the user loops between "reconnect" and "report comes back with a
+/// `gitlab.auth.invalid_token` toast". The frontend is supposed to
+/// always pass the PAT in the reconnect flow (`useSources.update`
+/// threads it, `AddGitlabSourceDialog.handleSubmit` fills it from
+/// the `pat` state), but a stale bundle still calling the
+/// pre-DAY-70 `sources_update({id, patch})` shape would sail past
+/// this branch silently. Failing loud here turns a baffling cross-
+/// command bug into a local Save-button error.
+fn validate_pat_arg(existing: &Source, pat: Option<&IpcSecretString>) -> Result<(), DayseamError> {
+    match (existing.kind, pat, existing.secret_ref.as_ref()) {
+        (SourceKind::LocalGit, Some(_), _) => Err(invalid_config(
+            error_codes::IPC_SOURCE_CONFIG_KIND_MISMATCH,
+            format!(
+                "pat arg is only valid for GitLab sources; {} is {:?}",
+                existing.id, existing.kind
+            ),
+        )),
+        (SourceKind::GitLab, Some(p), _) if p.expose().trim().is_empty() => {
+            Err(invalid_config(
+                error_codes::IPC_GITLAB_PAT_MISSING,
+                "sources_update pat must be non-empty when provided",
+            ))
+        }
+        (SourceKind::GitLab, None, None) => Err(invalid_config(
+            error_codes::IPC_GITLAB_PAT_MISSING,
+            format!(
+                "GitLab source {} has no PAT on file and sources_update was called without one — the reconnect dialog must provide `pat` in the IPC payload",
+                existing.id
+            ),
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// Persist `pat` to the OS keychain for `source_id`, returning the
+/// canonical [`SecretRef`] the caller should stamp onto the `sources`
+/// row. Failures are surfaced as `Internal` (rather than `Auth`)
+/// because "couldn't write to the keychain" is a local-environment
+/// problem, not a PAT-rotation prompt; the user retrying the dialog
+/// will re-exercise the exact same failing path, which is the signal
+/// we want them to see.
+fn persist_gitlab_pat(
+    state: &AppState,
+    source_id: SourceId,
+    pat: &IpcSecretString,
+) -> Result<SecretRef, DayseamError> {
+    let secret_ref = gitlab_secret_ref(source_id);
+    let key = secret_store_key(&secret_ref);
+    state
+        .secrets
+        .put(&key, Secret::new(pat.expose().to_string()))
+        .map_err(|e| DayseamError::Internal {
+            code: error_codes::IPC_GITLAB_KEYCHAIN_WRITE_FAILED.to_string(),
+            message: format!("keychain write for {key} failed: {e}"),
+        })?;
+    Ok(secret_ref)
+}
+
+/// Best-effort: remove the keychain entry pointed at by `secret_ref`.
+/// Swallows failures with a `warn!` because a half-deleted source is
+/// worse than a lingering keychain row (the orchestrator registry will
+/// reject the row on next boot anyway, and the user can clean
+/// leftovers with Keychain Access).
+fn best_effort_delete_secret(state: &AppState, secret_ref: &SecretRef) {
+    let key = secret_store_key(secret_ref);
+    if let Err(e) = state.secrets.delete(&key) {
+        tracing::warn!(error = %e, %key, "keychain delete for source failed; row may linger");
+    }
+}
+
+/// Guarantee the [`SourceIdentityKind::GitLabUserId`] row that maps
+/// this GitLab source's numeric `user_id` to the current self
+/// [`Person`] exists, so the render-stage self-filter
+/// (`dayseam-report::filter_events_by_self`) recognises the source's
+/// events as authored by the user.
+///
+/// This is the production-side half of the DAY-71 fix. The bug looked
+/// like this: `sync_runs` showed `fetched_count: N`, `activity_events`
+/// held all N rows, and yet the draft came back with "No tracked
+/// activity". The upstream GitLab `/events` payload populates
+/// `actor.external_id` with the numeric user id (and leaves
+/// `actor.email` `None`), but onboarding never seeded a matching
+/// `GitLabUserId` identity — so every event was silently dropped at
+/// the render stage as "unknown actor".
+///
+/// Idempotent by design: the unique index on
+/// `(person_id, source_id, kind, external_actor_id)` collapses
+/// repeated calls into a no-op, which is exactly what the startup
+/// backfill relies on.
+async fn ensure_gitlab_self_identity(
+    state: &AppState,
+    source_id: SourceId,
+    user_id: i64,
+) -> Result<(), DayseamError> {
+    let person = PersonRepo::new(state.pool.clone())
+        .bootstrap_self(SELF_DEFAULT_DISPLAY_NAME)
+        .await
+        .map_err(|e| internal("persons.bootstrap_self", e))?;
+
+    let identity = SourceIdentity {
+        id: Uuid::new_v4(),
+        person_id: person.id,
+        source_id: Some(source_id),
+        kind: SourceIdentityKind::GitLabUserId,
+        external_actor_id: user_id.to_string(),
+    };
+    SourceIdentityRepo::new(state.pool.clone())
+        .ensure(&identity)
+        .await
+        .map_err(|e| internal("source_identities.ensure", e))?;
+    Ok(())
+}
+
 fn publish_restart_required_toast(state: &AppState) {
     let event = ToastEvent {
         id: Uuid::new_v4(),
@@ -294,11 +515,29 @@ pub async fn sources_list(state: State<'_, AppState>) -> Result<Vec<Source>, Day
 /// connector registry is built once at startup and does not pick up
 /// the new source's scan roots until the next boot. See the
 /// `boot-only contract` on [`crate::startup::build_orchestrator`].
+/// Persist a new [`Source`] and, for GitLab, its PAT.
+///
+/// `pat` is required (and non-empty) when `kind == SourceKind::GitLab`
+/// and ignored otherwise. The command runs in this order:
+///
+///   1. Insert the source row (with `secret_ref = None`).
+///   2. For GitLab: write the PAT to the Keychain under
+///      `dayseam.gitlab::source:<uuid>`, then update the row's
+///      `secret_ref` to point at that slot.
+///   3. For LocalGit: discover repos underneath `scan_roots` and
+///      upsert them into `local_repos`.
+///
+/// If step 2 fails (e.g. Keychain is locked or the user denied access)
+/// the partially-inserted row is deleted before the error propagates,
+/// so the user never ends up with a ghost GitLab source that can't
+/// authenticate. Introduced alongside [`build_source_auth`] in DAY-70
+/// to fix the silent empty-report bug.
 #[tauri::command]
 pub async fn sources_add(
     kind: SourceKind,
     label: String,
     config: SourceConfig,
+    pat: Option<IpcSecretString>,
     state: State<'_, AppState>,
 ) -> Result<Source, DayseamError> {
     if config.kind() != kind {
@@ -310,9 +549,25 @@ pub async fn sources_add(
             ),
         ));
     }
+    // Fast path: fail before we touch sqlite if this is a GitLab add
+    // without a PAT. The old code silently persisted a `secret_ref:
+    // None` row here, which is exactly what made `report_generate`
+    // run unauthenticated later.
+    if kind == SourceKind::GitLab {
+        match pat.as_ref() {
+            Some(p) if !p.expose().trim().is_empty() => {}
+            _ => {
+                return Err(invalid_config(
+                    error_codes::IPC_GITLAB_PAT_MISSING,
+                    "sources_add for GitLab requires a non-empty PAT",
+                ));
+            }
+        }
+    }
 
+    let source_id = Uuid::new_v4();
     let source = Source {
-        id: Uuid::new_v4(),
+        id: source_id,
         kind,
         label,
         config: config.clone(),
@@ -328,18 +583,96 @@ pub async fn sources_add(
         .await
         .map_err(|e| internal("sources.insert", e))?;
 
+    if kind == SourceKind::GitLab {
+        let pat = pat.as_ref().expect("guarded above");
+        match persist_gitlab_pat(&state, source_id, pat) {
+            Ok(secret_ref) => {
+                if let Err(e) = source_repo
+                    .update_secret_ref(&source_id, Some(&secret_ref))
+                    .await
+                {
+                    // Keychain already holds the PAT; rolling back the
+                    // sqlite row is now the right move so the next
+                    // re-add starts from a clean slate.
+                    best_effort_delete_secret(&state, &secret_ref);
+                    let _ = source_repo.delete(&source_id).await;
+                    return Err(internal("sources.update_secret_ref", e));
+                }
+            }
+            Err(e) => {
+                // Keychain write failed; remove the source row we
+                // inserted above so the user isn't left with a row
+                // that can never authenticate.
+                let _ = source_repo.delete(&source_id).await;
+                return Err(e);
+            }
+        }
+
+        // DAY-71: seed the `GitLabUserId` self-identity so the render
+        // stage recognises this source's events as authored by us.
+        // Without this row the upstream `/events` payload's
+        // `actor.external_id = "<user_id>"` matches no identity and
+        // every event is dropped as "unknown actor" — the exact bug
+        // that landed with `fetched_count: N` but "No tracked
+        // activity" in the rendered draft.
+        if let SourceConfig::GitLab { user_id, .. } = &config {
+            if let Err(e) = ensure_gitlab_self_identity(&state, source_id, *user_id).await {
+                // Seeding failed after the source + keychain are
+                // already durable. Roll the whole thing back so we
+                // never leave behind a source that would silently
+                // render empty; next re-add will re-exercise the
+                // same path and surface the same error so the user
+                // can act on it.
+                if let Some(sr) = source_repo
+                    .get(&source_id)
+                    .await
+                    .ok()
+                    .flatten()
+                    .and_then(|s| s.secret_ref)
+                {
+                    best_effort_delete_secret(&state, &sr);
+                }
+                let _ = source_repo.delete(&source_id).await;
+                return Err(e);
+            }
+        }
+    }
+
     if let SourceConfig::LocalGit { scan_roots } = &config {
         upsert_discovered_repos(&state, &source.id, scan_roots).await?;
     }
 
     publish_restart_required_toast(&state);
-    Ok(source)
+    // Re-read so the caller sees the `secret_ref` we just stamped.
+    source_repo
+        .get(&source_id)
+        .await
+        .map_err(|e| internal("sources.get", e))?
+        .ok_or_else(|| {
+            invalid_config(
+                error_codes::IPC_SOURCE_NOT_FOUND,
+                format!("source {source_id} disappeared immediately after insert"),
+            )
+        })
 }
 
+/// Edit an existing [`Source`]. The new `pat` arg lets the caller
+/// rotate the stored GitLab PAT (the "Reconnect" flow) in the same
+/// round-trip as a `config` update, so the UI doesn't have to juggle
+/// two partial-success states.
+///
+/// Rotation semantics: when `pat` is `Some(_)` and the source is a
+/// GitLab source, the existing Keychain slot (or the canonical one
+/// derived from `source_id` if `secret_ref` was `None`) is
+/// overwritten with the new token. Any previously stored PAT bytes
+/// are zeroed by the Keychain on replace. When `pat` is `None`, the
+/// stored PAT is left untouched — a pure label-rename does not need
+/// to re-unlock the Keychain.
 #[tauri::command]
 pub async fn sources_update(
     id: SourceId,
     patch: SourcePatch,
+    pat: Option<IpcSecretString>,
     state: State<'_, AppState>,
 ) -> Result<Source, DayseamError> {
     let repo = SourceRepo::new(state.pool.clone());
@@ -379,6 +712,43 @@ pub async fn sources_update(
         }
     }
 
+    validate_pat_arg(&existing, pat.as_ref())?;
+    if let Some(new_pat) = pat.as_ref() {
+        let secret_ref = persist_gitlab_pat(&state, id, new_pat)?;
+        repo.update_secret_ref(&id, Some(&secret_ref))
+            .await
+            .map_err(|e| internal("sources.update_secret_ref", e))?;
+        tracing::info!(
+            source_id = %id,
+            keychain_service = %secret_ref.keychain_service,
+            keychain_account = %secret_ref.keychain_account,
+            "sources_update persisted GitLab PAT and stamped secret_ref"
+        );
+    }
+
+    // DAY-71: on every GitLab-source update, make sure the
+    // `GitLabUserId` self-identity exists for the *current* user_id
+    // on this source. This covers two cases:
+    //   1. Existing installs created before the auto-seed landed —
+    //      `sources_update` is the only path a reconnecting user
+    //      hits, so seeding here fixes them without requiring a
+    //      delete + re-add.
+    //   2. The user edited the GitLab config and changed `user_id`;
+    //      we seed the new id. Stale rows from a previous `user_id`
+    //      are left behind deliberately: they match no actor and
+    //      therefore do no harm, and deleting them risks dropping
+    //      rows that are actually still valid for older persisted
+    //      events this person authored under the old numeric id.
+    if existing.kind == SourceKind::GitLab {
+        // Use the patched config if one was supplied; otherwise fall
+        // back to the persisted config — a pure label edit or PAT
+        // rotation still needs to re-seed pre-DAY-71 rows.
+        let effective_config = patch.config.as_ref().unwrap_or(&existing.config);
+        if let SourceConfig::GitLab { user_id, .. } = effective_config {
+            ensure_gitlab_self_identity(&state, id, *user_id).await?;
+        }
+    }
+
     if let Some(roots) = new_scan_roots {
         upsert_discovered_repos(&state, &id, &roots).await?;
     }
@@ -394,7 +764,16 @@ pub async fn sources_update(
             )
         })?;
 
-    if patch.config.is_some() {
+    // Only config changes on a LocalGit source require a restart: the
+    // in-memory `LocalGitConnector` snapshots its `scan_roots` list
+    // at boot (see `crate::startup::build_orchestrator`). A GitLab
+    // config edit (base_url / user_id / username) and a PAT rotation
+    // both hit fresh DB + keychain reads on the next
+    // `report_generate` via `build_source_auth`, so nudging the user
+    // to restart after a reconnect would be a lie — and a lie that
+    // makes them think the PAT save failed.
+    let needs_restart = patch.config.is_some() && existing.kind == SourceKind::LocalGit;
+    if needs_restart {
         publish_restart_required_toast(&state);
     }
     Ok(updated)
@@ -402,10 +781,21 @@ pub async fn sources_update(
 
 #[tauri::command]
 pub async fn sources_delete(id: SourceId, state: State<'_, AppState>) -> Result<(), DayseamError> {
-    SourceRepo::new(state.pool.clone())
-        .delete(&id)
+    let repo = SourceRepo::new(state.pool.clone());
+    // Resolve the keychain slot *before* we delete the row so we
+    // don't leak the PAT when the user removes a GitLab source.
+    let secret_ref = repo
+        .get(&id)
+        .await
+        .map_err(|e| internal("sources.get", e))?
+        .and_then(|s| s.secret_ref);
+
+    repo.delete(&id)
         .await
         .map_err(|e| internal("sources.delete", e))?;
+    if let Some(sr) = secret_ref {
+        best_effort_delete_secret(&state, &sr);
+    }
     publish_restart_required_toast(&state);
     Ok(())
 }
@@ -445,17 +835,41 @@ pub async fn sources_healthcheck(
         .await
         .map_err(|e| internal("source_identities.list_for_source", e))?;
 
+    // Route the stored PAT (if any) into the connector so the
+    // healthcheck actually probes the configured credentials —
+    // unauthenticated `GET /user` on public GitLab returns 200 for
+    // anonymous, which would report spurious "healthy" for a row
+    // whose PAT is missing/rotated. If the PAT is absent we surface
+    // the `gitlab.auth.invalid_token` error via `SourceHealth.last_error`,
+    // which is the same path a live 401 takes.
+    let auth_result = build_source_auth(&state, &source);
+
     // The connector's healthcheck only reads `auth` / `cancel` /
     // (sometimes) `clock`; everything else is plumbed through for
     // parity with `sync` so connectors don't have to special-case
     // probes. The throwaway `RunStreams` is dropped on return.
     let streams = RunStreams::new(RunId::new());
+    let auth: Arc<dyn AuthStrategy> = match auth_result {
+        Ok(a) => a,
+        Err(e) => {
+            let health = SourceHealth {
+                ok: false,
+                checked_at: Some(Utc::now()),
+                last_error: Some(e),
+            };
+            source_repo
+                .update_health(&id, &health)
+                .await
+                .map_err(|e| internal("sources.update_health", e))?;
+            return Ok(health);
+        }
+    };
     let ctx = ConnCtx {
         run_id: streams.run_id,
         source_id: id,
         person,
         source_identities: identities,
-        auth: Arc::new(NoneAuth),
+        auth,
         progress: streams.progress_tx.clone(),
         logs: streams.log_tx.clone(),
         raw_store: Arc::new(NoopRawStore),
@@ -720,10 +1134,18 @@ pub async fn report_generate(
             .list_for_source(person.id, &source_id)
             .await
             .map_err(|e| internal("source_identities.list_for_source", e))?;
+        // DAY-70: route the stored PAT into the orchestrator's
+        // `SourceHandle`. Previously we hardcoded `Arc::new(NoneAuth)`
+        // here, which was the root cause of "report comes back
+        // empty" on self-hosted GitLab: the walker's requests went
+        // out with no `PRIVATE-TOKEN` header, GitLab returned a
+        // successful empty list for the unauthenticated user, and
+        // the run silently completed with zero events.
+        let auth = build_source_auth(&state, &source)?;
         sources.push(SourceHandle {
             source_id: source.id,
             kind: source.kind,
-            auth: Arc::new(NoneAuth),
+            auth,
             source_identities: identities,
         });
     }
@@ -1427,5 +1849,389 @@ mod tests {
         let missing = Uuid::new_v4();
         let rows = repo.get_many(&[missing]).await.expect("get_many");
         assert!(rows.is_empty(), "missing ids must drop silently, not error");
+    }
+
+    // --- DAY-70: GitLab PAT plumbing ---------------------------------------
+    //
+    // These tests cover the helpers introduced to fix the
+    // "reports come back empty on self-hosted GitLab" bug.
+    // The full tauri::command wrappers need a `State<'_, AppState>`
+    // and so are exercised end-to-end from the frontend tests; here
+    // we pin down the individual pieces the wrappers are built from.
+
+    fn gitlab_source(id: Uuid, secret_ref: Option<SecretRef>) -> Source {
+        Source {
+            id,
+            kind: SourceKind::GitLab,
+            label: "gitlab.example.com".into(),
+            config: SourceConfig::GitLab {
+                base_url: "https://gitlab.example.com".into(),
+                user_id: 17,
+                username: "vedanth".into(),
+            },
+            secret_ref,
+            created_at: Utc::now(),
+            last_sync_at: None,
+            last_health: SourceHealth::unchecked(),
+        }
+    }
+
+    #[test]
+    fn gitlab_secret_ref_is_stable_per_source_id() {
+        // The `SourceId` is what disambiguates two GitLab sources
+        // that happen to target the same host, so the keychain row
+        // must be keyed off it. Pin the exact format: if we change
+        // it later without a migration, every existing install's
+        // PAT becomes unreadable and every report comes back empty
+        // again. That's exactly the bug we just fixed.
+        let id = uuid::uuid!("11111111-2222-3333-4444-555555555555");
+        let sr = gitlab_secret_ref(id);
+        assert_eq!(sr.keychain_service, "dayseam.gitlab");
+        assert_eq!(
+            sr.keychain_account,
+            format!("source:{id}"),
+            "account format is a stored artifact"
+        );
+        assert_eq!(
+            secret_store_key(&sr),
+            "dayseam.gitlab::source:11111111-2222-3333-4444-555555555555"
+        );
+    }
+
+    #[tokio::test]
+    async fn persist_and_build_source_auth_round_trips_pat() {
+        let (state, _dir) = make_state().await;
+        let id = Uuid::new_v4();
+        let pat = IpcSecretString::new("glpat-test-token");
+
+        let secret_ref = persist_gitlab_pat(&state, id, &pat).expect("persist pat");
+        assert_eq!(secret_ref, gitlab_secret_ref(id));
+
+        let source = gitlab_source(id, Some(secret_ref.clone()));
+        let auth = build_source_auth(&state, &source).expect("build auth");
+        // PatAuth encodes its descriptor with the keychain pointer,
+        // which is how we assert the strategy threads the right
+        // token through to the connector without exposing the PAT.
+        assert_eq!(auth.name(), "pat");
+        assert_eq!(
+            auth.descriptor(),
+            connectors_sdk::AuthDescriptor::Pat {
+                keychain_service: secret_ref.keychain_service.clone(),
+                keychain_account: secret_ref.keychain_account.clone(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn build_source_auth_errors_when_gitlab_secret_ref_missing() {
+        // Regression: the original bug was `sources_add` happily
+        // persisting a GitLab source with `secret_ref: None`, and
+        // then `report_generate` silently building `NoneAuth`.
+        // Now the auth builder must refuse outright so the UI
+        // shows the Reconnect card instead of producing an empty
+        // report.
+        let (state, _dir) = make_state().await;
+        let source = gitlab_source(Uuid::new_v4(), None);
+        let err = build_source_auth(&state, &source).expect_err("must error");
+        match err {
+            DayseamError::Auth {
+                code, action_hint, ..
+            } => {
+                assert_eq!(code, error_codes::GITLAB_AUTH_INVALID_TOKEN);
+                assert_eq!(action_hint.as_deref(), Some("reconnect"));
+            }
+            other => panic!("expected Auth, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn build_source_auth_errors_when_keychain_slot_empty() {
+        // `secret_ref` is set on the row but the keychain itself
+        // has no entry — e.g. the user wiped their keychain or
+        // restored the DB to a different machine. We want the same
+        // reconnect flow as a missing `secret_ref`.
+        let (state, _dir) = make_state().await;
+        let id = Uuid::new_v4();
+        let source = gitlab_source(id, Some(gitlab_secret_ref(id)));
+        let err = build_source_auth(&state, &source).expect_err("must error");
+        match err {
+            DayseamError::Auth { code, .. } => {
+                assert_eq!(code, error_codes::GITLAB_AUTH_INVALID_TOKEN);
+            }
+            other => panic!("expected Auth, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn build_source_auth_returns_none_auth_for_local_git() {
+        let (state, _dir) = make_state().await;
+        let source = Source {
+            id: Uuid::new_v4(),
+            kind: SourceKind::LocalGit,
+            label: "work repos".into(),
+            config: SourceConfig::LocalGit {
+                scan_roots: vec![PathBuf::from("/tmp/repos")],
+            },
+            secret_ref: None,
+            created_at: Utc::now(),
+            last_sync_at: None,
+            last_health: SourceHealth::unchecked(),
+        };
+        let auth = build_source_auth(&state, &source).expect("local-git auth");
+        assert_eq!(auth.name(), "none");
+    }
+
+    #[tokio::test]
+    async fn best_effort_delete_secret_clears_keychain_slot() {
+        let (state, _dir) = make_state().await;
+        let id = Uuid::new_v4();
+        let pat = IpcSecretString::new("glpat-delete-me");
+        let sr = persist_gitlab_pat(&state, id, &pat).expect("persist");
+        // Sanity: the slot is populated right after persist.
+        let key = secret_store_key(&sr);
+        assert!(state.secrets.get(&key).expect("get").is_some());
+
+        best_effort_delete_secret(&state, &sr);
+        assert!(
+            state.secrets.get(&key).expect("get").is_none(),
+            "keychain slot must be empty after delete"
+        );
+    }
+
+    // --- validate_pat_arg --------------------------------------------------
+    //
+    // The fixture of bugs this guard closes:
+    //   1. A stale frontend bundle calls the pre-DAY-70 shape
+    //      `invoke("sources_update", { id, patch })` and omits `pat`
+    //      entirely. Tauri happily deserialises `pat` as None and
+    //      the old code silently skipped the keychain write, leaving
+    //      the GitLab row with `secret_ref: None` so the next
+    //      `report_generate` errored with `gitlab.auth.invalid_token`
+    //      from the orchestrator — a cross-command failure mode with
+    //      no pointer back to the save that dropped the PAT.
+    //   2. A user hits Save in the reconnect dialog with a blank
+    //      PAT field (e.g. pasted and deleted). Without this guard
+    //      the update succeeds, the row keeps its old broken state,
+    //      and the user re-opens the dialog convinced the save did
+    //      nothing.
+
+    fn local_git_source(id: Uuid) -> Source {
+        Source {
+            id,
+            kind: SourceKind::LocalGit,
+            label: "work repos".into(),
+            config: SourceConfig::LocalGit {
+                scan_roots: vec![PathBuf::from("/tmp/repos")],
+            },
+            secret_ref: None,
+            created_at: Utc::now(),
+            last_sync_at: None,
+            last_health: SourceHealth::unchecked(),
+        }
+    }
+
+    #[test]
+    fn validate_pat_arg_local_git_allows_no_pat() {
+        let src = local_git_source(Uuid::new_v4());
+        validate_pat_arg(&src, None).expect("LocalGit with no pat is OK");
+    }
+
+    #[test]
+    fn validate_pat_arg_local_git_rejects_pat() {
+        let src = local_git_source(Uuid::new_v4());
+        let pat = IpcSecretString::new("glpat-unexpected");
+        let err = validate_pat_arg(&src, Some(&pat)).expect_err("LocalGit + pat must error");
+        match err {
+            DayseamError::InvalidConfig { code, .. } => {
+                assert_eq!(code, error_codes::IPC_SOURCE_CONFIG_KIND_MISMATCH);
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_pat_arg_gitlab_with_secret_allows_no_pat_for_label_edit() {
+        let id = Uuid::new_v4();
+        let src = gitlab_source(id, Some(gitlab_secret_ref(id)));
+        validate_pat_arg(&src, None)
+            .expect("GitLab with existing secret_ref must allow label/config-only edits");
+    }
+
+    #[test]
+    fn validate_pat_arg_gitlab_with_secret_rejects_empty_pat() {
+        let id = Uuid::new_v4();
+        let src = gitlab_source(id, Some(gitlab_secret_ref(id)));
+        let empty = IpcSecretString::new("   ");
+        let err = validate_pat_arg(&src, Some(&empty)).expect_err("empty pat must error");
+        match err {
+            DayseamError::InvalidConfig { code, .. } => {
+                assert_eq!(code, error_codes::IPC_GITLAB_PAT_MISSING);
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_pat_arg_gitlab_with_secret_accepts_rotation() {
+        let id = Uuid::new_v4();
+        let src = gitlab_source(id, Some(gitlab_secret_ref(id)));
+        let fresh = IpcSecretString::new("glpat-rotated");
+        validate_pat_arg(&src, Some(&fresh)).expect("rotation must be accepted");
+    }
+
+    #[test]
+    fn validate_pat_arg_gitlab_orphan_row_rejects_missing_pat() {
+        // The exact silent-no-op failure mode DAY-70 users hit when
+        // running a fresh backend against a stale frontend: the row
+        // already has `secret_ref: None` (legacy add path), and the
+        // IPC call arrives with `pat: None`. Without this guard
+        // sources_update happily returns Ok and the user loops on
+        // reconnect-then-generate forever.
+        let src = gitlab_source(Uuid::new_v4(), None);
+        let err = validate_pat_arg(&src, None).expect_err("orphan + no pat must error");
+        match err {
+            DayseamError::InvalidConfig { code, message } => {
+                assert_eq!(code, error_codes::IPC_GITLAB_PAT_MISSING);
+                assert!(
+                    message.contains("no PAT on file"),
+                    "message should name the failure mode, got: {message}"
+                );
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn validate_pat_arg_gitlab_orphan_row_accepts_fresh_pat() {
+        let src = gitlab_source(Uuid::new_v4(), None);
+        let fresh = IpcSecretString::new("glpat-first-time");
+        validate_pat_arg(&src, Some(&fresh)).expect("orphan + fresh pat is the fix path");
+    }
+
+    // --- DAY-71: GitLab self-identity auto-seed ---------------------------
+    //
+    // The bug these pin down: a GitLab source could land in the DB
+    // without a matching `GitLabUserId` [`SourceIdentity`], which meant
+    // `dayseam-report::filter_events_by_self` dropped every event as
+    // "unknown actor" and the rendered draft collapsed to "No tracked
+    // activity" — even though the connector fetched and persisted the
+    // events just fine. `ensure_gitlab_self_identity` plus the
+    // `sources_add` / `sources_update` / startup-backfill call sites
+    // guarantee the identity exists for every configured GitLab
+    // source.
+
+    /// Persist a minimally-valid GitLab [`Source`] row. The
+    /// `source_identities` table FK-references `sources(id)` so tests
+    /// that exercise [`ensure_gitlab_self_identity`] must seed the
+    /// parent row first; production does the same — the helper only
+    /// runs from `sources_add` / `sources_update` / startup, all of
+    /// which guarantee the row exists when they call it.
+    async fn seed_gitlab_source_row(state: &AppState, source_id: Uuid, user_id: i64) {
+        SourceRepo::new(state.pool.clone())
+            .insert(&Source {
+                id: source_id,
+                kind: SourceKind::GitLab,
+                label: "gitlab.example.com".into(),
+                config: SourceConfig::GitLab {
+                    base_url: "https://gitlab.example.com".into(),
+                    user_id,
+                    username: "vedanth".into(),
+                },
+                secret_ref: None,
+                created_at: Utc::now(),
+                last_sync_at: None,
+                last_health: SourceHealth::unchecked(),
+            })
+            .await
+            .expect("insert gitlab source fixture");
+    }
+
+    #[tokio::test]
+    async fn ensure_gitlab_self_identity_seeds_missing_identity() {
+        let (state, _dir) = make_state().await;
+        let source_id = Uuid::new_v4();
+        seed_gitlab_source_row(&state, source_id, 291).await;
+
+        ensure_gitlab_self_identity(&state, source_id, 291)
+            .await
+            .expect("first ensure must succeed");
+
+        let person = PersonRepo::new(state.pool.clone())
+            .bootstrap_self(SELF_DEFAULT_DISPLAY_NAME)
+            .await
+            .expect("self person");
+        let rows = SourceIdentityRepo::new(state.pool.clone())
+            .list_for_source(person.id, &source_id)
+            .await
+            .expect("list");
+        let seeded: Vec<_> = rows
+            .into_iter()
+            .filter(|r| r.kind == SourceIdentityKind::GitLabUserId && r.external_actor_id == "291")
+            .collect();
+        assert_eq!(
+            seeded.len(),
+            1,
+            "exactly one GitLabUserId=291 identity must exist after ensure"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_gitlab_self_identity_is_idempotent_on_repeat_calls() {
+        // The startup backfill re-runs this code every boot, so a
+        // regression that makes it throw on the second call would
+        // turn into "every report is empty until the user clears
+        // the db". This test is the guard.
+        let (state, _dir) = make_state().await;
+        let source_id = Uuid::new_v4();
+        seed_gitlab_source_row(&state, source_id, 42).await;
+        ensure_gitlab_self_identity(&state, source_id, 42)
+            .await
+            .expect("first ensure");
+        ensure_gitlab_self_identity(&state, source_id, 42)
+            .await
+            .expect("second ensure must be a no-op, not an error");
+
+        let person = PersonRepo::new(state.pool.clone())
+            .bootstrap_self(SELF_DEFAULT_DISPLAY_NAME)
+            .await
+            .expect("self person");
+        let rows = SourceIdentityRepo::new(state.pool.clone())
+            .list_for_source(person.id, &source_id)
+            .await
+            .expect("list");
+        assert_eq!(
+            rows.iter()
+                .filter(
+                    |r| r.kind == SourceIdentityKind::GitLabUserId && r.external_actor_id == "42"
+                )
+                .count(),
+            1,
+            "repeat ensure must not duplicate the row"
+        );
+    }
+
+    #[tokio::test]
+    async fn ensure_gitlab_self_identity_resolves_via_identity_repo() {
+        // End-to-end shape check: after ensure, the identity is
+        // reachable via `resolve_person_id` keyed on the same
+        // `(source, kind, external_actor_id)` the render-stage
+        // filter uses. If this ever stops returning Some(self), the
+        // production bug has regressed.
+        let (state, _dir) = make_state().await;
+        let source_id = Uuid::new_v4();
+        seed_gitlab_source_row(&state, source_id, 777).await;
+        ensure_gitlab_self_identity(&state, source_id, 777)
+            .await
+            .expect("ensure");
+
+        let person = PersonRepo::new(state.pool.clone())
+            .bootstrap_self(SELF_DEFAULT_DISPLAY_NAME)
+            .await
+            .expect("self");
+        let resolved = SourceIdentityRepo::new(state.pool.clone())
+            .resolve_person_id(Some(&source_id), SourceIdentityKind::GitLabUserId, "777")
+            .await
+            .expect("resolve");
+        assert_eq!(resolved, Some(person.id));
     }
 }

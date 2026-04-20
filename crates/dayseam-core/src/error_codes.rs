@@ -150,6 +150,29 @@ pub const IPC_REPORT_DRAFT_NOT_FOUND: &str = "ipc.report_draft.not_found";
 /// patch.
 pub const IPC_SOURCE_CONFIG_KIND_MISMATCH: &str = "ipc.source.config_kind_mismatch";
 
+/// `sources_add` / `sources_update` was called for a GitLab source
+/// without a PAT, or `sources_healthcheck` / `report_generate` loaded a
+/// GitLab source row whose `secret_ref` points at an empty keychain
+/// slot. The UI surfaces this as a "Reconnect" prompt rather than as a
+/// generic network error because the fix is always the same: paste a
+/// fresh PAT. Introduced in DAY-70 after we discovered that the entire
+/// GitLab happy path was silently running unauthenticated on self-
+/// hosted hosts, returning HTTP 200 with an empty events array.
+pub const IPC_GITLAB_PAT_MISSING: &str = "ipc.gitlab.pat_missing";
+
+/// Writing the GitLab PAT to the OS keychain failed. The PAT did not
+/// persist, so the subsequent `report_generate` would silently fall
+/// back to unauthenticated requests. We abort `sources_add` /
+/// `sources_update` so the caller can retry; no half-written source
+/// survives.
+pub const IPC_GITLAB_KEYCHAIN_WRITE_FAILED: &str = "ipc.gitlab.keychain_write_failed";
+
+/// Reading the GitLab PAT out of the OS keychain failed at
+/// `report_generate` / `sources_healthcheck` time. Rendered as an
+/// auth-style error so the UI offers Reconnect; the user re-pasting
+/// the PAT overwrites whatever stale/corrupt Keychain row is to blame.
+pub const IPC_GITLAB_KEYCHAIN_READ_FAILED: &str = "ipc.gitlab.keychain_read_failed";
+
 /// `sinks_add` was called with a `config` whose body fails the IPC
 /// layer's structural check (e.g. a `MarkdownFile` sink with an
 /// empty `dest_dirs` list, a non-absolute path, or a path with `..`

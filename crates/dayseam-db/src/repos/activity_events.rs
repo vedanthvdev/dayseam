@@ -3,9 +3,11 @@
 //!
 //! The UNIQUE constraint on `(source_id, external_id, kind)` — combined
 //! with deterministic UUIDv5 ids from `ActivityEvent::deterministic_id` —
-//! means re-syncing the same upstream record two days in a row is a
-//! no-op that returns a `Conflict`, which callers typically swallow with
-//! an `INSERT OR IGNORE` semantic.
+//! means re-syncing the same upstream record two days in a row resolves
+//! to the same primary key. The persistence shape is upsert-on-conflict
+//! (see [`ActivityRepo::insert_many`]): re-syncing refreshes the event
+//! payload (title, entities, links, metadata, …) while keeping the
+//! stable `id` that report-draft evidence edges point at.
 
 use chrono::NaiveDate;
 use dayseam_core::{
@@ -30,10 +32,18 @@ impl ActivityRepo {
         Self { pool }
     }
 
-    /// Insert a batch of events in a single transaction. Any duplicate
-    /// (by the UNIQUE constraint) aborts the whole batch with
-    /// `DbError::Conflict`. Callers that want "skip duplicates" semantics
-    /// should partition first.
+    /// Insert a batch of events in a single transaction.
+    ///
+    /// Upserts on the `UNIQUE(source_id, external_id, kind)` key. The
+    /// primary-key `id` is a deterministic UUIDv5 of
+    /// `(source_id, external_id, kind)` via
+    /// [`ActivityEvent::deterministic_id`], so the row's stable
+    /// identity is preserved across re-syncs while every other column
+    /// (title, body, links, entities, metadata, …) is refreshed to
+    /// match the upstream shape the most recent sync observed. That is
+    /// what lets DAY-71 fix the `**/**` repo-prefix rendering for
+    /// events that were already persisted with a missing `repo`
+    /// entity: a simple regenerate picks up the new shape.
     pub async fn insert_many(&self, events: &[ActivityEvent]) -> DbResult<()> {
         if events.is_empty() {
             return Ok(());
@@ -48,28 +58,38 @@ impl ActivityRepo {
             let raw_ref_json = serde_json::to_string(&e.raw_ref)?;
             let privacy = privacy_to_db(&e.privacy);
 
-            // `INSERT OR IGNORE` is load-bearing here. The orchestrator
-            // calls `insert_many` on every generate run, and local-git
-            // (and every other connector) assigns a deterministic
-            // `ActivityEvent::id` derived from
-            // `(source_id, external_id, kind)` so repeat runs reproduce
-            // the same row verbatim. Without `OR IGNORE` the second
-            // generation of the same day blows up on either the `id`
-            // primary-key or the `UNIQUE(source_id, external_id, kind)`
-            // index — and because the orchestrator currently falls
-            // through to `Failed` on any db error here, that would
-            // mean every second report fails to render. We prefer the
-            // first-write-wins semantics: even if a later run has
-            // slightly different `title` / `links_json`, what's already
-            // on disk is what the prior draft's evidence ids point at,
-            // so keeping that row avoids dangling references from
-            // still-resident `report_drafts`. DAY-52.
+            // Upsert-on-conflict is load-bearing here. The orchestrator
+            // calls `insert_many` on every generate run, and every
+            // connector assigns a deterministic `ActivityEvent::id`
+            // derived from `(source_id, external_id, kind)` so repeat
+            // runs target the same row. DAY-52 used `INSERT OR IGNORE`
+            // to keep regenerations idempotent, but that made the row
+            // *write-once*: a connector bug that landed a bad
+            // `entities_json` (e.g. DAY-71's missing `repo` entity that
+            // rendered as `**/**`) stayed stuck until the user deleted
+            // and re-added the source. We now `ON CONFLICT DO UPDATE`
+            // every non-key column so a fresh sync refreshes the
+            // payload while the `id` stays stable — report_drafts
+            // evidence edges therefore still resolve. If a future
+            // connector change removes a field, we *want* that removal
+            // to land so the UI stops rendering stale data.
             sqlx::query(
-                "INSERT OR IGNORE INTO activity_events
+                "INSERT INTO activity_events
                     (id, source_id, external_id, kind, occurred_at, actor_json, title, body,
                      links_json, entities_json, parent_external_id, metadata_json, raw_ref,
                      privacy)
-                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 ON CONFLICT(source_id, external_id, kind) DO UPDATE SET
+                     occurred_at = excluded.occurred_at,
+                     actor_json = excluded.actor_json,
+                     title = excluded.title,
+                     body = excluded.body,
+                     links_json = excluded.links_json,
+                     entities_json = excluded.entities_json,
+                     parent_external_id = excluded.parent_external_id,
+                     metadata_json = excluded.metadata_json,
+                     raw_ref = excluded.raw_ref,
+                     privacy = excluded.privacy",
             )
             .bind(e.id.to_string())
             .bind(e.source_id.to_string())

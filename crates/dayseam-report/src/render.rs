@@ -253,10 +253,26 @@ fn render_commit_bullet(
 // ---- bullet body helpers --------------------------------------------------
 
 fn commit_headline(repo_path: &std::path::Path, event: &ActivityEvent) -> String {
+    // Belt-and-braces for DAY-71: when the rollup could not resolve a
+    // human-readable repo path (no `repo` entity on the event, or one
+    // whose `external_id` was empty / just `/`), the previous shape
+    // rendered `**/** — <title>` because `"/".file_name()` is `None`
+    // and the fallback `to_string_lossy()` returned `"/"`. Drop the
+    // bolded prefix entirely in that degenerate case so the bullet at
+    // least reads cleanly — the upstream fix lives in
+    // [`connector_gitlab::normalise::compose_entities`], this is the
+    // safety net.
+    let raw = repo_path.to_string_lossy();
+    if raw.is_empty() || raw.as_ref() == "/" {
+        return event.title.clone();
+    }
     let repo_label = repo_path
         .file_name()
         .map(|n| n.to_string_lossy().to_string())
-        .unwrap_or_else(|| repo_path.to_string_lossy().to_string());
+        .unwrap_or_else(|| raw.into_owned());
+    if repo_label.is_empty() {
+        return event.title.clone();
+    }
     format!("**{repo_label}** — {}", event.title)
 }
 
@@ -352,4 +368,68 @@ struct CommitBulletCtx {
     /// short-SHA suffix. `None` in non-verbose mode or when the
     /// commit is not part of any MR.
     rolled_into_mr: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::{TimeZone, Utc};
+    use dayseam_core::{ActivityEvent, ActivityKind, Actor, Link, Privacy, RawRef};
+    use std::path::Path;
+
+    fn fixture_event(title: &str) -> ActivityEvent {
+        ActivityEvent {
+            id: Uuid::nil(),
+            source_id: Uuid::nil(),
+            external_id: "external".into(),
+            kind: ActivityKind::CommitAuthored,
+            occurred_at: Utc.with_ymd_and_hms(2026, 4, 20, 10, 0, 0).unwrap(),
+            actor: Actor {
+                display_name: "Vedanth".into(),
+                email: None,
+                external_id: Some("17".into()),
+            },
+            title: title.into(),
+            body: None,
+            links: Vec::<Link>::new(),
+            entities: Vec::new(),
+            parent_external_id: None,
+            metadata: serde_json::json!({}),
+            raw_ref: RawRef {
+                storage_key: "r".into(),
+                content_type: "application/json".into(),
+            },
+            privacy: Privacy::Normal,
+        }
+    }
+
+    /// DAY-71 regression: when the rollup couldn't resolve a
+    /// repo-friendly path for an event, [`commit_headline`] used to
+    /// render `**/** — <title>` because `"/".file_name()` is `None`
+    /// and the fallback `to_string_lossy()` returned `"/"`. The fix
+    /// drops the bolded prefix in that degenerate case so the bullet
+    /// at least reads cleanly — the upstream enrichment
+    /// ([`connector_gitlab::normalise::compose_entities`]) is the
+    /// primary fix; this is the safety net.
+    #[test]
+    fn commit_headline_drops_prefix_when_repo_unknown() {
+        let event = fixture_event("Merged MR: KTON-4552");
+        let with_slash = commit_headline(Path::new("/"), &event);
+        assert_eq!(
+            with_slash, "Merged MR: KTON-4552",
+            "`/` repo path must not render as `**/** — …`"
+        );
+        let with_empty = commit_headline(Path::new(""), &event);
+        assert_eq!(
+            with_empty, "Merged MR: KTON-4552",
+            "empty repo path must not render a prefix"
+        );
+    }
+
+    #[test]
+    fn commit_headline_renders_bold_repo_prefix_for_real_paths() {
+        let event = fixture_event("feat: land payments slice");
+        let got = commit_headline(Path::new("modulr/modulo-local-infra"), &event);
+        assert_eq!(got, "**modulo-local-infra** — feat: land payments slice");
+    }
 }

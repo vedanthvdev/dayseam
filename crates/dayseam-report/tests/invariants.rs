@@ -233,6 +233,104 @@ fn empty_day_renders_empty_state() {
     assert!(draft.evidence.is_empty(), "empty day has no evidence edges");
 }
 
+// ---- DAY-71: render-stage self-filter on GitLab events ----------------
+//
+// The production bug the backfill in `sources_add` /
+// `sources_update` / startup closes looked like this: `sync_runs`
+// showed `fetched_count: N`, `activity_events` had all N rows, but
+// `report_drafts` came back with "No tracked activity". That's the
+// render-stage self-filter dropping every event because no
+// `SourceIdentity` matched the GitLab-shaped actor. These two tests
+// pin the filter contract so regressions in either direction trip
+// immediately.
+
+/// Without a `GitLabUserId` identity, GitLab events are silently
+/// dropped and the section collapses to the empty-state bullet.
+/// This is the bug the DAY-71 backfill exists to prevent in
+/// production — in the engine it's the correct, documented
+/// behaviour (unknown actor ≠ self), so we test for it explicitly.
+#[test]
+fn gitlab_events_without_matching_identity_render_empty_state() {
+    let src = source_id(12);
+    let mut input = fixture_input();
+    // Deliberately empty: no identity at all.
+    input.source_identities = Vec::new();
+
+    let event = gitlab_commit_event(
+        src,
+        "glbwithout",
+        "/work/gitlab-repo",
+        "291",
+        10,
+        "feat: unmatched actor",
+        Privacy::Normal,
+    );
+    input.events = vec![event];
+    input.artifacts = Vec::new();
+
+    let draft = dayseam_report::render(input).expect("render must succeed");
+    assert_eq!(draft.sections.len(), 1);
+    let section = &draft.sections[0];
+    assert_eq!(section.bullets.len(), 1);
+    assert!(
+        section.bullets[0].text.contains("No tracked activity"),
+        "unmatched GitLab actor must render empty state, got: {}",
+        section.bullets[0].text
+    );
+    assert!(
+        draft.evidence.is_empty(),
+        "unmatched actor must not produce evidence edges"
+    );
+}
+
+/// With a `GitLabUserId` identity whose `external_actor_id` equals
+/// the event's `actor.external_id`, the event passes the filter and
+/// a real bullet is rendered. This is the behaviour the DAY-71
+/// identity auto-seed in `sources_add` / `sources_update` plus the
+/// startup backfill guarantee for every configured GitLab source.
+#[test]
+fn gitlab_events_with_matching_user_id_identity_render() {
+    let src = source_id(13);
+    let mut input = fixture_input();
+    input.source_identities = vec![self_gitlab_user_id_identity(src, "291")];
+
+    let event = gitlab_commit_event(
+        src,
+        "glbmatched",
+        "/work/gitlab-repo",
+        "291",
+        10,
+        "feat: matched actor",
+        Privacy::Normal,
+    );
+    input.events = vec![event];
+    input.artifacts = Vec::new();
+
+    let draft = dayseam_report::render(input).expect("render must succeed");
+    assert_eq!(draft.sections.len(), 1);
+    let bullets = &draft.sections[0].bullets;
+    assert_eq!(
+        bullets.len(),
+        1,
+        "matched actor must produce exactly one bullet, got: {bullets:?}"
+    );
+    assert!(
+        !bullets[0].text.contains("No tracked activity"),
+        "matched actor must not collapse to empty state, got: {}",
+        bullets[0].text
+    );
+    assert!(
+        bullets[0].text.contains("feat: matched actor"),
+        "bullet must surface the commit title, got: {}",
+        bullets[0].text
+    );
+    assert_eq!(
+        draft.evidence.len(),
+        1,
+        "matched actor must produce one evidence edge"
+    );
+}
+
 // ---- Invariant #4: redacted events render as "(private work)" ----------
 
 #[test]

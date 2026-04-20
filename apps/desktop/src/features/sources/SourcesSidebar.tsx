@@ -30,7 +30,7 @@
 // menus) matches the rest of the action bar.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { Source, SourceHealth } from "@dayseam/ipc-types";
+import type { DayseamError, Source, SourceHealth } from "@dayseam/ipc-types";
 import { useLocalRepos, useSources } from "../../ipc";
 import { AddLocalGitSourceDialog } from "./AddLocalGitSourceDialog";
 import { AddGitlabSourceDialog } from "./AddGitlabSourceDialog";
@@ -351,8 +351,37 @@ function SourceChip({
   const count = repos.length;
 
   const health = source.last_health;
-  const hasError =
+  const hasHealthError =
     !health.ok && health.checked_at !== null && health.last_error !== null;
+
+  // A GitLab row with no `secret_ref` is definitionally in the
+  // "reconnect needed" state — either it was created before
+  // sources_add persisted PATs, or the keychain slot was wiped out
+  // from under us (OS keychain reset, restored DB on a new machine,
+  // etc.). Without this synthesis the row would look healthy until
+  // the user either ran a healthcheck or tried to generate a report,
+  // so the only clue would be a red toast with no pointer back to
+  // the source that caused it. Surfacing the same Reconnect card
+  // here closes that discovery gap; the synthesised error mirrors
+  // exactly what `build_source_auth` returns on the Rust side so the
+  // copy, action token, and testid are all unchanged.
+  const needsReconnect =
+    isGitlab(source) && source.secret_ref === null && !hasHealthError;
+  const syntheticError: DayseamError | null = needsReconnect
+    ? {
+        variant: "Auth",
+        data: {
+          code: "gitlab.auth.invalid_token",
+          message:
+            "No PAT on file for this GitLab source — reconnect to add one.",
+          retryable: false,
+          action_hint: "reconnect",
+        },
+      }
+    : null;
+  const displayedError: DayseamError | null = hasHealthError
+    ? health.last_error
+    : syntheticError;
 
   return (
     <div className="flex flex-col items-stretch">
@@ -416,10 +445,10 @@ function SourceChip({
         </span>
       </span>
 
-      {hasError && health.last_error ? (
+      {displayedError ? (
         <SourceErrorCard
           source={source}
-          error={health.last_error}
+          error={displayedError}
           onReconnect={onReconnect}
         />
       ) : null}

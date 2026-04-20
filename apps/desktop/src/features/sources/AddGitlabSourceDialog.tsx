@@ -175,14 +175,23 @@ export function AddGitlabSourceDialog({
           username: validation.result.username,
         },
       } as const;
+      // DAY-70: the PAT travels alongside the add/update call so the
+      // orchestrator can build a real `PatAuth` at sync time.
+      // Previously the dialog validated the PAT via
+      // `gitlab_validate_pat` and then silently dropped it; on self-
+      // hosted instances that produced empty reports with no visible
+      // error because unauthenticated `/api/v4/users/:id/events`
+      // returns HTTP 200 with `[]`.
+      const patValue = pat.trim();
       if (isEdit && editing) {
-        const saved = await update(editing.id, {
-          label: label.trim(),
-          config,
-        });
+        const saved = await update(
+          editing.id,
+          { label: label.trim(), config },
+          patValue,
+        );
         onSaved?.(saved);
       } else {
-        const added = await add("GitLab", label.trim(), config);
+        const added = await add("GitLab", label.trim(), config, patValue);
         onAdded(added);
       }
     } catch (err) {
@@ -196,6 +205,7 @@ export function AddGitlabSourceDialog({
     isEdit,
     editing,
     label,
+    pat,
     add,
     update,
     onAdded,

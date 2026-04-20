@@ -151,10 +151,16 @@ describe("AddGitlabSourceDialog", () => {
 
     // The user_id stored on the new source is the one GitLab echoed
     // back via gitlab_validate_pat, NOT anything the user typed.
+    //
+    // DAY-70 regression: the `pat` field MUST be threaded through
+    // to `sources_add`. The previous bug was that the dialog
+    // validated the token, dropped it, and then the backend stored
+    // a source with `secret_ref: None`, producing empty reports.
     expect(mockInvoke).toHaveBeenCalledWith(
       "sources_add",
       expect.objectContaining({
         kind: "GitLab",
+        pat: "glpat-ok-token",
         config: {
           GitLab: {
             base_url: "https://gitlab.example.com",
@@ -232,6 +238,11 @@ describe("AddGitlabSourceDialog", () => {
         "sources_update",
         expect.objectContaining({
           id: EXISTING_GITLAB_SOURCE.id,
+          // DAY-70 regression: reconnect rotates the PAT on the
+          // backend. If this arg disappears again the backend will
+          // silently leave the old (invalid) token in the keychain
+          // and reports will keep coming back empty.
+          pat: "glpat-new",
           patch: expect.objectContaining({
             config: {
               GitLab: {

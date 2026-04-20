@@ -35,6 +35,8 @@
 //!   rather than a panic.
 //! * [`walk`] — the day-window walker. Owns pagination, 429 backoff,
 //!   and per-push commit enrichment.
+//! * [`project`] — per-project `path_with_namespace` lookup so events
+//!   can carry a `repo` entity the report rollup will key on.
 //! * [`normalise`] — `GitlabEvent` → `ActivityEvent`. One match arm per
 //!   [`dayseam_core::ActivityKind`] variant GitLab produces.
 //! * [`errors`] — the seven `gitlab.*` registry codes surfaced as
@@ -48,6 +50,7 @@ pub mod connector;
 pub mod errors;
 pub mod events;
 pub mod normalise;
+pub mod project;
 pub mod walk;
 
 pub use auth::{validate_pat, GitlabUserInfo};

@@ -173,4 +173,87 @@ describe("SourcesSidebar", () => {
       ).toBeInTheDocument(),
     );
   });
+
+  // Regression: rows created by the pre-fix `sources_add` (the PAT-
+  // drop bug) land with `secret_ref: null` but a never-checked health
+  // blob. Without synthesising the Auth error here, the only signal
+  // is a failed `report_generate` toast with no pointer back to the
+  // source that caused it — exactly the "gitlab is broken, where?"
+  // failure mode reported in DAY-70 after the rollout of the keychain
+  // plumbing fix.
+  it("renders a Reconnect card for a GitLab source whose secret_ref is null, even without a prior healthcheck", async () => {
+    const ORPHAN_GITLAB: Source = {
+      id: "gl-2",
+      kind: "GitLab",
+      label: "Acme GitLab",
+      config: {
+        GitLab: {
+          base_url: "https://gitlab.acme.test",
+          user_id: 42,
+          username: "ved",
+        },
+      },
+      secret_ref: null,
+      created_at: "2026-04-17T12:00:00Z",
+      last_sync_at: null,
+      last_health: {
+        ok: true,
+        checked_at: null,
+        last_error: null,
+      },
+    };
+    registerInvokeHandler("sources_list", async () => [ORPHAN_GITLAB]);
+    render(<SourcesSidebar />);
+    const card = await screen.findByTestId("source-error-card-gl-2");
+    expect(card).toHaveAttribute(
+      "data-error-code",
+      "gitlab.auth.invalid_token",
+    );
+    fireEvent.click(
+      screen.getByTestId("source-error-card-reconnect-gl-2"),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("dialog", { name: /reconnect.*gitlab/i }),
+      ).toBeInTheDocument(),
+    );
+  });
+
+  // Inverse: a LocalGit source with `secret_ref: null` is healthy,
+  // and a GitLab source with a valid `secret_ref` on file is not in
+  // the reconnect-needed state. Either synthesis triggering here
+  // would hide the Add Source flow behind a red wall on the empty
+  // state, so they both explicitly must not render.
+  it("does not synthesise a reconnect card for LocalGit or for a GitLab source with a secret_ref", async () => {
+    const HEALTHY_GITLAB: Source = {
+      id: "gl-3",
+      kind: "GitLab",
+      label: "Healthy GitLab",
+      config: {
+        GitLab: {
+          base_url: "https://gitlab.acme.test",
+          user_id: 42,
+          username: "ved",
+        },
+      },
+      secret_ref: {
+        keychain_service: "dayseam.gitlab",
+        keychain_account: "source:gl-3",
+      },
+      created_at: "2026-04-17T12:00:00Z",
+      last_sync_at: null,
+      last_health: { ok: true, checked_at: null, last_error: null },
+    };
+    registerInvokeHandler("sources_list", async () => [SOURCE, HEALTHY_GITLAB]);
+    render(<SourcesSidebar />);
+    await waitFor(() =>
+      expect(screen.getByText("Healthy GitLab")).toBeInTheDocument(),
+    );
+    expect(
+      screen.queryByTestId("source-error-card-src-1"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("source-error-card-gl-3"),
+    ).not.toBeInTheDocument();
+  });
 });

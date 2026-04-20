@@ -130,11 +130,23 @@ export function StreamingPreview({
             <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-50">
               {draft.date}
             </h2>
+            {/*
+              DAY-68 Phase 3 Task 8: the visible label used to read
+              `${template_id} · template v${template_version}`, but
+              `template_version` is a YYYY-MM-DD string (see
+              `dayseam-report::DEV_EOD_TEMPLATE_VERSION`). Side-by-side
+              with `{draft.date}` in the same header, users kept
+              reading the version as "the report date is wrong". We
+              now render only `template_id` and tuck the revision into
+              the tooltip, where the word "schema" makes it clear the
+              date-shaped string is a format identifier, not content.
+            */}
             <span
               className="text-xs text-neutral-500 dark:text-neutral-400"
-              title={`Template ${draft.template_id} at version ${draft.template_version}`}
+              title={`Template "${draft.template_id}" · schema revision ${draft.template_version} (bumped when the rendered output would change for the same input; unrelated to the report date)`}
+              data-template-version={draft.template_version}
             >
-              {draft.template_id} · template v{draft.template_version}
+              {draft.template_id}
             </span>
           </header>
           {draft.sections.length === 0 ? (

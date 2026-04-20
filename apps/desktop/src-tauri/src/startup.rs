@@ -10,14 +10,19 @@ use std::sync::Arc;
 
 use chrono::Offset;
 use connector_gitlab::GitlabSourceCfg;
-use dayseam_core::{DayseamError, LogLevel, SourceConfig, SourceKind};
-use dayseam_db::{open, LocalRepoRepo, LogRepo, LogRow, SourceRepo};
+use dayseam_core::{
+    DayseamError, LogLevel, SourceConfig, SourceIdentity, SourceIdentityKind, SourceKind,
+};
+use dayseam_db::{
+    open, LocalRepoRepo, LogRepo, LogRow, PersonRepo, SourceIdentityRepo, SourceRepo,
+};
 use dayseam_events::AppBus;
 use dayseam_orchestrator::{
     default_registries, DefaultRegistryConfig, Orchestrator, OrchestratorBuilder,
 };
 use dayseam_secrets::{KeychainStore, SecretStore};
 use sqlx::SqlitePool;
+use uuid::Uuid;
 
 use crate::state::AppState;
 
@@ -89,6 +94,7 @@ pub async fn build_app_state(data_dir: &Path) -> Result<AppState, DayseamError> 
         })?;
 
     record_startup_log(&pool).await;
+    backfill_gitlab_self_identities(&pool).await;
 
     let app_bus = AppBus::new();
     let secrets: Arc<dyn SecretStore> = Arc::new(KeychainStore::new());
@@ -97,6 +103,87 @@ pub async fn build_app_state(data_dir: &Path) -> Result<AppState, DayseamError> 
     run_startup_maintenance(&orchestrator, &pool).await;
 
     Ok(AppState::new(pool, app_bus, secrets, orchestrator))
+}
+
+/// DAY-71 backfill: for every persisted GitLab source, make sure a
+/// [`SourceIdentityKind::GitLabUserId`] [`SourceIdentity`] row exists
+/// that maps the source's numeric `user_id` to the self-[`Person`].
+///
+/// Why this runs on every boot and not just once:
+///
+/// * Pre-DAY-71 installs have a `sources` row but no matching
+///   identity. Without this pass they stay broken forever (reports
+///   render empty) unless the user deletes and re-adds the source
+///   — undiscoverable from the UI.
+/// * `sources_update` now seeds the identity on every save, but a
+///   user who hit the bug and never reconnected would not have
+///   exercised that path. The boot-time pass closes that window.
+/// * [`SourceIdentityRepo::ensure`] is idempotent on the natural
+///   key `(person_id, source_id, kind, external_actor_id)`, so
+///   running it every boot is O(sources) work against an index.
+///
+/// Best-effort: failures here must not block the app from booting
+/// (the user's next `sources_update` or their attempt to generate a
+/// report will surface a real error in context). We log the failure
+/// mode so post-mortem SRE work has a breadcrumb.
+async fn backfill_gitlab_self_identities(pool: &SqlitePool) {
+    let sources = match SourceRepo::new(pool.clone()).list().await {
+        Ok(sources) => sources,
+        Err(err) => {
+            tracing::warn!(%err, "backfill: source listing failed; skipping identity seeding");
+            return;
+        }
+    };
+
+    let gitlab_sources: Vec<(uuid::Uuid, i64)> = sources
+        .into_iter()
+        .filter_map(|source| match (&source.kind, source.config) {
+            (SourceKind::GitLab, SourceConfig::GitLab { user_id, .. }) => {
+                Some((source.id, user_id))
+            }
+            _ => None,
+        })
+        .collect();
+    if gitlab_sources.is_empty() {
+        return;
+    }
+
+    let person_id = match PersonRepo::new(pool.clone()).bootstrap_self("Me").await {
+        Ok(p) => p.id,
+        Err(err) => {
+            tracing::warn!(%err, "backfill: persons.bootstrap_self failed; skipping identity seeding");
+            return;
+        }
+    };
+
+    let identity_repo = SourceIdentityRepo::new(pool.clone());
+    for (source_id, user_id) in gitlab_sources {
+        let identity = SourceIdentity {
+            id: Uuid::new_v4(),
+            person_id,
+            source_id: Some(source_id),
+            kind: SourceIdentityKind::GitLabUserId,
+            external_actor_id: user_id.to_string(),
+        };
+        match identity_repo.ensure(&identity).await {
+            Ok(true) => {
+                tracing::info!(
+                    %source_id,
+                    user_id,
+                    "backfill: seeded missing GitLabUserId self-identity"
+                );
+            }
+            Ok(false) => {}
+            Err(err) => {
+                tracing::warn!(
+                    %err,
+                    %source_id,
+                    user_id,
+                    "backfill: failed to ensure GitLabUserId self-identity"
+                );
+            }
+        }
+    }
 }
 
 /// Build the process-wide [`Orchestrator`] with registries populated
@@ -261,6 +348,8 @@ async fn record_startup_log(pool: &SqlitePool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::Utc;
+    use dayseam_core::{Source, SourceHealth};
     use tempfile::TempDir;
 
     #[tokio::test]
@@ -276,6 +365,126 @@ mod tests {
             rows.iter().any(|r| r.message == "Dayseam started"),
             "startup log missing: {:?}",
             rows.iter().map(|r| &r.message).collect::<Vec<_>>()
+        );
+    }
+
+    // --- DAY-71: startup identity backfill --------------------------------
+    //
+    // Pre-DAY-71 installs carried GitLab sources without a matching
+    // `GitLabUserId` [`SourceIdentity`], which silently collapsed
+    // every generated report to "No tracked activity". The boot-time
+    // backfill is the only path that fixes existing installs without
+    // asking the user to delete-and-re-add their source, so it's worth
+    // protecting with an explicit integration test.
+
+    async fn insert_gitlab_source(pool: &SqlitePool, id: Uuid, user_id: i64) {
+        SourceRepo::new(pool.clone())
+            .insert(&Source {
+                id,
+                kind: SourceKind::GitLab,
+                label: "gitlab.example.com".into(),
+                config: SourceConfig::GitLab {
+                    base_url: "https://gitlab.example.com".into(),
+                    user_id,
+                    username: "vedanth".into(),
+                },
+                secret_ref: None,
+                created_at: Utc::now(),
+                last_sync_at: None,
+                last_health: SourceHealth::unchecked(),
+            })
+            .await
+            .expect("insert gitlab source");
+    }
+
+    #[tokio::test]
+    async fn backfill_seeds_missing_gitlab_user_id_identity() {
+        let dir = TempDir::new().expect("temp dir");
+        let pool = open(&dir.path().join("state.db")).await.expect("open");
+        let source_id = Uuid::new_v4();
+        insert_gitlab_source(&pool, source_id, 291).await;
+
+        // Pre-condition: no `GitLabUserId` identities exist yet —
+        // this is the exact shape of a pre-DAY-71 install.
+        let person = PersonRepo::new(pool.clone())
+            .bootstrap_self("Me")
+            .await
+            .expect("self");
+        let before = SourceIdentityRepo::new(pool.clone())
+            .list_for_source(person.id, &source_id)
+            .await
+            .expect("list before");
+        assert!(
+            before
+                .iter()
+                .all(|r| r.kind != SourceIdentityKind::GitLabUserId),
+            "precondition: no GitLabUserId rows exist yet"
+        );
+
+        backfill_gitlab_self_identities(&pool).await;
+
+        let after = SourceIdentityRepo::new(pool.clone())
+            .list_for_source(person.id, &source_id)
+            .await
+            .expect("list after");
+        let seeded: Vec<_> = after
+            .iter()
+            .filter(|r| r.kind == SourceIdentityKind::GitLabUserId && r.external_actor_id == "291")
+            .collect();
+        assert_eq!(
+            seeded.len(),
+            1,
+            "backfill must seed exactly one matching identity, got rows: {after:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn backfill_is_idempotent_across_boots() {
+        // Every boot runs this pass; a regression that inserts a
+        // fresh row each time would pollute the identities table
+        // and eventually throw a UNIQUE-constraint error. Guard it.
+        let dir = TempDir::new().expect("temp dir");
+        let pool = open(&dir.path().join("state.db")).await.expect("open");
+        let source_id = Uuid::new_v4();
+        insert_gitlab_source(&pool, source_id, 291).await;
+
+        backfill_gitlab_self_identities(&pool).await;
+        backfill_gitlab_self_identities(&pool).await;
+        backfill_gitlab_self_identities(&pool).await;
+
+        let person = PersonRepo::new(pool.clone())
+            .bootstrap_self("Me")
+            .await
+            .expect("self");
+        let rows = SourceIdentityRepo::new(pool)
+            .list_for_source(person.id, &source_id)
+            .await
+            .expect("list");
+        let count = rows
+            .iter()
+            .filter(|r| r.kind == SourceIdentityKind::GitLabUserId && r.external_actor_id == "291")
+            .count();
+        assert_eq!(count, 1, "three boots must leave exactly one seeded row");
+    }
+
+    #[tokio::test]
+    async fn backfill_skips_when_no_gitlab_sources_present() {
+        // A LocalGit-only install must not bootstrap the self-person
+        // (that's a side-effect we want to keep scoped to installs
+        // that actually have a GitLab source to seed for), and must
+        // not produce any identity rows.
+        let dir = TempDir::new().expect("temp dir");
+        let pool = open(&dir.path().join("state.db")).await.expect("open");
+
+        backfill_gitlab_self_identities(&pool).await;
+
+        // `get_self` returns `None` if nothing triggered a
+        // bootstrap; confirm the backfill did not eagerly create a
+        // self-person for a DB that does not need one.
+        let existing = PersonRepo::new(pool).get_self().await.expect("get_self");
+        assert!(
+            existing.is_none(),
+            "no GitLab sources ⇒ no bootstrap, got person row: {existing:?}"
         );
     }
 }

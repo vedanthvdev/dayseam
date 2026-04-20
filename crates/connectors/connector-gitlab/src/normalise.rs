@@ -12,6 +12,8 @@
 //! events, then deduping against any local-git walk producing the
 //! same SHAs — lands in Phase 3 Task 2.
 
+use std::collections::HashMap;
+
 use chrono::Utc;
 use dayseam_core::{
     ActivityEvent, ActivityKind, Actor, EntityRef, Link, Privacy, RawRef, SourceId,
@@ -35,10 +37,23 @@ pub type NormalisedEvent = Option<ActivityEvent>;
 /// resulting bullet. `source_id` scopes the deterministic id so two
 /// distinct sources cannot collide even if they share a GitLab
 /// instance.
+///
+/// `project_paths` is the per-walk cache
+/// ([`crate::project::fetch_project_path`]) mapping each seen
+/// `project_id` to its `path_with_namespace` (or `None` if the
+/// lookup was unsuccessful). The normaliser uses it to stamp a
+/// `repo` [`EntityRef`] onto the event so the report rollup keys
+/// bullets by repo rather than falling back to the `/` sentinel
+/// and rendering `**/** — …`. A missing or `None` entry degrades
+/// the `repo` entity's `external_id` to a synthetic `project-<id>`
+/// token so the rollup still has a deterministic key; the render
+/// layer detects the synthetic shape and drops the bolded prefix
+/// (see `crates/dayseam-report/src/render.rs::commit_headline`).
 pub fn normalise_event(
     source_id: SourceId,
     base_url: &str,
     event: &GitlabEvent,
+    project_paths: &HashMap<i64, Option<String>>,
 ) -> NormalisedEvent {
     let action = GitlabAction::parse(&event.action_name);
     let kind = match (action, event.target_type) {
@@ -81,7 +96,7 @@ pub fn normalise_event(
     let (title, body) = title_and_body(event, kind);
     let actor = actor_from_event(event);
     let links = compose_links(base_url, event, kind);
-    let entities = compose_entities(event);
+    let entities = compose_entities(event, project_paths);
 
     Some(ActivityEvent {
         id,
@@ -231,6 +246,23 @@ fn actor_from_event(event: &GitlabEvent) -> Actor {
     }
 }
 
+/// Compose the evidence `Link` for a GitLab event.
+///
+/// Phase 3 CORR-02: earlier Phase 3 PRs emitted URLs shaped like
+/// `{base}/-/api/v4/projects/{id}/merge_requests/{iid}`, mixing the
+/// GitLab UI routing prefix (`/-/`) with the REST API path
+/// (`/api/v4/`). That combination resolves on neither surface — every
+/// click from a GitLab evidence popover 404'd. Phase 3.5 (DAY-68) fixes
+/// this by emitting clean API URLs so the link at least resolves.
+///
+/// Known trade-off tracked as a v0.1.1 follow-up (DAY-69): the emitted
+/// URLs return JSON, not HTML, when opened in a browser. The
+/// user-friendly fix is to fetch each unique `project.web_url` during
+/// the walk and compose UI paths
+/// (`{web_url}/-/merge_requests/{iid}`, `/-/issues/{iid}`,
+/// `/-/commit/{sha}`). That requires threading an extra GET per unique
+/// project per day plus a project-id → web_url cache; it's real work
+/// and belongs in its own PR.
 fn compose_links(base_url: &str, event: &GitlabEvent, kind: ActivityKind) -> Vec<Link> {
     let base = base_url.trim_end_matches('/');
     let project_slug = event
@@ -244,13 +276,13 @@ fn compose_links(base_url: &str, event: &GitlabEvent, kind: ActivityKind) -> Vec
         | (ActivityKind::MrClosed, Some(iid))
         | (ActivityKind::MrApproved, Some(iid))
         | (ActivityKind::MrReviewComment, Some(iid)) => vec![Link {
-            url: format!("{base}/-/api/v4/{project_slug}/merge_requests/{iid}"),
+            url: format!("{base}/api/v4/{project_slug}/merge_requests/{iid}"),
             label: Some(format!("!{iid}")),
         }],
         (ActivityKind::IssueOpened, Some(iid))
         | (ActivityKind::IssueClosed, Some(iid))
         | (ActivityKind::IssueComment, Some(iid)) => vec![Link {
-            url: format!("{base}/-/api/v4/{project_slug}/issues/{iid}"),
+            url: format!("{base}/api/v4/{project_slug}/issues/{iid}"),
             label: Some(format!("#{iid}")),
         }],
         (ActivityKind::CommitAuthored, _) => {
@@ -262,7 +294,7 @@ fn compose_links(base_url: &str, event: &GitlabEvent, kind: ActivityKind) -> Vec
             let mut links = vec![];
             if !sha.is_empty() {
                 links.push(Link {
-                    url: format!("{base}/-/api/v4/{project_slug}/repository/commits/{sha}"),
+                    url: format!("{base}/api/v4/{project_slug}/repository/commits/{sha}"),
                     label: Some(short_sha(sha).to_string()),
                 });
             }
@@ -272,13 +304,35 @@ fn compose_links(base_url: &str, event: &GitlabEvent, kind: ActivityKind) -> Vec
     }
 }
 
-fn compose_entities(event: &GitlabEvent) -> Vec<EntityRef> {
+fn compose_entities(
+    event: &GitlabEvent,
+    project_paths: &HashMap<i64, Option<String>>,
+) -> Vec<EntityRef> {
     let mut entities = Vec::new();
     if let Some(pid) = event.project_id {
         entities.push(EntityRef {
             kind: "project".to_string(),
             external_id: pid.to_string(),
             label: None,
+        });
+
+        // The `repo` entity is what the report rollup
+        // (`crates/dayseam-report/src/rollup.rs::repo_path_from_event`)
+        // groups bullets by and what the render layer surfaces as the
+        // bolded prefix. Emitting it here — with `path_with_namespace`
+        // when we could resolve it, and a synthetic `project-<id>`
+        // token otherwise — means every GitLab event lands on a
+        // stable, non-`/` key. Missing the entity was DAY-71's
+        // "**/**" rendering bug.
+        let repo_external_id = match project_paths.get(&pid).and_then(|p| p.clone()) {
+            Some(path) => path,
+            None => format!("project-{pid}"),
+        };
+        let label = repo_external_id.rsplit('/').next().map(|s| s.to_string());
+        entities.push(EntityRef {
+            kind: "repo".to_string(),
+            external_id: repo_external_id,
+            label,
         });
     }
     if let Some(iid) = event.target_iid {
@@ -381,9 +435,25 @@ mod tests {
         }
     }
 
+    fn empty_paths() -> HashMap<i64, Option<String>> {
+        HashMap::new()
+    }
+
+    fn paths_with(pid: i64, path: &str) -> HashMap<i64, Option<String>> {
+        let mut m = HashMap::new();
+        m.insert(pid, Some(path.to_string()));
+        m
+    }
+
     #[test]
     fn push_event_becomes_commit_authored_with_sha_external_id() {
-        let e = normalise_event(source(), "https://gitlab.example", &push_event()).unwrap();
+        let e = normalise_event(
+            source(),
+            "https://gitlab.example",
+            &push_event(),
+            &empty_paths(),
+        )
+        .unwrap();
         assert_eq!(e.kind, ActivityKind::CommitAuthored);
         assert_eq!(e.external_id, "abcdef1234567890");
         assert_eq!(e.title, "Pushed 3 commits to main");
@@ -392,7 +462,13 @@ mod tests {
 
     #[test]
     fn mr_opened_becomes_mr_opened_kind_and_bang_iid_external() {
-        let e = normalise_event(source(), "https://gitlab.example", &mr_opened_event()).unwrap();
+        let e = normalise_event(
+            source(),
+            "https://gitlab.example",
+            &mr_opened_event(),
+            &empty_paths(),
+        )
+        .unwrap();
         assert_eq!(e.kind, ActivityKind::MrOpened);
         assert_eq!(e.external_id, "!11");
         assert!(e.title.starts_with("Opened MR: "));
@@ -407,8 +483,11 @@ mod tests {
         ] {
             let mut ev = mr_opened_event();
             ev.action_name = action.into();
-            let normalised = normalise_event(source(), "https://gitlab.example", &ev)
-                .unwrap_or_else(|| panic!("expected normalisation to succeed for action={action}"));
+            let normalised =
+                normalise_event(source(), "https://gitlab.example", &ev, &empty_paths())
+                    .unwrap_or_else(|| {
+                        panic!("expected normalisation to succeed for action={action}")
+                    });
             assert_eq!(normalised.kind, expected, "action={action}");
         }
     }
@@ -418,12 +497,14 @@ mod tests {
         let mut ev = mr_opened_event();
         ev.target_type = Some(GitlabTargetType::Issue);
         ev.target_iid = Some(7);
-        let opened = normalise_event(source(), "https://gitlab.example", &ev).unwrap();
+        let opened =
+            normalise_event(source(), "https://gitlab.example", &ev, &empty_paths()).unwrap();
         assert_eq!(opened.kind, ActivityKind::IssueOpened);
         assert_eq!(opened.external_id, "#7");
 
         ev.action_name = "closed".into();
-        let closed = normalise_event(source(), "https://gitlab.example", &ev).unwrap();
+        let closed =
+            normalise_event(source(), "https://gitlab.example", &ev, &empty_paths()).unwrap();
         assert_eq!(closed.kind, ActivityKind::IssueClosed);
     }
 
@@ -445,7 +526,8 @@ mod tests {
             }),
             push_data: None,
         };
-        let normalised = normalise_event(source(), "https://gitlab.example", &ev).unwrap();
+        let normalised =
+            normalise_event(source(), "https://gitlab.example", &ev, &empty_paths()).unwrap();
         assert_eq!(normalised.kind, ActivityKind::MrReviewComment);
         assert_eq!(normalised.parent_external_id.as_deref(), Some("!11"));
         assert_eq!(normalised.body.as_deref(), Some("LGTM"));
@@ -456,7 +538,7 @@ mod tests {
         let mut ev = mr_opened_event();
         ev.action_name = "exotic".into();
         ev.target_type = Some(GitlabTargetType::Unknown);
-        assert!(normalise_event(source(), "https://gitlab.example", &ev).is_none());
+        assert!(normalise_event(source(), "https://gitlab.example", &ev, &empty_paths()).is_none());
     }
 
     /// Plan Task 1 invariant 2 — same input normalises byte-identically
@@ -464,8 +546,108 @@ mod tests {
     /// [`ActivityEvent::deterministic_id`] contract guarantees.
     #[test]
     fn normalisation_is_deterministic() {
-        let a = normalise_event(source(), "https://gitlab.example", &push_event()).unwrap();
-        let b = normalise_event(source(), "https://gitlab.example", &push_event()).unwrap();
+        let a = normalise_event(
+            source(),
+            "https://gitlab.example",
+            &push_event(),
+            &empty_paths(),
+        )
+        .unwrap();
+        let b = normalise_event(
+            source(),
+            "https://gitlab.example",
+            &push_event(),
+            &empty_paths(),
+        )
+        .unwrap();
         assert_eq!(a, b);
+    }
+
+    /// DAY-71 regression: when the walker successfully resolved the
+    /// project's `path_with_namespace`, the event must carry a
+    /// `repo` [`EntityRef`] so the report rollup keys bullets by
+    /// repo rather than falling back to the `/` sentinel.
+    #[test]
+    fn push_event_emits_repo_entity_when_path_known() {
+        let paths = paths_with(42, "modulr/modulo-local-infra");
+        let e = normalise_event(source(), "https://gitlab.example", &push_event(), &paths).unwrap();
+
+        let repo_entity = e
+            .entities
+            .iter()
+            .find(|r| r.kind == "repo")
+            .expect("normalised event must carry a repo entity when the lookup succeeded");
+        assert_eq!(repo_entity.external_id, "modulr/modulo-local-infra");
+        assert_eq!(repo_entity.label.as_deref(), Some("modulo-local-infra"));
+    }
+
+    /// DAY-71 regression: when the walker could not resolve
+    /// `path_with_namespace` (404/403/missing field), the event still
+    /// carries a `repo` entity so the rollup has a deterministic key,
+    /// but the external_id is the synthetic `project-<id>` token the
+    /// render layer recognises to drop its bolded prefix.
+    #[test]
+    fn push_event_emits_synthetic_repo_entity_when_path_missing() {
+        let mut paths: HashMap<i64, Option<String>> = HashMap::new();
+        paths.insert(42, None);
+        let e = normalise_event(source(), "https://gitlab.example", &push_event(), &paths).unwrap();
+
+        let repo_entity = e
+            .entities
+            .iter()
+            .find(|r| r.kind == "repo")
+            .expect("repo entity must always be present when project_id is known");
+        assert_eq!(repo_entity.external_id, "project-42");
+    }
+
+    /// Phase 3 CORR-02 regression.
+    ///
+    /// Evidence links for MRs, issues, and commits must point at paths
+    /// that actually resolve on a real GitLab host. Before the fix they
+    /// were shaped `{base}/-/api/v4/projects/{id}/merge_requests/{iid}`
+    /// — `/-/` is the GitLab UI routing prefix and `api/v4/` is the
+    /// REST API prefix, and no GitLab endpoint answers a request that
+    /// mixes the two. The fix drops `/-/` so the URL becomes a clean
+    /// REST-API path that at least resolves.
+    #[test]
+    fn compose_links_emit_clean_api_paths_without_ui_prefix() {
+        let base = "https://gitlab.example";
+
+        let mr = normalise_event(source(), base, &mr_opened_event(), &empty_paths()).unwrap();
+        let mr_url = &mr.links[0].url;
+        assert_eq!(
+            mr_url, "https://gitlab.example/api/v4/projects/42/merge_requests/11",
+            "MR link must not carry the `/-/` UI prefix"
+        );
+        assert!(
+            !mr_url.contains("/-/"),
+            "MR link must not contain `/-/`; got {mr_url}"
+        );
+
+        let mut issue_ev = mr_opened_event();
+        issue_ev.target_type = Some(GitlabTargetType::Issue);
+        issue_ev.target_iid = Some(7);
+        let issue = normalise_event(source(), base, &issue_ev, &empty_paths()).unwrap();
+        let issue_url = &issue.links[0].url;
+        assert_eq!(
+            issue_url, "https://gitlab.example/api/v4/projects/42/issues/7",
+            "Issue link must not carry the `/-/` UI prefix"
+        );
+        assert!(
+            !issue_url.contains("/-/"),
+            "Issue link must not contain `/-/`; got {issue_url}"
+        );
+
+        let commit = normalise_event(source(), base, &push_event(), &empty_paths()).unwrap();
+        let commit_url = &commit.links[0].url;
+        assert_eq!(
+            commit_url,
+            "https://gitlab.example/api/v4/projects/42/repository/commits/abcdef1234567890",
+            "Commit link must not carry the `/-/` UI prefix"
+        );
+        assert!(
+            !commit_url.contains("/-/"),
+            "Commit link must not contain `/-/`; got {commit_url}"
+        );
     }
 }
