@@ -8,6 +8,27 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Fixed
 
+- **Release workflow builds the universal DMG again (DAY-65).**
+  The first live dispatch of the post-DAY-64 pipeline failed at the
+  binary-assertion step with `Binary not found at .../Dayseam.app/
+  Contents/MacOS/Dayseam`. Two bugs were in play. First, the build
+  step set `CI: "1"` in its `env:` block; the Tauri v2 CLI binds
+  the `CI` environment variable to its `--ci` boolean flag and
+  rejects anything other than `true`/`false`, so `tauri build`
+  exited immediately with `invalid value '1' for '--ci'` before
+  emitting any bundle. Second, the step invoked the builder as
+  `dmg="$(build-dmg.sh ... | tail -n 1)"` under GitHub Actions's
+  default `/bin/bash -e {0}` shell, which runs with `set -e` but
+  *not* `pipefail` — so a non-zero exit from `build-dmg.sh` was
+  masked by a zero exit from `tail`, the step was reported green,
+  and the workflow only surfaced the failure three steps later
+  when the missing binary tripped the lipo assertion. The `CI`
+  override is removed (GitHub Actions already injects `CI=true`,
+  which Tauri and pnpm both accept) and the step now declares
+  `shell: bash` so `pipefail` is active and a future build-dmg
+  failure surfaces at the build step itself instead of a
+  downstream assertion. Ships `semver:none`; followed by a
+  `workflow_dispatch` run on master to publish v0.1.0.
 - **Release notes extraction prefers `[$TARGET]` over `[Unreleased]`
   (DAY-64).** DAY-63 shipped `scripts/release/extract-release-notes.sh`
   with `[Unreleased]` as the first choice and `[$TARGET]` as the

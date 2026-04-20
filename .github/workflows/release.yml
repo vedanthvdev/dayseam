@@ -157,10 +157,21 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
+      # The Tauri v2 CLI binds the `CI` environment variable to its
+      # `--ci` boolean flag and requires `true` / `false`; we had set
+      # `CI: "1"` which caused `tauri build` to reject the value with
+      # `invalid value '1' for '--ci'` and abort before any bundle
+      # landed in `target/`. GitHub Actions already injects `CI=true`
+      # for every job, so the fix is simply to stop overriding it.
+      #
+      # `shell: bash` enables `pipefail` (the GHA default `/bin/bash
+      # -e {0}` does not), so a failing `build-dmg.sh` can no longer
+      # be masked by a successful `tail -n 1` — the build error is
+      # what surfaces the workflow failure, not a downstream "binary
+      # not found" assertion three steps later.
       - name: Build universal .dmg via build-dmg.sh
         id: build
-        env:
-          CI: "1"
+        shell: bash
         run: |
           dmg="$(scripts/release/build-dmg.sh ${{ steps.bump.outputs.version }} | tail -n 1)"
           echo "dmg=$dmg" >>"$GITHUB_OUTPUT"
