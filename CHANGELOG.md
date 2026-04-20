@@ -8,6 +8,19 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **GitLab connector (DAY-54).** Introduces the `connector-gitlab`
+  crate with PAT-backed authentication (`read_api`), a day-window
+  Events API walker, and schema-drift-tolerant normalisation into
+  `ActivityEvent`s. The orchestrator now registers a multiplexing
+  `GitlabMux` under `SourceKind::GitLab` so multiple configured
+  GitLab sources (self-hosted or SaaS) route per `source_id` without
+  a registry rebuild. Identity filtering keys off the numeric
+  `user_id` (not username/email), rate limit and 5xx retries use the
+  SDK's existing backoff + 30s ceiling, and the seven `gitlab.*`
+  error codes map transport, auth, rate-limit, and upstream-shape
+  failures onto stable machine-readable codes. Task 3 (add-source UI
+  + IPC) lands in a follow-up PR; this PR ships the pure connector
+  and registry wiring with `semver:none`.
 - **Phase 3 plan published.**
   [`docs/plan/2026-04-20-v0.1-phase-3-gitlab-release.md`](docs/plan/2026-04-20-v0.1-phase-3-gitlab-release.md)
   is the implementation plan for v0.1 Phase 3 (GitLab connector,

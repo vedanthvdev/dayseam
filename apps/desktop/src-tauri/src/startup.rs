@@ -9,6 +9,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use chrono::Offset;
+use connector_gitlab::GitlabSourceCfg;
 use dayseam_core::{DayseamError, LogLevel, SourceConfig, SourceKind};
 use dayseam_db::{open, LocalRepoRepo, LogRepo, LogRow, SourceRepo};
 use dayseam_events::AppBus;
@@ -144,27 +145,45 @@ async fn resolve_registry_config(pool: &SqlitePool) -> Result<DefaultRegistryCon
     let local_repo_repo = LocalRepoRepo::new(pool.clone());
     let mut scan_roots: Vec<PathBuf> = Vec::new();
     let mut private_roots: Vec<PathBuf> = Vec::new();
+    let mut gitlab_sources: Vec<GitlabSourceCfg> = Vec::new();
     for source in sources {
-        if source.kind != SourceKind::LocalGit {
-            continue;
-        }
-        if let SourceConfig::LocalGit {
-            scan_roots: roots, ..
-        } = &source.config
-        {
-            scan_roots.extend(roots.iter().cloned());
-        }
-        let repos = local_repo_repo
-            .list_for_source(&source.id)
-            .await
-            .map_err(|e| DayseamError::Internal {
-                code: "startup.local_repos_list".into(),
-                message: e.to_string(),
-            })?;
-        for repo in repos {
-            if repo.is_private {
-                private_roots.push(repo.path);
+        match (&source.kind, &source.config) {
+            (
+                SourceKind::LocalGit,
+                SourceConfig::LocalGit {
+                    scan_roots: roots, ..
+                },
+            ) => {
+                scan_roots.extend(roots.iter().cloned());
+                let repos = local_repo_repo
+                    .list_for_source(&source.id)
+                    .await
+                    .map_err(|e| DayseamError::Internal {
+                        code: "startup.local_repos_list".into(),
+                        message: e.to_string(),
+                    })?;
+                for repo in repos {
+                    if repo.is_private {
+                        private_roots.push(repo.path);
+                    }
+                }
             }
+            (
+                SourceKind::GitLab,
+                SourceConfig::GitLab {
+                    base_url, user_id, ..
+                },
+            ) => {
+                gitlab_sources.push(GitlabSourceCfg {
+                    source_id: source.id,
+                    base_url: base_url.clone(),
+                    user_id: *user_id,
+                });
+            }
+            // Kind/config mismatch is a core-level invariant violation
+            // (serde round-trip prevents it); skip defensively rather
+            // than panic at startup.
+            _ => {}
         }
     }
 
@@ -173,6 +192,7 @@ async fn resolve_registry_config(pool: &SqlitePool) -> Result<DefaultRegistryCon
         local_git_private_roots: private_roots,
         local_tz: chrono::Local::now().offset().fix(),
         markdown_dest_dirs: Vec::new(),
+        gitlab_sources,
     })
 }
 

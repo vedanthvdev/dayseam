@@ -15,6 +15,7 @@ dayseam-events = { path = "../dayseam-events", version = "0.0.0" }
 dayseam-report = { path = "../dayseam-report", version = "0.0.0" }
 connectors-sdk = { path = "../connectors-sdk", version = "0.0.0" }
 sinks-sdk = { path = "../sinks-sdk", version = "0.0.0" }
+connector-gitlab = { path = "../connectors/connector-gitlab", version = "0.0.0" }
 connector-local-git = { path = "../connectors/connector-local-git", version = "0.0.0" }
 sink-markdown-file = { path = "../sinks/sink-markdown-file", version = "0.0.0" }
 

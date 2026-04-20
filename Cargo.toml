@@ -9,6 +9,7 @@ members = [
     "crates/dayseam-report",
     "crates/connectors-sdk",
     "crates/connectors/connector-local-git",
+    "crates/connectors/connector-gitlab",
     "crates/sinks-sdk",
     "crates/sinks/sink-markdown-file",
     "crates/dayseam-orchestrator",

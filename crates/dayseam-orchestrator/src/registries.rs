@@ -19,6 +19,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use chrono::FixedOffset;
+use connector_gitlab::{GitlabMux, GitlabSourceCfg};
 use connector_local_git::LocalGitConnector;
 use connectors_sdk::SourceConnector;
 use dayseam_core::{SinkKind, SourceKind};
@@ -140,6 +141,12 @@ pub struct DefaultRegistryConfig {
     /// this list; the sink exposes per-destination receipts on partial
     /// failure.
     pub markdown_dest_dirs: Vec<PathBuf>,
+    /// Configured GitLab sources (one entry per `SourceConfig::GitLab`
+    /// row). The [`GitlabMux`] registered for
+    /// [`SourceKind::GitLab`] dispatches per `source_id` to the right
+    /// `(base_url, user_id)` at sync time. Empty in the local-git-only
+    /// deployment; the Task 3 add-source flow populates it.
+    pub gitlab_sources: Vec<GitlabSourceCfg>,
 }
 
 /// Build the pair of registries used in production. Tests that need
@@ -155,6 +162,10 @@ pub fn default_registries(cfg: DefaultRegistryConfig) -> (ConnectorRegistry, Sin
             cfg.local_git_private_roots.into_iter().collect(),
             cfg.local_tz,
         )),
+    );
+    connectors.insert(
+        SourceKind::GitLab,
+        Arc::new(GitlabMux::new(cfg.local_tz, cfg.gitlab_sources)),
     );
 
     let mut sinks = SinkRegistry::new();
@@ -198,9 +209,15 @@ mod tests {
             local_git_private_roots: vec![],
             local_tz: FixedOffset::east_opt(0).expect("UTC offset"),
             markdown_dest_dirs: vec![tmp.path().to_path_buf()],
+            gitlab_sources: Vec::new(),
         };
         let (connectors, sinks) = default_registries(cfg);
         assert!(connectors.get(SourceKind::LocalGit).is_some());
+        // The GitLab connector is always registered as a mux — even
+        // a brand-new user with zero GitLab sources gets a live
+        // handle so Task 3's add-source flow can `upsert` into it
+        // without re-registering.
+        assert!(connectors.get(SourceKind::GitLab).is_some());
         assert!(sinks.get(SinkKind::MarkdownFile).is_some());
     }
 }

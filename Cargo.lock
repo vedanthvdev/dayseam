@@ -634,6 +634,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "connector-gitlab"
+version = "0.0.0"
+dependencies = [
+ "async-trait",
+ "cargo_metadata",
+ "chrono",
+ "connectors-sdk",
+ "dayseam-core",
+ "dayseam-events",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "connector-local-git"
 version = "0.0.0"
 dependencies = [
@@ -975,6 +995,7 @@ name = "dayseam-desktop"
 version = "0.0.0"
 dependencies = [
  "chrono",
+ "connector-gitlab",
  "connector-local-git",
  "connectors-sdk",
  "dayseam-core",
@@ -1016,6 +1037,7 @@ dependencies = [
  "async-trait",
  "cargo_metadata",
  "chrono",
+ "connector-gitlab",
  "connector-local-git",
  "connectors-sdk",
  "dayseam-core",
