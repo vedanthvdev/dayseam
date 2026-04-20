@@ -6,6 +6,33 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+- **Release workflow unblocks v0.1.0 and all future releases (DAY-63).**
+  The v0.1.0 capstone surfaced two latent bugs in `release.yml` the
+  moment it ran for real: (1) the CHANGELOG preflight gate only
+  looked at `[Unreleased]`, which the Task 9 pattern closes into
+  `[$VERSION]` inside the PR itself — producing a spurious
+  "CHANGELOG.md [Unreleased] section has no entries; refusing to
+  release" failure on the first post-merge run; and (2)
+  `bump-version.sh` fell back to the VERSION file at HEAD when no
+  `v*` tag existed yet, so on a pre-bumped capstone tree it would
+  compute `minor(0.1.0) = 0.2.0` instead of the intended 0.1.0. Both
+  bugs are fixed by extracting two thin helpers
+  (`scripts/release/resolve-prev-version.sh` and
+  `scripts/release/extract-release-notes.sh`) the workflow now
+  delegates to, each with a bash unit-test suite wired into a new
+  `shell-scripts` CI job. The new preflight prefers `[Unreleased]`
+  (the normal contributor-authored shape) and falls back to
+  `[$TARGET]`; the new PREV resolver prefers the most recent `v*`
+  tag, falls back to VERSION at `HEAD^`, and defaults to `0.0.0`
+  for bootstrap. The `has_content` filter was also rewritten to
+  avoid a `set -o pipefail` + `grep -q` SIGPIPE race that silently
+  misread release bodies larger than a few KB as empty (the real
+  v0.1.0 body is 73 KB and tripped this immediately). This PR ships
+  under `semver:none` and is followed by a `workflow_dispatch` run
+  on master to publish v0.1.0 through the now-fixed pipeline.
+
 ## [0.1.0] - 2026-04-20
 
 ### Release highlights

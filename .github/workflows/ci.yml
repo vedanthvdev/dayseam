@@ -86,3 +86,24 @@ jobs:
         run: pnpm -r typecheck
       - name: Test
         run: pnpm --recursive --if-present run test
+
+  # Release-engineering shell tests. These exercise the helpers the
+  # release workflow depends on (version bumping, PREV resolution,
+  # release-notes extraction) against scratch git repos and
+  # synthetic CHANGELOGs — a regression test net for a layer that
+  # was previously only validated when a real release ran. The
+  # v0.1.0 capstone discovered two bugs in release.yml (Unreleased-
+  # only preflight and naive PREV inference) that would have been
+  # caught here if the job had existed a PR earlier; this job
+  # closes that loop for every release from v0.1.1 onward.
+  shell-scripts:
+    name: shell-scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: test-bump-version.sh
+        run: bash scripts/release/test-bump-version.sh
+      - name: test-resolve-prev-version.sh
+        run: bash scripts/release/test-resolve-prev-version.sh
+      - name: test-extract-release-notes.sh
+        run: bash scripts/release/test-extract-release-notes.sh

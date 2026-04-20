@@ -86,22 +86,54 @@ jobs:
             echo "dry_run=false" >>"$GITHUB_OUTPUT"
           fi
 
-      # Pre-flight gate: refuse to release if the CHANGELOG's
-      # `[Unreleased]` section is empty. An empty release notes block
+      # Resolve the "previous" version the release bumps *from*. The
+      # helper encapsulates the fallback order (most recent v* tag →
+      # VERSION at HEAD^ → 0.0.0) and is unit-tested by
+      # test-resolve-prev-version.sh so future releases don't silently
+      # regress the first-release-vs-steady-state split.
+      - name: Resolve PREV version for bump-version.sh
+        id: prev
+        run: |
+          prev="$(scripts/release/resolve-prev-version.sh)"
+          echo "prev=$prev" >>"$GITHUB_OUTPUT"
+          echo "==> PREV version: $prev"
+
+      # Resolve the target version. For the capstone PR 9 (semver:minor
+      # from 0.0.0) the tree is already pre-bumped to 0.1.0 so this is
+      # a no-op read; for every later release the script computes the
+      # bump from the most recent git tag and rewrites the three
+      # version-bearing files.
+      - name: Compute target version via bump-version.sh
+        id: bump
+        env:
+          DAYSEAM_PREV_VERSION: ${{ steps.prev.outputs.prev }}
+        run: |
+          version="$(scripts/release/bump-version.sh ${{ steps.level.outputs.level }})"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "==> Target version: v$version"
+
+      # Pre-flight gate: refuse to release if the CHANGELOG has no
+      # entries describing this release. An empty release notes block
       # is a smell (either the PR forgot to document, or the release
       # is vacuous) and the workflow should fail fast, not publish.
-      - name: Preflight — CHANGELOG Unreleased section is non-empty
+      #
+      # The helper prefers `[Unreleased]` (the normal contributor-
+      # authored shape) and falls back to `[$TARGET]` for Task 9-style
+      # capstone PRs that close the section inside the PR itself. The
+      # extracted body is written to $RUNNER_TEMP/release-notes.md so
+      # the later `gh release create --notes-file` call reuses exactly
+      # what preflight validated — no second extraction, no drift
+      # between gate and body.
+      - name: Preflight — extract release notes and assert non-empty
+        id: notes
+        env:
+          TARGET: ${{ steps.bump.outputs.version }}
         run: |
-          body="$(awk '
-            /^## \[Unreleased\]/ { in_block = 1; next }
-            /^## \[/ { in_block = 0 }
-            in_block { print }
-          ' CHANGELOG.md | sed -E '/^[[:space:]]*$/d' | sed -E '/^###/d')"
-          if [[ -z "$body" ]]; then
-            echo "::error::CHANGELOG.md [Unreleased] section has no entries; refusing to release." >&2
-            exit 1
-          fi
-          printf '==> Unreleased section preview:\n%s\n' "$body" | head -n 20
+          body_file="${RUNNER_TEMP:-/tmp}/release-notes.md"
+          scripts/release/extract-release-notes.sh "$TARGET" >"$body_file"
+          echo "notes_file=$body_file" >>"$GITHUB_OUTPUT"
+          echo "==> Release notes preview:"
+          head -n 20 "$body_file"
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
@@ -122,18 +154,6 @@ jobs:
           targets: aarch64-apple-darwin,x86_64-apple-darwin
 
       - uses: Swatinem/rust-cache@v2
-
-      # Resolve the target version. For the capstone PR 9 (semver:minor
-      # from 0.0.0) the tree is already pre-bumped to 0.1.0 so this is
-      # a no-op read; for every later release the script computes the
-      # bump from the most recent git tag and rewrites the three
-      # version-bearing files.
-      - name: Compute target version via bump-version.sh
-        id: bump
-        run: |
-          version="$(scripts/release/bump-version.sh ${{ steps.level.outputs.level }})"
-          echo "version=$version" >>"$GITHUB_OUTPUT"
-          echo "==> Target version: v$version"
 
       - name: Build universal .dmg via build-dmg.sh
         id: build
@@ -222,31 +242,27 @@ jobs:
           git push origin "$tag"
 
       # Publish the GitHub Release with the DMG + SHA-256 attached.
-      # The body is the CHANGELOG's Unreleased section verbatim, which
-      # preserves the phase-review shape (bullets + links) without
-      # introducing a second authoring surface. `gh release create
-      # --latest` makes this the project's latest release exactly once
-      # per tagged version.
+      # The body is the release-notes file produced by the earlier
+      # preflight step — exactly what was gated on non-emptiness at
+      # the start of the run, so there's no second extraction and no
+      # gate-vs-publish drift. `gh release create --latest` makes
+      # this the project's latest release exactly once per tagged
+      # version.
       - name: Publish GitHub Release
         if: steps.level.outputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           VERSION: ${{ steps.bump.outputs.version }}
           DMG: ${{ steps.build.outputs.dmg }}
+          NOTES_FILE: ${{ steps.notes.outputs.notes_file }}
         run: |
-          body_file="$(mktemp)"
-          awk '
-            /^## \[Unreleased\]/ { in_block = 1; next }
-            /^## \[/ { in_block = 0 }
-            in_block { print }
-          ' CHANGELOG.md >"$body_file"
-          if [[ ! -s "$body_file" ]]; then
-            echo "::error::Release body is empty after CHANGELOG slice." >&2
+          if [[ ! -s "$NOTES_FILE" ]]; then
+            echo "::error::Release notes file missing or empty at $NOTES_FILE (preflight drift)." >&2
             exit 1
           fi
           gh release create "v${VERSION}" \
             "${DMG}" \
             "${DMG}.sha256" \
             --title "Dayseam v${VERSION}" \
-            --notes-file "$body_file" \
+            --notes-file "$NOTES_FILE" \
             --latest
