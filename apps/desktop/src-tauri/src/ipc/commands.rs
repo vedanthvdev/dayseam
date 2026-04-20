@@ -23,10 +23,10 @@ use chrono::{DateTime, Utc};
 use connector_local_git::{discover_repos, DiscoveryConfig};
 use connectors_sdk::{ConnCtx, NoneAuth, NoopRawStore, SystemClock};
 use dayseam_core::{
-    error_codes, ActivityEvent, DayseamError, LocalRepo, LogEntry, LogLevel, Person, ProgressEvent,
-    ReportCompletedEvent, ReportDraft, RunId, Settings, SettingsPatch, Sink, SinkConfig, SinkKind,
-    Source, SourceConfig, SourceHealth, SourceId, SourceIdentity, SourceKind, SourcePatch,
-    ToastEvent, ToastSeverity, WriteReceipt,
+    error_codes, ActivityEvent, DayseamError, GitlabValidationResult, LocalRepo, LogEntry,
+    LogLevel, Person, ProgressEvent, ReportCompletedEvent, ReportDraft, RunId, Settings,
+    SettingsPatch, Sink, SinkConfig, SinkKind, Source, SourceConfig, SourceHealth, SourceId,
+    SourceIdentity, SourceKind, SourcePatch, ToastEvent, ToastSeverity, WriteReceipt,
 };
 use dayseam_db::{
     ActivityRepo, DraftRepo, LocalRepoRepo, LogRepo, LogRow, PersonRepo, SettingsRepo, SinkRepo,
@@ -41,6 +41,7 @@ use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 use crate::ipc::run_forwarder;
+use crate::ipc::secret::IpcSecretString;
 use crate::state::{spawn_run_reaper, AppState, RunHandle};
 
 /// Settings key used by [`settings_get`] / [`settings_update`]. One
@@ -82,6 +83,7 @@ pub const PROD_COMMANDS: &[&str] = &[
     "retention_sweep_now",
     "activity_events_get",
     "shell_open",
+    "gitlab_validate_pat",
 ];
 
 /// Dev-only Tauri command identifiers. Compiled in only when the
@@ -986,6 +988,52 @@ pub async fn shell_open(url: String) -> Result<(), DayseamError> {
             message: e.to_string(),
         })?;
     Ok(())
+}
+
+// ---- GitLab admin ---------------------------------------------------------
+
+/// One-shot PAT probe used by the `AddGitlabSourceDialog` "Validate"
+/// button (Task 3). Hands the paired `host` + `pat` into
+/// [`connector_gitlab::auth::validate_pat`], which calls GitLab's
+/// `/api/v4/user` endpoint via HTTPS and parses back the numeric user
+/// id + username we need to persist on the resulting
+/// [`SourceConfig::GitLab`] row.
+///
+/// The PAT is received as [`IpcSecretString`] — never a bare `String` —
+/// so a `tracing::instrument`-captured arg map (or any other `Debug`
+/// sink) only ever shows `IpcSecretString(***)` in logs. The bytes
+/// are zeroed when the command returns, regardless of whether
+/// validation succeeded or surfaced a `gitlab.auth.*` error.
+///
+/// Error-code ladder (surfaces exactly what the UI's
+/// `gitlabErrorCopy` map renders):
+///
+/// | HTTP / cause               | `DayseamError` code             |
+/// |----------------------------|--------------------------------|
+/// | 200 OK                     | *(ok)*                         |
+/// | 401 Unauthorized           | `gitlab.auth.invalid_token`    |
+/// | 403 Forbidden              | `gitlab.auth.missing_scope`    |
+/// | DNS / connect refused      | `gitlab.url.dns`               |
+/// | TLS handshake failure      | `gitlab.url.tls`               |
+/// | 429 Too Many Requests      | `gitlab.rate_limited`          |
+/// | 5xx or unknown transport   | `gitlab.upstream_5xx`          |
+/// | Shape-changed `/user` body | `gitlab.upstream_shape_changed`|
+///
+/// The function intentionally does **not** persist the secret, mint a
+/// [`SourceId`], or write to the database. The subsequent
+/// [`sources_add`] call owns that half of the flow; this command is a
+/// pure validator so the dialog can show green-check / red-error
+/// feedback before the user commits to creating the source.
+#[tauri::command]
+pub async fn gitlab_validate_pat(
+    host: String,
+    pat: IpcSecretString,
+) -> Result<GitlabValidationResult, DayseamError> {
+    let user = connector_gitlab::auth::validate_pat(&host, pat.expose()).await?;
+    Ok(GitlabValidationResult {
+        user_id: user.id,
+        username: user.username,
+    })
 }
 
 // ---- Retention ------------------------------------------------------------

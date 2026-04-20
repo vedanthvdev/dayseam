@@ -8,6 +8,21 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **GitLab admin UI, per-source error cards, and Reconnect deep link
+  (DAY-56).** Phase 3 Task 3 adds `AddGitlabSourceDialog` (base-URL
+  normalisation, token-page handoff, and a `gitlab_validate_pat` IPC
+  command that never crosses the renderer in cleartext), a
+  `SourceErrorCard` rendered below chips whose health surfaces a known
+  `gitlab.*` error code, and a two-option "Add source" menu so the
+  sidebar can distinguish Local-git and GitLab flows. Auth-flavoured
+  errors (`gitlab.auth.invalid_token`, `gitlab.auth.missing_scope`)
+  expose a "Reconnect" button that re-opens the dialog in edit mode
+  pre-seeded with the existing base URL, so rotating a PAT updates the
+  source in place instead of creating a duplicate. A new
+  `gitlabErrorCopy` parity test reads the authoritative code list from
+  `dayseam_core::error_codes::ALL` (exported as
+  `@dayseam/ipc-types::GITLAB_ERROR_CODES`) and asserts every
+  `gitlab.*` code has a title/body entry on the TS side.
 - **Cross-source `CommitAuthored` dedup and `rolled_into_mr`
   annotation (DAY-55).** Phase 3 Task 2 lands two pure helpers in
   `dayseam-report` — `dedup_commit_authored` and

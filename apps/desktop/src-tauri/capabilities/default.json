@@ -29,6 +29,7 @@
     "allow-retention-sweep-now",
     "allow-activity-events-get",
     "allow-shell-open",
+    "allow-gitlab-validate-pat",
     "dialog:allow-open"
   ]
 }

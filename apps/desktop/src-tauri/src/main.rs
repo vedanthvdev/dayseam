@@ -68,6 +68,7 @@ fn main() {
         commands::retention_sweep_now,
         commands::activity_events_get,
         commands::shell_open,
+        commands::gitlab_validate_pat,
         commands::dev_emit_toast,
         commands::dev_start_demo_run,
     ]);
@@ -98,6 +99,7 @@ fn main() {
         commands::retention_sweep_now,
         commands::activity_events_get,
         commands::shell_open,
+        commands::gitlab_validate_pat,
     ]);
 
     builder

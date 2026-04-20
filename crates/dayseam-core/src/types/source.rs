@@ -118,3 +118,17 @@ impl SourceHealth {
         }
     }
 }
+
+/// Successful return shape of the `gitlab_validate_pat` IPC command. The
+/// frontend's add-source dialog captures these two fields onto the new
+/// [`SourceConfig::GitLab`] row before persisting the source, so the
+/// identity the connector walks by (`user_id`) is the one GitLab itself
+/// echoed back, not whatever the user typed. The username is returned
+/// alongside purely for UI display — the authoritative match is on the
+/// numeric id, which never changes when a username is renamed upstream.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct GitlabValidationResult {
+    pub user_id: i64,
+    pub username: String,
+}

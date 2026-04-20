@@ -46,6 +46,13 @@ connector-gitlab = { path = "../../../crates/connectors/connector-gitlab", versi
 # orchestrator and connectors stay pure.
 opener = "0.7"
 url = "2"
+serde = { workspace = true }
+# `IpcSecretString` zeroes PAT bytes on drop so a dropped dialog (or a
+# command that returns an error) cannot leave the PAT living in the
+# freed IPC buffer until whatever writes over it next. The
+# `zeroize_derive` feature is off here; the one use-site writes the
+# `Drop` impl by hand.
+zeroize = { version = "1" }
 # Native folder/file picker — fronts the shell's directory chooser so
 # users can select scan roots in `AddLocalGitSourceDialog` instead of
 # pasting absolute paths. We pair this with `dialog:allow-open` in
@@ -55,7 +62,6 @@ tauri-plugin-dialog = "2"
 [dev-dependencies]
 tempfile = "3"
 tauri = { version = "2", features = ["test"] }
-serde = { workspace = true }
 
 [features]
 # `custom-protocol` wires in Tauri's custom-protocol flag for release

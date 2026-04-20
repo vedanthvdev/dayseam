@@ -27,5 +27,8 @@ pub use types::{
     run::{PerSourceState, SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger},
     settings::{Settings, SettingsPatch, ThemePreference},
     sink::{CapabilityConflict, Sink, SinkCapabilities, SinkConfig, SinkKind, WriteReceipt},
-    source::{SecretRef, Source, SourceConfig, SourceHealth, SourceId, SourceKind, SourcePatch},
+    source::{
+        GitlabValidationResult, SecretRef, Source, SourceConfig, SourceHealth, SourceId,
+        SourceKind, SourcePatch,
+    },
 };

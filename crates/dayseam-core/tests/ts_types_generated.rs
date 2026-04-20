@@ -15,14 +15,14 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use dayseam_core::{
-    ActivityEvent, ActivityKind, Actor, Artifact, ArtifactId, ArtifactKind, ArtifactPayload,
-    DayseamError, EntityRef, Evidence, Identity, Link, LocalRepo, LogEntry, LogEvent, LogLevel,
-    PerSourceState, Person, Privacy, ProgressEvent, ProgressPhase, RawRef, RenderedBullet,
-    RenderedSection, ReportCompletedEvent, ReportDraft, RunId, RunStatus, SecretRef, Settings,
-    SettingsPatch, Sink, SinkCapabilities, SinkConfig, SinkKind, Source, SourceConfig,
-    SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind, SourcePatch, SourceRunState,
-    SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger, ThemePreference, ToastEvent,
-    ToastSeverity, WriteReceipt,
+    error_codes, ActivityEvent, ActivityKind, Actor, Artifact, ArtifactId, ArtifactKind,
+    ArtifactPayload, DayseamError, EntityRef, Evidence, GitlabValidationResult, Identity, Link,
+    LocalRepo, LogEntry, LogEvent, LogLevel, PerSourceState, Person, Privacy, ProgressEvent,
+    ProgressPhase, RawRef, RenderedBullet, RenderedSection, ReportCompletedEvent, ReportDraft,
+    RunId, RunStatus, SecretRef, Settings, SettingsPatch, Sink, SinkCapabilities, SinkConfig,
+    SinkKind, Source, SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind,
+    SourcePatch, SourceRunState, SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger,
+    ThemePreference, ToastEvent, ToastSeverity, WriteReceipt,
 };
 use ts_rs::{Config, TS};
 
@@ -62,6 +62,7 @@ fn export_all(out_dir: &Path) {
     SourceHealth::export_all(&cfg).expect("export SourceHealth");
     SourcePatch::export_all(&cfg).expect("export SourcePatch");
     SecretRef::export_all(&cfg).expect("export SecretRef");
+    GitlabValidationResult::export_all(&cfg).expect("export GitlabValidationResult");
 
     Sink::export_all(&cfg).expect("export Sink");
     SinkKind::export_all(&cfg).expect("export SinkKind");
@@ -97,6 +98,36 @@ fn export_all(out_dir: &Path) {
     ThemePreference::export_all(&cfg).expect("export ThemePreference");
 
     DayseamError::export_all(&cfg).expect("export DayseamError");
+
+    export_gitlab_error_codes(out_dir);
+}
+
+/// Regenerate `gitlabErrorCodes.ts` so the frontend parity test always sees
+/// the authoritative list from `dayseam_core::error_codes`. Kept next to the
+/// ts-rs exports so that `generated_ts_types_match_committed` catches drift
+/// the moment a new `gitlab.*` code is added in Rust without a matching copy
+/// entry in `gitlabErrorCopy`.
+fn export_gitlab_error_codes(out_dir: &std::path::Path) {
+    let codes: Vec<&str> = error_codes::ALL
+        .iter()
+        .copied()
+        .filter(|c| c.starts_with("gitlab."))
+        .collect();
+    let mut body = String::new();
+    body.push_str("// AUTO-GENERATED FILE. Do not edit by hand.\n");
+    body.push_str(
+        "// Regenerated from `dayseam_core::error_codes::ALL` by the\n\
+         // `ts_types_generated` test. Add the copy entry in\n\
+         // `src/features/sources/gitlabErrorCopy.ts` whenever this list\n\
+         // grows, otherwise the frontend parity test fails.\n\n",
+    );
+    body.push_str("export const GITLAB_ERROR_CODES = [\n");
+    for code in &codes {
+        body.push_str(&format!("  \"{code}\",\n"));
+    }
+    body.push_str("] as const;\n\n");
+    body.push_str("export type GitlabErrorCode = (typeof GITLAB_ERROR_CODES)[number];\n");
+    std::fs::write(out_dir.join("gitlabErrorCodes.ts"), body).expect("write gitlabErrorCodes.ts");
 }
 
 fn repo_root() -> PathBuf {

@@ -92,9 +92,9 @@ export function deriveSetupChecklist(
     },
     {
       id: "source",
-      title: "Connect a local git source",
+      title: "Connect a source",
       description:
-        "Point Dayseam at one or more folders that contain your git repos. We\u2019ll walk them to build your report.",
+        "Point Dayseam at one or more folders that contain your git repos, or connect a self-hosted GitLab instance. We\u2019ll use those to build your report.",
       done: sourceDone,
     },
     {

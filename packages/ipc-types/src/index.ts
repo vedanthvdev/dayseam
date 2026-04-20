@@ -30,6 +30,11 @@ export type { SourceHealth } from "./generated/SourceHealth";
 export type { SourceKind } from "./generated/SourceKind";
 export type { SourcePatch } from "./generated/SourcePatch";
 export type { SecretRef } from "./generated/SecretRef";
+export type { GitlabValidationResult } from "./generated/GitlabValidationResult";
+export {
+  GITLAB_ERROR_CODES,
+  type GitlabErrorCode,
+} from "./generated/gitlabErrorCodes";
 
 export type { Sink } from "./generated/Sink";
 export type { SinkCapabilities } from "./generated/SinkCapabilities";
@@ -109,6 +114,7 @@ import type { SinkKind as SinkKindT } from "./generated/SinkKind";
 import type { ReportDraft as ReportDraftT } from "./generated/ReportDraft";
 import type { WriteReceipt as WriteReceiptT } from "./generated/WriteReceipt";
 import type { ActivityEvent as ActivityEventT } from "./generated/ActivityEvent";
+import type { GitlabValidationResult as GitlabValidationResultT } from "./generated/GitlabValidationResult";
 
 /** Opaque handle used at the TS boundary for Tauri's `Channel<T>`. */
 export interface TauriChannel<T> {
@@ -218,6 +224,17 @@ export interface Commands {
     args: { url: string };
     result: null;
   };
+  /** One-shot PAT probe. `pat` is transported as a raw JSON string
+   *  and wrapped on the Rust side in an `IpcSecretString` that
+   *  redacts in `Debug` output and zeroes its bytes on drop — see
+   *  `apps/desktop/src-tauri/src/ipc/secret.rs`. The renderer must
+   *  never log the PAT (the generated `invoke()` helper does not
+   *  instrument args, but a bespoke wrapper in a feature branch
+   *  must preserve that property). */
+  gitlab_validate_pat: {
+    args: { host: string; pat: string };
+    result: GitlabValidationResultT;
+  };
   /** Dev-only. Compiled out of release builds via `cfg(feature = "dev-commands")`. */
   dev_emit_toast: {
     args: { event: ToastEvent };
@@ -268,6 +285,7 @@ export const PROD_COMMANDS: readonly CommandName[] = [
   "retention_sweep_now",
   "activity_events_get",
   "shell_open",
+  "gitlab_validate_pat",
 ] as const;
 
 /** Dev-only command identifiers. Gated behind the Rust

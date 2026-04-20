@@ -98,6 +98,7 @@ fn main() {
         "retention_sweep_now",
         "activity_events_get",
         "shell_open",
+        "gitlab_validate_pat",
     ];
     const DEV_COMMANDS: &[&str] = &[
         "settings_get",
@@ -124,6 +125,7 @@ fn main() {
         "retention_sweep_now",
         "activity_events_get",
         "shell_open",
+        "gitlab_validate_pat",
         "dev_emit_toast",
         "dev_start_demo_run",
     ];

@@ -74,6 +74,7 @@ const commandSurface: Record<keyof Commands, true> = {
   retention_sweep_now: true,
   activity_events_get: true,
   shell_open: true,
+  gitlab_validate_pat: true,
   dev_emit_toast: true,
   dev_start_demo_run: true,
 };

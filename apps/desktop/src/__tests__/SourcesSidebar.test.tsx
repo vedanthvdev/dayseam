@@ -57,7 +57,7 @@ describe("SourcesSidebar", () => {
       expect(screen.getByText(/no sources connected/i)).toBeInTheDocument(),
     );
     expect(
-      screen.getByRole("button", { name: /add local git source/i }),
+      screen.getByRole("button", { name: /^add source$/i }),
     ).toBeInTheDocument();
   });
 
@@ -96,17 +96,81 @@ describe("SourcesSidebar", () => {
     );
   });
 
-  it("opens the add-source dialog when the add button is clicked", async () => {
+  it("opens the local-git add dialog from the add-source menu", async () => {
     registerInvokeHandler("sources_list", async () => []);
     render(<SourcesSidebar />);
     await waitFor(() =>
       expect(screen.getByText(/no sources connected/i)).toBeInTheDocument(),
     );
+    fireEvent.click(screen.getByRole("button", { name: /^add source$/i }));
     fireEvent.click(
-      screen.getByRole("button", { name: /add local git source/i }),
+      screen.getByRole("menuitem", { name: /add local git source/i }),
     );
     expect(
       screen.getByRole("dialog", { name: /add local git source/i }),
     ).toBeInTheDocument();
+  });
+
+  it("opens the GitLab add dialog from the add-source menu", async () => {
+    registerInvokeHandler("sources_list", async () => []);
+    render(<SourcesSidebar />);
+    await waitFor(() =>
+      expect(screen.getByText(/no sources connected/i)).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^add source$/i }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /add gitlab source/i }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: /add gitlab source/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("renders a SourceErrorCard for a GitLab source with an auth error", async () => {
+    const BROKEN_GITLAB: Source = {
+      id: "gl-1",
+      kind: "GitLab",
+      label: "Acme GitLab",
+      config: {
+        GitLab: {
+          base_url: "https://gitlab.acme.test",
+          user_id: 42,
+          username: "ved",
+        },
+      },
+      secret_ref: {
+        keychain_service: "dayseam",
+        keychain_account: "gitlab.gl-1",
+      },
+      created_at: "2026-04-17T12:00:00Z",
+      last_sync_at: null,
+      last_health: {
+        ok: false,
+        checked_at: "2026-04-17T12:00:00Z",
+        last_error: {
+          variant: "Auth",
+          data: {
+            code: "gitlab.auth.invalid_token",
+            message: "401",
+            retryable: false,
+            action_hint: null,
+          },
+        },
+      },
+    };
+    registerInvokeHandler("sources_list", async () => [BROKEN_GITLAB]);
+    render(<SourcesSidebar />);
+    await waitFor(() =>
+      expect(screen.getByTestId("source-error-card-gl-1")).toBeInTheDocument(),
+    );
+    // Reconnect button re-opens AddGitlabSourceDialog in edit mode.
+    fireEvent.click(
+      screen.getByTestId("source-error-card-reconnect-gl-1"),
+    );
+    await waitFor(() =>
+      expect(
+        screen.getByRole("dialog", { name: /reconnect.*gitlab/i }),
+      ).toBeInTheDocument(),
+    );
   });
 });

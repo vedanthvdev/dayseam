@@ -4,3 +4,4 @@
 pub mod broadcast_forwarder;
 pub mod commands;
 pub mod run_forwarder;
+pub mod secret;

@@ -12,28 +12,30 @@
 //
 // Hovering (or keyboard-focusing) a chip reveals three affordances:
 // Rescan (↻), Edit (✎), and Delete (✕). Rescan fires
-// `sources_healthcheck(id)`; Edit reopens `AddLocalGitSourceDialog`
-// in edit mode; Delete asks for confirmation before calling
-// `sources_delete(id)`.
+// `sources_healthcheck(id)`; Edit reopens the source's add dialog
+// (different per kind) in edit mode; Delete asks for confirmation
+// before calling `sources_delete(id)`.
 //
-// The action cluster sits in a sibling that collapses to `width: 0`
-// via `w-0 overflow-hidden`, so a row of idle chips only reserves
-// the label + dot + repo-count space. The buttons expand on
-// `group-hover:` (pointer users) and `group-focus-within:` (keyboard
-// users), so the affordance is discoverable by both. Keeping the
-// buttons in the DOM — rather than `display:none`'d — preserves tab
-// order and screen-reader discovery.
+// When a source's `last_health.ok` is false and the error code is a
+// known `gitlab.*` code, the chip also renders a `SourceErrorCard`
+// directly below it. Auth-flavoured codes (`gitlab.auth.invalid_token`,
+// `gitlab.auth.missing_scope`) expose a "Reconnect" button that
+// re-opens `AddGitlabSourceDialog` in edit mode pre-seeded with the
+// existing base URL and identity so the user can paste a fresh PAT
+// without losing the attached identities.
 //
-// Phase 2 intentionally leaves the chip non-clickable for selection
-// — the generate-report view (PR-B2) owns source selection via its
-// own multi-select. Keeping this row read-only for selection avoids
-// accidentally teaching users two different selection gestures.
+// Adding a source is a two-item menu: "Local git" reopens the
+// long-standing `AddLocalGitSourceDialog`; "GitLab" opens
+// `AddGitlabSourceDialog`. Keeping the menu flat (no nested sub-
+// menus) matches the rest of the action bar.
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { Source, SourceHealth } from "@dayseam/ipc-types";
 import { useLocalRepos, useSources } from "../../ipc";
 import { AddLocalGitSourceDialog } from "./AddLocalGitSourceDialog";
+import { AddGitlabSourceDialog } from "./AddGitlabSourceDialog";
 import { ApproveReposDialog } from "./ApproveReposDialog";
+import { SourceErrorCard } from "./SourceErrorCard";
 
 function healthDotClass(health: SourceHealth): string {
   if (!health.checked_at) return "bg-neutral-300 dark:bg-neutral-600";
@@ -62,22 +64,54 @@ function formatWhen(ts: string): string {
   }
 }
 
+function isGitlab(source: Source): boolean {
+  return "GitLab" in source.config;
+}
+
+function isLocalGit(source: Source): boolean {
+  return "LocalGit" in source.config;
+}
+
 
 export function SourcesSidebar() {
   const { sources, loading, error, refresh, healthcheck, remove } = useSources();
-  const [addOpen, setAddOpen] = useState(false);
+  // One dialog per kind; tracked separately so menu choice and edit
+  // choice can each pick the right one. `addGitlabOpen` + `editing`
+  // with a GitLab source share `AddGitlabSourceDialog` but through
+  // different props.
+  const [addLocalGitOpen, setAddLocalGitOpen] = useState(false);
+  const [addGitlabOpen, setAddGitlabOpen] = useState(false);
+  // The two-option "Add source" menu. Closed by default; a click on
+  // either item opens the relevant dialog and closes the menu.
+  const [addMenuOpen, setAddMenuOpen] = useState(false);
   // When `AddLocalGitSourceDialog` resolves successfully it hands the
   // newly-created source here so we can open ApproveReposDialog on
   // top; keeping the two dialogs coordinated at the parent avoids
   // callback choreography across siblings.
   const [approving, setApproving] = useState<Source | null>(null);
-  // Non-null while the edit dialog is open. The same dialog component
-  // drives both add and edit, distinguished by the `editing` prop.
+  // Non-null while the edit dialog is open. `editingKind` decides
+  // which dialog renders; mixing LocalGit + GitLab in the same
+  // component would over-generalise both.
   const [editing, setEditing] = useState<Source | null>(null);
   // Non-null while the delete confirmation is showing.
   const [deleting, setDeleting] = useState<Source | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
   const [deleteInFlight, setDeleteInFlight] = useState(false);
+
+  const editingLocalGit = editing !== null && isLocalGit(editing) ? editing : null;
+  const editingGitlab = editing !== null && isGitlab(editing) ? editing : null;
+
+  const addMenuRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!addMenuOpen) return;
+    const handler = (e: MouseEvent) => {
+      if (!addMenuRef.current) return;
+      if (addMenuRef.current.contains(e.target as Node)) return;
+      setAddMenuOpen(false);
+    };
+    window.addEventListener("mousedown", handler);
+    return () => window.removeEventListener("mousedown", handler);
+  }, [addMenuOpen]);
 
   const handleHealthcheck = useCallback(
     (id: string) => {
@@ -85,6 +119,13 @@ export function SourcesSidebar() {
     },
     [healthcheck],
   );
+
+  const handleReconnect = useCallback((source: Source) => {
+    // Reconnect is semantically an edit on the existing row, so we
+    // reuse the edit path — `AddGitlabSourceDialog` handles the
+    // reconnect copy internally when it detects `editing != null`.
+    setEditing(source);
+  }, []);
 
   const handleConfirmDelete = useCallback(async () => {
     if (!deleting) return;
@@ -135,6 +176,7 @@ export function SourcesSidebar() {
             setDeleteError(null);
             setDeleting(source);
           }}
+          onReconnect={handleReconnect}
         />
       ))}
 
@@ -144,19 +186,54 @@ export function SourcesSidebar() {
         </span>
       ) : null}
 
-      <button
-        type="button"
-        onClick={() => setAddOpen(true)}
-        className="ml-auto rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-900"
-      >
-        Add local git source
-      </button>
+      <div className="relative ml-auto" ref={addMenuRef}>
+        <button
+          type="button"
+          onClick={() => setAddMenuOpen((prev) => !prev)}
+          aria-haspopup="menu"
+          aria-expanded={addMenuOpen}
+          data-testid="sources-add-menu-trigger"
+          className="rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-700 hover:bg-neutral-50 dark:border-neutral-700 dark:text-neutral-200 dark:hover:bg-neutral-900"
+        >
+          Add source
+        </button>
+        {addMenuOpen ? (
+          <div
+            role="menu"
+            className="absolute right-0 z-40 mt-1 w-44 rounded border border-neutral-200 bg-white py-1 text-xs shadow-lg dark:border-neutral-800 dark:bg-neutral-950"
+          >
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setAddMenuOpen(false);
+                setAddLocalGitOpen(true);
+              }}
+              className="block w-full px-3 py-1 text-left text-neutral-700 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-900"
+            >
+              Add local git source
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setAddMenuOpen(false);
+                setAddGitlabOpen(true);
+              }}
+              data-testid="sources-add-menu-gitlab"
+              className="block w-full px-3 py-1 text-left text-neutral-700 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-900"
+            >
+              Add GitLab source
+            </button>
+          </div>
+        ) : null}
+      </div>
 
       <AddLocalGitSourceDialog
-        open={addOpen}
-        onClose={() => setAddOpen(false)}
+        open={addLocalGitOpen}
+        onClose={() => setAddLocalGitOpen(false)}
         onAdded={(source) => {
-          setAddOpen(false);
+          setAddLocalGitOpen(false);
           setApproving(source);
           // Refresh in the background so the chip appears even if
           // the user dismisses the approve dialog without approving.
@@ -165,13 +242,36 @@ export function SourcesSidebar() {
       />
 
       <AddLocalGitSourceDialog
-        open={editing !== null}
-        editing={editing}
+        open={editingLocalGit !== null}
+        editing={editingLocalGit}
         onClose={() => setEditing(null)}
         onAdded={() => {
           // Edit mode never reaches onAdded, but the prop is required
           // by the dialog's create-mode contract, so we provide a
           // harmless no-op.
+        }}
+        onSaved={() => {
+          setEditing(null);
+          void refresh();
+        }}
+      />
+
+      <AddGitlabSourceDialog
+        open={addGitlabOpen}
+        onClose={() => setAddGitlabOpen(false)}
+        onAdded={() => {
+          setAddGitlabOpen(false);
+          void refresh();
+        }}
+      />
+
+      <AddGitlabSourceDialog
+        open={editingGitlab !== null}
+        editing={editingGitlab}
+        onClose={() => setEditing(null)}
+        onAdded={() => {
+          // Reconnect never reaches onAdded (edit mode calls onSaved
+          // instead), but the create-mode contract requires the prop.
         }}
         onSaved={() => {
           setEditing(null);
@@ -211,6 +311,7 @@ interface SourceChipProps {
   onHealthcheck: (id: string) => void;
   onEdit: () => void;
   onRequestDelete: () => void;
+  onReconnect: (source: Source) => void;
 }
 
 /**
@@ -223,64 +324,75 @@ interface SourceChipProps {
  * Per-chip fetch keeps the wiring simple; `useLocalRepos` already
  * listens to the sources bus, so repo counts stay accurate after an
  * edit that changes scan roots. For non-LocalGit sources
- * (placeholder: GitLab in Phase 3) we skip the query and omit the
+ * (GitLab from Phase 3 onward) we skip the query and omit the
  * secondary label until that source kind has its own count model.
+ *
+ * When the chip's `last_health` surfaces an error, the chip wraps
+ * itself + `SourceErrorCard` in a vertical stack. The card lives
+ * outside the hover-collapsible affordance cluster so auth errors
+ * are always visible — the whole point of the card is to short-
+ * circuit "sync failed, I have no idea why".
  */
 function SourceChip({
   source,
   onHealthcheck,
   onEdit,
   onRequestDelete,
+  onReconnect,
 }: SourceChipProps) {
-  const isLocalGit = "LocalGit" in source.config;
+  const localGit = isLocalGit(source);
   // `useLocalRepos(null)` short-circuits inside the hook, so we can
   // always call it unconditionally and still avoid an IPC round-trip
   // for non-LocalGit sources — keeping the rules-of-hooks happy.
   const { repos, loading, error } = useLocalRepos(
-    isLocalGit ? source.id : null,
+    localGit ? source.id : null,
   );
-  const showCount = isLocalGit;
+  const showCount = localGit;
   const count = repos.length;
 
+  const health = source.last_health;
+  const hasError =
+    !health.ok && health.checked_at !== null && health.last_error !== null;
+
   return (
-    <span
-      title={healthTitle(source.last_health)}
-      className="group inline-flex cursor-pointer items-center gap-1.5 rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-700 dark:border-neutral-700 dark:text-neutral-200"
-      data-testid={`source-chip-${source.id}`}
-    >
+    <div className="flex flex-col items-stretch">
       <span
-        aria-hidden="true"
-        className={`h-1.5 w-1.5 rounded-full ${healthDotClass(source.last_health)}`}
-      />
-      <span>{source.label}</span>
-      {showCount ? (
-        <span
-          className="text-neutral-500 dark:text-neutral-400"
-          // Error surfaces through the title, not the chip body, so
-          // a hiccup in `local_repos_list` doesn't scream at the
-          // user when the sync path itself is unaffected.
-          title={
-            error
-              ? `Could not read repos under this source: ${error}`
-              : undefined
-          }
-        >
-          · {loading && count === 0 ? "…" : `${count} repo${count === 1 ? "" : "s"}`}
-        </span>
-      ) : null}
-      <span
-        className="inline-flex w-0 items-center gap-0.5 overflow-hidden opacity-0 transition-all duration-150 group-hover:ml-1 group-hover:w-auto group-hover:opacity-100 group-focus-within:ml-1 group-focus-within:w-auto group-focus-within:opacity-100"
+        title={healthTitle(health)}
+        className="group inline-flex cursor-pointer items-center gap-1.5 self-start rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-700 dark:border-neutral-700 dark:text-neutral-200"
+        data-testid={`source-chip-${source.id}`}
       >
-        <button
-          type="button"
-          onClick={() => onHealthcheck(source.id)}
-          className="rounded px-1 text-[11px] text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
-          aria-label={`Rescan ${source.label}`}
-          title="Rescan"
+        <span
+          aria-hidden="true"
+          className={`h-1.5 w-1.5 rounded-full ${healthDotClass(health)}`}
+        />
+        <span>{source.label}</span>
+        {showCount ? (
+          <span
+            className="text-neutral-500 dark:text-neutral-400"
+            // Error surfaces through the title, not the chip body, so
+            // a hiccup in `local_repos_list` doesn't scream at the
+            // user when the sync path itself is unaffected.
+            title={
+              error
+                ? `Could not read repos under this source: ${error}`
+                : undefined
+            }
+          >
+            · {loading && count === 0 ? "…" : `${count} repo${count === 1 ? "" : "s"}`}
+          </span>
+        ) : null}
+        <span
+          className="inline-flex w-0 items-center gap-0.5 overflow-hidden opacity-0 transition-all duration-150 group-hover:ml-1 group-hover:w-auto group-hover:opacity-100 group-focus-within:ml-1 group-focus-within:w-auto group-focus-within:opacity-100"
         >
-          ↻
-        </button>
-        {isLocalGit ? (
+          <button
+            type="button"
+            onClick={() => onHealthcheck(source.id)}
+            className="rounded px-1 text-[11px] text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
+            aria-label={`Rescan ${source.label}`}
+            title="Rescan"
+          >
+            ↻
+          </button>
           <button
             type="button"
             onClick={onEdit}
@@ -291,19 +403,27 @@ function SourceChip({
           >
             ✎
           </button>
-        ) : null}
-        <button
-          type="button"
-          onClick={onRequestDelete}
-          className="rounded px-1 text-[11px] text-neutral-500 hover:bg-red-50 hover:text-red-700 dark:text-neutral-400 dark:hover:bg-red-950/40 dark:hover:text-red-300"
-          aria-label={`Delete ${source.label}`}
-          title="Delete"
-          data-testid={`source-chip-delete-${source.id}`}
-        >
-          ✕
-        </button>
+          <button
+            type="button"
+            onClick={onRequestDelete}
+            className="rounded px-1 text-[11px] text-neutral-500 hover:bg-red-50 hover:text-red-700 dark:text-neutral-400 dark:hover:bg-red-950/40 dark:hover:text-red-300"
+            aria-label={`Delete ${source.label}`}
+            title="Delete"
+            data-testid={`source-chip-delete-${source.id}`}
+          >
+            ✕
+          </button>
+        </span>
       </span>
-    </span>
+
+      {hasError && health.last_error ? (
+        <SourceErrorCard
+          source={source}
+          error={health.last_error}
+          onReconnect={onReconnect}
+        />
+      ) : null}
+    </div>
   );
 }
 
