@@ -64,7 +64,23 @@ echo "==> Building Dayseam v${VERSION} as a universal .app + .dmg"
 cd "$REPO_ROOT"
 pnpm --filter @dayseam/desktop exec tauri build --target universal-apple-darwin
 
-BUNDLE_DIR="${REPO_ROOT}/apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle"
+# Resolve the Cargo target directory dynamically. In a Cargo
+# workspace the bundler writes to `<workspace_root>/target/`, not
+# `<crate_dir>/target/` — DAY-66 hit this exactly: the .app landed
+# at `target/universal-apple-darwin/.../Dayseam.app` while the
+# (previously hardcoded) `apps/desktop/src-tauri/target/...` path
+# was empty, and the downstream assertion blamed the bundle for
+# being missing. Using `cargo metadata` makes this correct under
+# any workspace shape and also respects a `CARGO_TARGET_DIR`
+# override (useful in sandboxed CI that redirects builds to an
+# ephemeral path).
+TARGET_DIR="$(cargo metadata --format-version 1 --no-deps --manifest-path "${REPO_ROOT}/Cargo.toml" | jq -r '.target_directory')"
+if [[ -z "$TARGET_DIR" || "$TARGET_DIR" == "null" ]]; then
+  echo "build-dmg.sh: cargo metadata did not return a target_directory; check Cargo.toml is present at ${REPO_ROOT}" >&2
+  exit 1
+fi
+
+BUNDLE_DIR="${TARGET_DIR}/universal-apple-darwin/release/bundle"
 SRC_DMG="$(ls -t "${BUNDLE_DIR}/dmg/"*.dmg 2>/dev/null | head -n 1 || true)"
 
 if [[ -z "$SRC_DMG" || ! -f "$SRC_DMG" ]]; then

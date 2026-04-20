@@ -8,6 +8,26 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Fixed
 
+- **Release workflow resolves Cargo's workspace `target/` instead
+  of a per-crate path (DAY-66).** Post-DAY-65 the DMG build
+  finally produced artefacts — the tauri bundler reported
+  `Bundling Dayseam.app (.../target/universal-apple-darwin/.../
+  Dayseam.app)` and `Bundling Dayseam_0.1.0_universal.dmg` — but
+  `build-dmg.sh` then reported `Tauri bundler did not produce a
+  .dmg under apps/desktop/src-tauri/target/...` and exited 1. The
+  root cause: in a Cargo workspace, cargo writes all outputs to
+  `<workspace_root>/target/`, *not* `<crate_dir>/target/`. Both
+  `build-dmg.sh` and the two post-build assertion steps
+  (universal-lipo and dev-IPC-symbol checks) hardcoded
+  `apps/desktop/src-tauri/target/...`, which was empty. They now
+  resolve `target_directory` via `cargo metadata --format-version
+  1 --no-deps`, which is the canonical Cargo-native way to find
+  the target dir and also respects a `CARGO_TARGET_DIR` override
+  — useful in sandboxed CI that redirects builds to an ephemeral
+  path. Both assertion steps also gain `shell: bash` so a failing
+  `cargo metadata | jq` surfaces at the pipeline, not downstream.
+  Ships `semver:none`; followed by a `workflow_dispatch` run on
+  master to publish v0.1.0.
 - **Release workflow builds the universal DMG again (DAY-65).**
   The first live dispatch of the post-DAY-64 pipeline failed at the
   binary-assertion step with `Binary not found at .../Dayseam.app/

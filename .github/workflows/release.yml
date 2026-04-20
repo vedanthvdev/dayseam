@@ -180,9 +180,21 @@ jobs:
       # Universal-bundle assertion: the fused binary inside the .app
       # MUST carry both arm64 and x86_64 slices. `lipo -archs` emits a
       # space-separated list we grep to fail-fast on a thin build.
+      #
+      # `cargo metadata` resolves the workspace target directory
+      # rather than hardcoding `apps/desktop/src-tauri/target/...`.
+      # Cargo workspaces write to `<workspace_root>/target/`, not
+      # per-crate — DAY-66 hit this exactly: the `.app` landed at
+      # `<repo>/target/universal-apple-darwin/.../Dayseam.app` while
+      # the hardcoded path was empty, and this step blamed a
+      # perfectly good build for being missing. `shell: bash`
+      # enables pipefail so a failed `cargo metadata` or `jq`
+      # surfaces at the pipeline itself.
       - name: Assert universal binary (arm64 + x86_64)
+        shell: bash
         run: |
-          app="apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Dayseam.app"
+          target_dir="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml | jq -r '.target_directory')"
+          app="${target_dir}/universal-apple-darwin/release/bundle/macos/Dayseam.app"
           bin="$app/Contents/MacOS/Dayseam"
           if [[ ! -f "$bin" ]]; then
             echo "::error::Binary not found at $bin" >&2
@@ -204,8 +216,10 @@ jobs:
       # silently linking a dev-only crate) shows up as a CI red here
       # instead of as a shipped attack surface.
       - name: Assert release binary has no dev-only IPC symbols
+        shell: bash
         run: |
-          bin="apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Dayseam.app/Contents/MacOS/Dayseam"
+          target_dir="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml | jq -r '.target_directory')"
+          bin="${target_dir}/universal-apple-darwin/release/bundle/macos/Dayseam.app/Contents/MacOS/Dayseam"
           forbidden="$(nm -g "$bin" 2>/dev/null | grep -E 'dev_emit_toast|dev_start_demo_run' || true)"
           if [[ -n "$forbidden" ]]; then
             echo "::error::Release binary exposes dev-only IPC symbols:" >&2
