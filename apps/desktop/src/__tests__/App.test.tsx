@@ -30,6 +30,9 @@ describe("App", () => {
     // silent — silencing the "update … was not wrapped in act"
     // noise that otherwise fires between tests and drowns real
     // regressions. See TST-05 in docs/review/phase-2-review.md.
+    // The deeper multi-tick microtask/macrotask flush lives in
+    // `setup.ts`'s global `afterEach`; this hook only handles the
+    // local fixture reset.
     await act(async () => {});
     localStorage.clear();
     resetTauriMocks();

@@ -70,14 +70,13 @@ pub(crate) async fn run(
     // out of scope here would mark the senders closed and silently
     // drop every progress / log event the sink produces, which would
     // mask sink-side regressions.
-    let streams = RunStreams::new(RunId::new());
-    let RunStreams {
-        progress_tx,
-        log_tx,
-        mut progress_rx,
-        mut log_rx,
-        ..
-    } = streams;
+    //
+    // ARC-03: `RunStreams::with_progress` is the single canonical
+    // constructor shared with `generate_report`. The grep test in
+    // `tests/no_inline_run_streams_construction.rs` keeps both call
+    // sites from drifting back to bespoke destructuring.
+    let (progress_tx, log_tx, mut progress_rx, mut log_rx) =
+        RunStreams::with_progress(RunId::new());
     let ctx = SinkCtx::new(None, progress_tx, log_tx, CancellationToken::new());
     tokio::spawn(async move { while progress_rx.recv().await.is_some() {} });
     tokio::spawn(async move { while log_rx.recv().await.is_some() {} });

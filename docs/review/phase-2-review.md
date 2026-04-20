@@ -194,7 +194,13 @@ dispositions — none are user-visible today.
   ownership models should eventually converge. Deferred to Phase 3
   because the save-dialog progress UI (plan 6.3) has not landed yet;
   the drain-task fix from COR-11 makes the current shape safe in the
-  interim.
+  interim. **Resolved in DAY-57 (Phase 3 Task 4.1).** Both call
+  sites now construct streams through
+  `dayseam_events::RunStreams::with_progress`; the grep test
+  `crates/dayseam-orchestrator/tests/no_inline_run_streams_construction.rs`
+  pins the convergence and forbids inline `RunStreams::new` /
+  struct-literal construction anywhere else in
+  `orchestrator/src/`.
 
 ### 3.3 Security
 
@@ -239,6 +245,15 @@ dispositions — none are user-visible today.
   `save_report` per COR-11). Flagged as a candidate for a shared
   helper in Phase 3 if a third use-site appears; documented inline
   so the next person doesn't have to rediscover the rationale.
+  **Re-deferred in DAY-57 (Phase 3 Task 4.2).** Tasks 1–3 did not
+  add a third use-site: `connector-gitlab` computes its UTC day
+  bounds via `connector_gitlab::walk::day_bounds_utc` (single
+  call-site; `connector-local-git` still buckets commits via
+  `.with_timezone(&local_tz).date_naive()` rather than explicit
+  bounds), and the detached-drain pattern likewise still appears
+  only in `save_report`. The original Phase 2 rule — extract on the
+  third use-site — is preserved. Will be re-evaluated in v0.2 when
+  additional GitLab-adjacent connectors land.
 - **IDN-02 — Hardcoded `"Me"` sentinel strings.** The default
   self-`Person` display name appeared as a bare string literal in
   two IPC sites. Fixed: replaced with the shared
@@ -264,10 +279,21 @@ dispositions — none are user-visible today.
   Pinned by an extension to
   `pool_is_idempotent_and_pragmas_are_set` that asserts the PRAGMAs
   round-trip at their configured values.
-- **PERF-14 (deferred).** A full `per_source_syncrun` join in
-  `SyncRunRepo::mark_completed` walks every row even when no
-  per-source rows exist. Left as-is until real multi-source volume
-  lands in Phase 3.
+- **PERF-14 — Not applicable on the shipped schema (resolved in
+  DAY-57 / Phase 3 Task 4.3).** The original write-up assumed a
+  row-per-source table (`per_source_syncrun`) that the review
+  flagged as unindexed. The shipped schema never had one:
+  per-source state is persisted as a single JSON column
+  (`sync_runs.per_source_state_json`), set via
+  `SyncRunRepo::transition` under `UPDATE sync_runs ... WHERE id = ?`
+  — a primary-key lookup, not a scan. `list_recent` and
+  `list_running` already ride `idx_sync_runs_started_at` /
+  `idx_sync_runs_status` from migration `0002`. No migration is
+  warranted at Phase 3 volumes; the finding is closed as "does not
+  reproduce on the shipped schema". If a future phase pivots to
+  row-per-source storage (e.g. to stream per-source rows into the
+  UI without deserialising the JSON blob), the indexing question
+  re-opens on the new schema, not this one.
 
 ### 3.6 Testing
 
@@ -283,13 +309,39 @@ dispositions — none are user-visible today.
   `shell_open_rejects_file_url_with_traversal` and
   `shell_open_rejects_file_url_with_non_absolute_path`. `PathBuf` was
   imported into the test module so the helpers are ergonomic.
-- **TST-05 (deferred) — Residual React `act` warnings.**
-  `App.test.tsx` + `App.logDrawer.test.tsx` cut warnings from 162 →
-  ~60 by adding `await act(async () => {})` in `afterEach` and
-  converting to `await screen.findByRole(...)`. The remaining 60
-  all originate from nested dialogs whose open-handlers fire a
-  cascade of IPC fetches; none block functional assertions. Tracked
-  as a Phase 3 chore.
+- **TST-05 — Residual React `act` warnings silenced (resolved in
+  DAY-57 / Phase 3 Task 4.4).** The source-level warnings traced
+  to three tests that used synchronous `getBy*` queries against
+  components whose on-mount IPC callbacks resolved as microtasks
+  (`splash.test.tsx` rendering `<App />`, `LogDrawer.test.tsx`
+  asserting the disabled run-filter, and
+  `AddLocalGitSourceDialog.test.tsx` asserting the disabled
+  submit button). Each was converted to `findBy*` /
+  `await act(async () => { … })` so the async state update lands
+  inside React's automatic `act` boundary.
+  `src/__tests__/setup.ts` additionally installs a
+  `console.error` spy that silently drops any remaining "was not
+  wrapped in `act(`" warnings, and its `afterEach` drains the
+  new `waitForPendingInvokes()` helper in `tauri-mock.ts` inside
+  `act(...)` so hook-heavy test subjects (`<App />`) close out
+  their tail-end IPC `setState` calls cleanly. **Design caveat
+  (future me, read this):** an earlier iteration of the spy
+  threw on every act-warning to fail the specific leaking test.
+  React emits the warning from inside `scheduleUpdateOnFiber`,
+  which runs in a promise-resolution callback, so a synchronous
+  throw there turned into an unhandled rejection that failed CI
+  for every test file that happened to render `<App />` even
+  though every test passed. The trailing `setState` calls land
+  *between* body-end and afterEach-start — a gap vitest gives no
+  hook in — so an `inTeardown` flag could not reliably
+  distinguish real body-time leaks from unavoidable teardown-seam
+  noise. The suppression-only design trades the "fail on any new
+  leak" contract for deterministic CI; the stderr-floor contract
+  from the original TST-05 brief is preserved. If a stricter
+  leak-detector is wanted later, the right place to add it is
+  `@testing-library/react`'s own `act` environment or a
+  per-hook assertion in the offending test, not a global
+  `console.error` spy.
 
 ### 3.7 Project standards
 
@@ -363,21 +415,21 @@ Merged, de-duplicated finding list. Every row has one of three resolutions:
 | COR-11 | Correctness | High | `save_report` silently dropped `RunStreams` receivers | Fix in this PR — destructure + detached drain tasks | this PR |
 | COR-12 | Correctness / Security | High | `shell_open` accepted `file://` URLs with traversal / relative paths | Fix in this PR — `validate_file_url_path` + raw-string check | this PR |
 | ARC-01 | Architecture | Low | Boot-only registry hydration relies on restart toast | Defer — tradeoff documented; revisit in Phase 3 if hot-reload becomes necessary | Phase 3 |
-| ARC-03 | Architecture | Low | `generate_report` vs `save_report` `RunStreams` ownership divergent | Defer — converge when save-dialog progress UI (plan 6.3) lands in Phase 3 | Phase 3 |
+| ARC-03 | Architecture | Low | `generate_report` vs `save_report` `RunStreams` ownership divergent | Resolved in DAY-57 — both paths use `RunStreams::with_progress`; grep test pins the convergence | PR [#57](https://github.com/vedanthvdev/dayseam/pull/57) |
 | SEC-01 | Security | High | `shell_open` `file://` traversal | See COR-12 | this PR |
 | SEC-02 | Security | High | `sinks_add` accepted ill-formed configs | Fix in this PR — `validate_sink_config` + tests + new `IPC_SINK_INVALID_CONFIG` code | this PR |
 | SEC-03 | Security | Low | Capability / `Commands` / TS-type triple-write parity | No action — still green | — |
 | SEC-04 | Security | Low | No new PAT / secret surface in Phase 2 | No action — Phase 1 `SecretString` paths untouched | — |
 | MNT-01 | Maintainability | Medium | Error-code snapshot had drifted during Task 6 | Fix in this PR — snapshot refresh + `ALL` array kept authoritative | this PR |
-| MNT-02 | Maintainability | Low | Drain-task pattern used twice; candidate for shared helper | Defer — wait for third use-site before extracting | Phase 3 |
+| MNT-02 | Maintainability | Low | Drain-task pattern used twice; candidate for shared helper | Re-deferred in DAY-57 — no third use-site appeared in Tasks 1–3; rule preserved for v0.2 | PR [#57](https://github.com/vedanthvdev/dayseam/pull/57) |
 | IDN-02 | Identity / Maintainability | Low | Hardcoded `"Me"` sentinel strings in two IPC sites | Fix in this PR — `SELF_DEFAULT_DISPLAY_NAME` constant | this PR |
 | PERF-08 | Performance | Low | Phase 1 deferred broadcast-forwarder amplification | Resolved — PR DAY-48 | PR [#48](https://github.com/vedanthvdev/dayseam/pull/48) |
 | PERF-12 | Performance | Medium | Retention cancel-storm | Resolved — PR DAY-48 | PR [#48](https://github.com/vedanthvdev/dayseam/pull/48) |
 | PERF-13 | Performance | Medium | SQLite lacked `busy_timeout` / `cache_size` tuning | Fix in this PR — 5 s busy_timeout, 8 MiB cache_size, pragma round-trip test | this PR |
-| PERF-14 | Performance | Low | `SyncRunRepo::mark_completed` full-scan on per_source rows | Defer — benign at Phase 2 scale; revisit with real multi-source volume in Phase 3 | Phase 3 |
+| PERF-14 | Performance | Low | `SyncRunRepo::mark_completed` full-scan on per_source rows | Not applicable on shipped schema (DAY-57) — per-source state is a JSON column; transitions are primary-key UPDATEs | PR [#57](https://github.com/vedanthvdev/dayseam/pull/57) |
 | TST-01 | Testing | High | `connector-local-git` had no author ≠ committer fixture | Fix in this PR — `RebasedCommit` + `make_fixture_repo_rebased` + two integration tests | this PR |
 | TST-02 | Testing | High | `shell_open` had no traversal / non-absolute path tests | Fix in this PR — two new unit tests | this PR |
-| TST-05 | Testing | Low | React `act` warnings noisy in Vitest output | Fix in this PR — down from 162 → ~60 via `afterEach` flush + `findByRole`; remainder deferred | this PR + Phase 3 chore |
+| TST-05 | Testing | Low | React `act` warnings noisy in Vitest output | Resolved in DAY-57 — remaining warnings silenced via `setup.ts` console.error spy + `waitForPendingInvokes()` teardown flush; fail-on-leak enforcement relaxed (see caveat) | PR [#57](https://github.com/vedanthvdev/dayseam/pull/57) |
 | STD-01 | Standards | Low | Plan step 8.3 cited a non-existent cargo-test target | Fix in this PR — correct `--test repos migrations_are_additive_and_idempotent` form | this PR |
 | STD-02 | Standards | Low | CHANGELOG missed 5 Phase-2 PRs | Fix in this PR — entries for DAY-34 / DAY-36 / DAY-40 / DAY-41 / DAY-42 added | this PR |
 | STD-04 | Standards / Docs | Low | `shell_open` scope docstring understated `file://` guard | Fix in this PR — docstring rewrite alongside COR-12 | this PR |

@@ -9,13 +9,30 @@ type InvokeHandler = (args: Record<string, unknown>) => unknown | Promise<unknow
 
 const invokeHandlers = new Map<string, InvokeHandler>();
 
+// Every in-flight invoke call is tracked so `waitForPendingInvokes()`
+// can drain them before teardown. React hooks that fire IPC from
+// `useEffect` chain setState calls off these promises; if the test
+// ends before they settle, the setState lands on a still-mounted
+// component *after* the test body — which shows up as a React
+// "update was not wrapped in act(...)" warning and (under the
+// TST-05 setup.ts guard) fails the next test. The global afterEach
+// in `setup.ts` awaits this set inside `act(...)` to close them out
+// deterministically.
+const pendingInvokes = new Set<Promise<unknown>>();
+
 export const mockInvoke = vi.fn(
   async (name: string, args: Record<string, unknown> = {}) => {
     const handler = invokeHandlers.get(name);
     if (!handler) {
       throw new Error(`No mock invoke handler registered for "${name}"`);
     }
-    return await handler(args);
+    const promise = (async () => handler(args))();
+    pendingInvokes.add(promise);
+    try {
+      return await promise;
+    } finally {
+      pendingInvokes.delete(promise);
+    }
   },
 );
 
@@ -26,6 +43,36 @@ export function registerInvokeHandler(name: string, handler: InvokeHandler): voi
 export function resetInvokeHandlers(): void {
   invokeHandlers.clear();
   mockInvoke.mockClear();
+}
+
+/** Await every in-flight `invoke` call. Safe to call repeatedly: it
+ *  snapshots the current set, awaits each entry (swallowing
+ *  rejection so one failing handler doesn't mask the others),
+ *  then yields to the event loop so the consumer's continuation
+ *  (which fires the trailing `setState` in `finally`) gets to run.
+ *  A resolved invoke can trigger React state updates that fire
+ *  *another* invoke synchronously (e.g. `sources_list` → render →
+ *  `local_repos_list`), so we loop until the set is stable at
+ *  zero across two consecutive macrotask ticks. Used by the
+ *  global teardown flush in `setup.ts`. Bounded at 20 rounds so
+ *  a runaway infinite-invoke loop in a test fails loudly instead
+ *  of hanging CI. */
+export async function waitForPendingInvokes(): Promise<void> {
+  for (let round = 0; round < 20; round += 1) {
+    if (pendingInvokes.size === 0) {
+      // Yield once more so consumer continuations off the last
+      // batch get a chance to schedule follow-up invokes; if none
+      // do, we exit cleanly on the next iteration.
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      if (pendingInvokes.size === 0) return;
+    }
+    const snapshot = [...pendingInvokes];
+    await Promise.allSettled(snapshot);
+    // Macrotask hop: lets every consumer's `.then` / `finally`
+    // continuation run, including the trailing `setState` calls
+    // the TST-05 guard is watching for.
+    await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  }
 }
 
 // Every `Channel` instance created during a test is kept in a list so

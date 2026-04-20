@@ -122,9 +122,17 @@ describe("LogDrawer", () => {
     expect(screen.getByText(/something failed/i)).toBeInTheDocument();
   });
 
-  it("disables the run filter when there is no active run", () => {
+  it("disables the run filter when there is no active run", async () => {
     registerInvokeHandler("logs_tail", async () => []);
     render(<LogDrawer open onClose={() => {}} currentRunId={null} />);
-    expect(screen.getByTestId("log-drawer-run-filter")).toBeDisabled();
+    // The filter is disabled synchronously, but `LogDrawer`'s
+    // on-mount `logs_tail` resolves as a microtask and flips a
+    // loading flag. `findBy*` yields the render loop once so the
+    // resulting `setState` lands inside React's automatic `act`
+    // boundary, silencing the TST-05 warning without weakening the
+    // assertion itself.
+    expect(
+      await screen.findByTestId("log-drawer-run-filter"),
+    ).toBeDisabled();
   });
 });

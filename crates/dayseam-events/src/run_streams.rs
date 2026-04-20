@@ -65,6 +65,29 @@ impl RunStreams {
             (self.progress_rx, self.log_rx),
         )
     }
+
+    /// Canonical constructor for orchestrator run paths. Creates a
+    /// fresh `RunStreams` for `run_id` and flattens it into the four
+    /// channel halves in the order callers consume them: the sender
+    /// pair goes to the background task that emits progress and log
+    /// events, and the receiver pair goes to the consumer that
+    /// forwards them to the UI (or, where no UI consumer exists yet,
+    /// gets drained by detached tasks — see
+    /// `dayseam-orchestrator::save`).
+    ///
+    /// This is the single entry point used by `generate_report` and
+    /// `save_report`, closing the ARC-03 ownership divergence the
+    /// Phase 2 review flagged. The grep test
+    /// `crates/dayseam-orchestrator/tests/no_inline_run_streams_construction.rs`
+    /// holds the line: production orchestrator code constructs
+    /// `RunStreams` only through this helper.
+    #[must_use]
+    pub fn with_progress(
+        run_id: RunId,
+    ) -> (ProgressSender, LogSender, ProgressReceiver, LogReceiver) {
+        let ((progress_tx, log_tx), (progress_rx, log_rx)) = Self::new(run_id).split();
+        (progress_tx, log_tx, progress_rx, log_rx)
+    }
 }
 
 /// Cheap, cloneable handle for emitting [`ProgressEvent`]s on a specific

@@ -30,11 +30,15 @@ describe("AddLocalGitSourceDialog", () => {
     resetTauriMocks();
   });
 
-  it("keeps the submit button disabled until label + at least one root are present", () => {
+  it("keeps the submit button disabled until label + at least one root are present", async () => {
     render(
       <AddLocalGitSourceDialog open onClose={() => {}} onAdded={() => {}} />,
     );
-    const submit = screen.getByRole("button", { name: /add and scan/i });
+    // `findBy*` over `getBy*` so the dialog's mount-time async work
+    // (label-suggestion fetch) resolves inside React's automatic
+    // `act` boundary — otherwise the trailing `setState` leaks an
+    // "update not wrapped in act" warning that TST-05 now fails on.
+    const submit = await screen.findByRole("button", { name: /add and scan/i });
     expect(submit).toBeDisabled();
 
     fireEvent.change(screen.getByRole("textbox", { name: /label/i }), {

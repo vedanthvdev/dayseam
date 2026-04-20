@@ -34,6 +34,13 @@ async function renderWithTheme(theme: Theme): Promise<HTMLElement> {
       screen.getByTestId("action-row-generate"),
     ).not.toBeDisabled(),
   );
+  // `useLocalRepos` resolves on a separate microtask chain from
+  // `useSources`, so the chip can still show the `· …` placeholder
+  // even after Generate is enabled. The snapshot is meant to
+  // capture the fully-loaded state, so wait for the repo count to
+  // materialise before taking it. `findBy*` polls until the
+  // placeholder is replaced with the "N repo(s)" label.
+  await screen.findByText(/· \d+ repos?/);
   return container;
 }
 

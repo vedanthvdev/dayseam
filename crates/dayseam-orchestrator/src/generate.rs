@@ -85,7 +85,14 @@ struct PerSourceResult {
 
 pub async fn start(orch: Orchestrator, request: GenerateRequest) -> GenerateHandle {
     let run_id = RunId::new();
-    let streams = RunStreams::new(run_id);
+    // Canonical orchestrator stream construction (ARC-03): both
+    // `generate_report` and `save_report` obtain their four channel
+    // halves through `RunStreams::with_progress`. The grep test in
+    // `tests/no_inline_run_streams_construction.rs` holds the line
+    // so a future refactor can't silently reintroduce
+    // `RunStreams::new` + `.split()` boilerplate that drifts between
+    // the two paths.
+    let (progress_tx, log_tx, progress_rx, log_rx) = RunStreams::with_progress(run_id);
     let cancel = CancellationToken::new();
 
     // Honour supersede-on-retry and install the new in-flight entry
@@ -142,7 +149,12 @@ pub async fn start(orch: Orchestrator, request: GenerateRequest) -> GenerateHand
         // `Cancelled { User }` because `superseded_by_now` now sees
         // an empty slot.
         orch.in_flight.lock().await.remove(&key);
-        let (_tx_pair, (progress_rx, log_rx)) = streams.split();
+        // Drop the senders so the returned receivers observe a closed
+        // channel immediately: the caller's UI renders the `Failed`
+        // terminal state without waiting on a stream that will never
+        // emit.
+        drop(progress_tx);
+        drop(log_tx);
         let completion = tokio::spawn(async move {
             tracing::error!(
                 run_id = %run_id,
@@ -175,10 +187,9 @@ pub async fn start(orch: Orchestrator, request: GenerateRequest) -> GenerateHand
         None
     };
 
-    // Take the stream halves apart: the senders go to the
-    // background task (it owns progress emission end-to-end), and
-    // the receivers go to the caller.
-    let ((progress_tx, log_tx), (progress_rx, log_rx)) = streams.split();
+    // The senders go to the background task (it owns progress
+    // emission end-to-end); the receivers are handed back to the
+    // caller via `GenerateHandle` further down.
 
     // Snapshot the state the background task needs. `orch` is
     // already cheap to clone.

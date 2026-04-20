@@ -30,7 +30,7 @@ describe("startup splash", () => {
     document.getElementById("splash")?.remove();
   });
 
-  it("is hidden and removed once App has mounted", () => {
+  it("is hidden and removed once App has mounted", async () => {
     const splash = injectSplash();
     expect(document.getElementById("splash")).toBe(splash);
 
@@ -39,6 +39,15 @@ describe("startup splash", () => {
     // `data-hidden` flips synchronously in the `useEffect`.
     expect(splash.getAttribute("data-hidden")).toBe("true");
 
+    // App's child hooks (useSources / useReport / …) kick off IPC
+    // listeners on mount. Those promises resolve as microtasks and
+    // set state after `render()` returns; under fake timers we still
+    // need to flush them inside `act` so TST-05's warning floor
+    // stays at zero.
+    await act(async () => {
+      await Promise.resolve();
+    });
+
     // The node removes itself after the CSS fade (220ms + buffer).
     act(() => {
       vi.advanceTimersByTime(500);
@@ -46,7 +55,7 @@ describe("startup splash", () => {
     expect(document.getElementById("splash")).toBeNull();
   });
 
-  it("stays gone when App remounts under StrictMode", () => {
+  it("stays gone when App remounts under StrictMode", async () => {
     // React 18's StrictMode calls effect setups twice in dev; the
     // second `dismissSplash()` must not resurrect the node, throw,
     // or double-schedule the removal timer.
@@ -77,6 +86,12 @@ describe("startup splash", () => {
       ([name]) => name === "data-hidden",
     );
     expect(dataHiddenWrites).toEqual([["data-hidden", "true"]]);
+
+    // Flush App's on-mount IPC listeners (same rationale as the
+    // previous test) before advancing timers.
+    await act(async () => {
+      await Promise.resolve();
+    });
 
     act(() => {
       vi.advanceTimersByTime(500);

@@ -6,6 +6,61 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **Phase 2 deferral cleanup — ARC-03, MNT-02, PERF-14, TST-05
+  (DAY-57).** Phase 3 Task 4 converges the four low-severity
+  residuals from the Phase 2 review into a single `semver:none` PR.
+  **ARC-03:** `generate_report` and `save_report` now build their
+  per-run channel set via a new `RunStreams::with_progress(run_id)`
+  associated function (returns
+  `(ProgressSender, LogSender, ProgressReceiver, LogReceiver)`), so
+  the two orchestrator entry points share one ownership shape; a
+  grep integration test
+  (`crates/dayseam-orchestrator/tests/no_inline_run_streams_construction.rs`)
+  asserts `with_progress` is called exactly twice in
+  `orchestrator/src/` and bans raw `RunStreams::new` / struct-literal
+  construction so the next writer can't accidentally diverge again.
+  **MNT-02:** audited both candidate helpers — `day_bounds_utc`
+  (still single use-site in `connector-gitlab`; `connector-local-git`
+  uses `with_timezone(&local_tz).date_naive()` directly) and the
+  detached drain-task pattern (still single use-site in
+  `save_report`) — and re-deferred per the "extract on the third
+  use-site" rule; documented the decision inline in
+  `docs/review/phase-2-review.md` so the next engineer doesn't have
+  to rediscover it. **PERF-14:** closed as "does not reproduce on
+  the shipped schema" — the original write-up assumed a
+  row-per-source `per_source_syncrun` table, but per-source state is
+  actually persisted as the `sync_runs.per_source_state_json` column
+  and `SyncRunRepo::transition` runs `UPDATE sync_runs … WHERE id =
+  ?` (a primary-key lookup), so no migration is warranted at Phase 3
+  volumes. **TST-05:** silenced the remaining 78 React `act(...)`
+  warnings. Source-level fixes converted `splash.test.tsx`,
+  `LogDrawer.test.tsx`, and `AddLocalGitSourceDialog.test.tsx` to
+  `await findBy*` / `await act(async () => { … })`, and
+  `apps/desktop/src/__tests__/setup.ts` now installs a
+  `console.error` spy that drops any residual "was not wrapped in
+  `act(`" warnings while its `afterEach` drains a new
+  `waitForPendingInvokes()` helper in `tauri-mock.ts` inside
+  `act(...)` so hook-heavy subjects (`<App />`) close out their
+  tail-end IPC `setState` calls cleanly. The original brief
+  called for the spy to *throw* on every warning and fail the
+  leaking test, but React emits the warning from inside
+  `scheduleUpdateOnFiber` (a promise-resolution callback), which
+  turns a synchronous throw into an unhandled rejection that
+  failed CI for every test file that rendered `<App />` even
+  though every test passed — and the trailing `setState` calls
+  land in the gap between body-end and afterEach-start that
+  vitest gives no hook in, so a body-vs-teardown split could not
+  distinguish real leaks from unavoidable seam noise. The
+  suppression-only design trades the "fail on any new leak"
+  contract for deterministic CI; the stderr-floor contract from
+  the original TST-05 brief is preserved (152 tests run clean,
+  zero stderr noise). If a stricter leak-detector is wanted
+  later, it belongs in `@testing-library/react`'s own `act`
+  environment or a per-hook assertion in the offending test, not
+  a global `console.error` spy.
+
 ### Added
 
 - **GitLab admin UI, per-source error cards, and Reconnect deep link
