@@ -8,14 +8,28 @@ evidence-linked report of what you actually did on a given day. Pick a
 date, click generate, and get a clean markdown report you can save to
 disk or drop into your Obsidian vault.
 
-> **Status: Phase 1 foundations landed; not yet shippable.** The
-> workspace now includes the Rust core crates (`dayseam-core`,
-> `dayseam-db`, `dayseam-secrets`, `dayseam-events`, `dayseam-report`,
-> `connectors-sdk`, `sinks-sdk`) and a Tauri 2 desktop shell with typed
-> IPC, a log drawer, and a toast system — but no real source connectors
-> or sinks yet. The first user-visible milestone (v0.1) will ship as a
-> Mac app with local git and self-hosted GitLab sources and a
-> markdown/Obsidian sink.
+> **Status: Phase 3 in flight; v0.1.0 targets a tagged GitHub
+> Release.** The Rust workspace, Tauri 2 desktop shell, local-git
+> connector, GitLab connector, cross-source dedup, markdown sink,
+> and Playwright E2E suite are all landed on `master`. Phase 3
+> closes with a universal-macOS `.dmg` published through GitHub
+> Releases (this PR's work) and the v0.1.0 capstone that flips
+> `VERSION` from `0.0.0` to `0.1.0`.
+
+## Install
+
+Once v0.1.0 lands, download the latest DMG from the
+[GitHub Releases page](https://github.com/vedanthvdev/dayseam/releases).
+v0.1.0 ships **unsigned**, so macOS Gatekeeper will require you to
+right-click → Open on the first launch; see
+[`docs/release/UNSIGNED-FIRST-RUN.md`](./docs/release/UNSIGNED-FIRST-RUN.md)
+for the two-click path and the macOS 15 Sequoia variant. Real
+Developer ID codesign + notarization is tracked as
+[Phase 3.5 / v0.1.1](https://github.com/vedanthvdev/dayseam/issues/59)
+and will land in a subsequent release.
+
+Requirements: macOS 13 (Ventura) or newer. Windows and Linux
+builds are on the v0.6 roadmap.
 
 ## Why
 

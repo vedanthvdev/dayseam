@@ -6,6 +6,59 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **Release engineering — universal `.dmg`, GitHub Release workflow,
+  Gatekeeper-bypass README (DAY-59).** Phase 3 Task 6 lands the
+  release-automation spine v0.1.0 will ship through. A new
+  `.github/workflows/release.yml` (macOS-latest runner,
+  `contents: write` and nothing else) triggers on merged PRs carrying
+  `semver:patch`/`minor`/`major` labels — and on manual
+  `workflow_dispatch` for step 6.5's dry-run — pre-flights the
+  CHANGELOG's `[Unreleased]` section for non-emptiness, resolves the
+  target version via `scripts/release/bump-version.sh`, builds the
+  universal bundle via `scripts/release/build-dmg.sh` (which runs
+  `pnpm --filter @dayseam/desktop exec tauri build --target
+  universal-apple-darwin` and copies the `.dmg` to
+  `dist/release/Dayseam-vX.Y.Z.dmg` with a sibling `.sha256`),
+  asserts the fused binary carries both `arm64` and `x86_64` slices
+  via `lipo -archs`, and `nm`-greps the binary to hold the Phase 1
+  dev-commands-feature-gate invariant (`dev_emit_toast` /
+  `dev_start_demo_run` must not be present in a release build). On
+  real runs it commits `chore(release): vX.Y.Z`, tags `vX.Y.Z`, and
+  creates a GitHub Release with the `.dmg` + `.sha256` attached and
+  the CHANGELOG-derived body; on dry-runs it stops after uploading
+  the DMG as a workflow artefact with 30-day retention so a
+  maintainer can double-click it on a fresh Mac to verify the
+  Gatekeeper-bypass docs. `bump-version.sh` is idempotent by design
+  (pre-bumped trees are a no-op, re-running with the same inputs is
+  a byte-for-byte no-op, `semver:none` short-circuits immediately)
+  and is covered by a six-case `scripts/release/test-bump-version.sh`
+  bash harness that stages scratch repos to exercise each semver
+  level plus the idempotency and pre-bumped-tree contracts.
+  `apps/desktop/src-tauri/tauri.conf.json` pins
+  `bundle.targets = ["app","dmg"]` and
+  `bundle.macOS.minimumSystemVersion = "13.0"` so the bundler emits
+  the DMG without post-processing and the binary advertises its
+  macOS 13+ support floor (also reflected in the README's install
+  section). Two new release docs land: user-facing
+  [`docs/release/UNSIGNED-FIRST-RUN.md`](docs/release/UNSIGNED-FIRST-RUN.md)
+  walks the right-click-Open Gatekeeper path (including the macOS
+  15 Sequoia System-Settings variant) and the optional SHA-256
+  download-verification recipe; internal
+  [`docs/release/PHASE-3-5-CODESIGN.md`](docs/release/PHASE-3-5-CODESIGN.md)
+  is the living spec for the real Developer ID + notarytool path,
+  including the Apple Developer provisioning checklist, the
+  required GitHub Actions secrets, the `codesign` + `notarytool` +
+  `stapler` diff against the shipped `release.yml`, and the
+  `tauri.conf.json` `macOS.hardenedRuntime` + `entitlements.plist`
+  wiring. The codesign work is tracked as
+  [#59](https://github.com/vedanthvdev/dayseam/issues/59) and is
+  cross-referenced from this entry, the plan, the README, the
+  unsigned-first-run doc, and (once Task 9 ships) the v0.1.0
+  release notes. No version bump in this PR; VERSION still reads
+  `0.0.0` and Task 9's capstone will flip it.
+
 ### Changed
 
 - **Phase 2 deferral cleanup — ARC-03, MNT-02, PERF-14, TST-05

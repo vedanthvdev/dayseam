@@ -28,7 +28,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["app", "dmg"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -38,6 +38,9 @@
     "category": "Productivity",
     "copyright": "Copyright (c) Dayseam contributors",
     "shortDescription": "Local-first automated work reporting.",
-    "longDescription": "Dayseam collects evidence of your day across local git and GitLab, generates an editable report, and saves it to markdown or Obsidian."
+    "longDescription": "Dayseam collects evidence of your day across local git and GitLab, generates an editable report, and saves it to markdown or Obsidian.",
+    "macOS": {
+      "minimumSystemVersion": "13.0"
+    }
   }
 }

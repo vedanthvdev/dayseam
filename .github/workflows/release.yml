@@ -1,0 +1,252 @@
+name: release
+
+# Triggers on every closed PR; the `if` gate below restricts real runs
+# to PRs that (a) actually merged and (b) carried a `semver:patch`,
+# `semver:minor`, or `semver:major` label. `semver:none` PRs never
+# reach the release job — that is the entire contract the `check-
+# semver-label` workflow exists to enforce on the way in.
+#
+# The manual `workflow_dispatch` path is the dry-run surface Task 6
+# step 6.5 calls out: `gh workflow run release.yml -f level=minor -f
+# dry_run=true` on this branch should build the universal `.dmg`
+# without creating a tag or a GitHub Release, so a maintainer can
+# double-click the artefact on a local Mac to validate the
+# Gatekeeper-bypass docs before opening a real release.
+on:
+  pull_request:
+    types: [closed]
+  workflow_dispatch:
+    inputs:
+      level:
+        description: "Semver level to bump (patch / minor / major / none)"
+        required: true
+        default: "none"
+      dry_run:
+        description: "If true, build the DMG but skip tagging and the GitHub Release"
+        required: true
+        default: "true"
+
+# Deliberate minimal token posture: `contents: write` is the only
+# scope the release job needs (to push the `chore(release):` commit,
+# create the tag, and upload assets to the GitHub Release). The
+# Phase 3.5 codesign issue tracks adding `APPLE_*` environment
+# secrets scoped to a future `release` environment; they are
+# intentionally absent here because v0.1.0 ships unsigned.
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: release
+    # Only run on merged PRs that carry a bump-worthy semver label,
+    # or on a manual dispatch. The label-presence check reads off
+    # `github.event.pull_request.labels`, which GitHub populates on
+    # the closed event when the PR had them at merge time.
+    if: >
+      (github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.merged == true &&
+        (contains(github.event.pull_request.labels.*.name, 'semver:patch') ||
+         contains(github.event.pull_request.labels.*.name, 'semver:minor') ||
+         contains(github.event.pull_request.labels.*.name, 'semver:major')))
+    runs-on: macos-latest
+    steps:
+      - name: Checkout (fetch tags so bump-version.sh can read previous release)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.merge_commit_sha || github.ref }}
+
+      # Extract the semver level from the PR label (for merged PRs) or
+      # the workflow input (for manual dispatch). The dry-run flag
+      # follows the same split — PRs always run the "real" path,
+      # workflow_dispatch defaults to dry-run so the step 6.5 dry-run
+      # is the safe default.
+      - name: Resolve semver level + dry-run flag
+        id: level
+        env:
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          DISPATCH_LEVEL: ${{ github.event.inputs.level }}
+          DISPATCH_DRY_RUN: ${{ github.event.inputs.dry_run }}
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          if [[ "$EVENT_NAME" == "workflow_dispatch" ]]; then
+            echo "level=$DISPATCH_LEVEL" >>"$GITHUB_OUTPUT"
+            echo "dry_run=$DISPATCH_DRY_RUN" >>"$GITHUB_OUTPUT"
+          else
+            level="$(printf '%s' "$PR_LABELS" | jq -r '.[] | select(startswith("semver:"))' | head -n 1 | sed 's/^semver://')"
+            if [[ -z "$level" || "$level" == "none" ]]; then
+              echo "No bump-worthy semver label found on merged PR; this should have been filtered by the job-level if." >&2
+              exit 1
+            fi
+            echo "level=$level" >>"$GITHUB_OUTPUT"
+            echo "dry_run=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      # Pre-flight gate: refuse to release if the CHANGELOG's
+      # `[Unreleased]` section is empty. An empty release notes block
+      # is a smell (either the PR forgot to document, or the release
+      # is vacuous) and the workflow should fail fast, not publish.
+      - name: Preflight — CHANGELOG Unreleased section is non-empty
+        run: |
+          body="$(awk '
+            /^## \[Unreleased\]/ { in_block = 1; next }
+            /^## \[/ { in_block = 0 }
+            in_block { print }
+          ' CHANGELOG.md | sed -E '/^[[:space:]]*$/d' | sed -E '/^###/d')"
+          if [[ -z "$body" ]]; then
+            echo "::error::CHANGELOG.md [Unreleased] section has no entries; refusing to release." >&2
+            exit 1
+          fi
+          printf '==> Unreleased section preview:\n%s\n' "$body" | head -n 20
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: pnpm
+
+      - name: Install frontend dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install Rust toolchain (matches rust-toolchain.toml)
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.88.0"
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+
+      # Resolve the target version. For the capstone PR 9 (semver:minor
+      # from 0.0.0) the tree is already pre-bumped to 0.1.0 so this is
+      # a no-op read; for every later release the script computes the
+      # bump from the most recent git tag and rewrites the three
+      # version-bearing files.
+      - name: Compute target version via bump-version.sh
+        id: bump
+        run: |
+          version="$(scripts/release/bump-version.sh ${{ steps.level.outputs.level }})"
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+          echo "==> Target version: v$version"
+
+      - name: Build universal .dmg via build-dmg.sh
+        id: build
+        env:
+          CI: "1"
+        run: |
+          dmg="$(scripts/release/build-dmg.sh ${{ steps.bump.outputs.version }} | tail -n 1)"
+          echo "dmg=$dmg" >>"$GITHUB_OUTPUT"
+          echo "==> DMG artefact: $dmg"
+
+      # Universal-bundle assertion: the fused binary inside the .app
+      # MUST carry both arm64 and x86_64 slices. `lipo -archs` emits a
+      # space-separated list we grep to fail-fast on a thin build.
+      - name: Assert universal binary (arm64 + x86_64)
+        run: |
+          app="apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Dayseam.app"
+          bin="$app/Contents/MacOS/Dayseam"
+          if [[ ! -f "$bin" ]]; then
+            echo "::error::Binary not found at $bin" >&2
+            exit 1
+          fi
+          archs="$(lipo -archs "$bin")"
+          echo "==> lipo -archs: $archs"
+          if ! [[ "$archs" == *"arm64"* && "$archs" == *"x86_64"* ]]; then
+            echo "::error::Binary is not universal (archs: $archs)" >&2
+            exit 1
+          fi
+
+      # Dev-commands symbol guard: Phase 1 split the dev-only IPC
+      # commands (`dev_emit_toast`, `dev_start_demo_run`) behind a
+      # cargo feature so release bundles cannot expose them. This
+      # post-build `nm` check re-asserts that invariant at the
+      # already-built binary, so a future regression (say, someone
+      # flipping the feature default, or a Tauri bundler change
+      # silently linking a dev-only crate) shows up as a CI red here
+      # instead of as a shipped attack surface.
+      - name: Assert release binary has no dev-only IPC symbols
+        run: |
+          bin="apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/macos/Dayseam.app/Contents/MacOS/Dayseam"
+          forbidden="$(nm -g "$bin" 2>/dev/null | grep -E 'dev_emit_toast|dev_start_demo_run' || true)"
+          if [[ -n "$forbidden" ]]; then
+            echo "::error::Release binary exposes dev-only IPC symbols:" >&2
+            echo "$forbidden" >&2
+            exit 1
+          fi
+          echo "==> No dev-only IPC symbols present in release binary."
+
+      # Surface the artefact on the workflow run regardless of dry-run
+      # status so even a dry-run leaves a downloadable DMG a
+      # maintainer can install on a fresh Mac to verify the
+      # Gatekeeper-bypass docs still match reality.
+      - name: Upload DMG as workflow artefact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dayseam-v${{ steps.bump.outputs.version }}
+          path: |
+            dist/release/Dayseam-v${{ steps.bump.outputs.version }}.dmg
+            dist/release/Dayseam-v${{ steps.bump.outputs.version }}.dmg.sha256
+          retention-days: 30
+
+      # Commit the version bump (if files changed) so the tagged SHA
+      # carries the right `version` metadata. A pre-bumped tree (Task
+      # 9 capstone) has nothing to commit and the step no-ops.
+      - name: Commit version bump (if any)
+        if: steps.level.outputs.dry_run != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if [[ -n "$(git status --porcelain VERSION Cargo.toml apps/desktop/src-tauri/tauri.conf.json 2>/dev/null || true)" ]]; then
+            git add VERSION Cargo.toml apps/desktop/src-tauri/tauri.conf.json
+            git commit -m "chore(release): v${{ steps.bump.outputs.version }}"
+            git push origin HEAD:master
+          else
+            echo "==> Version bump already present on master; nothing to commit."
+          fi
+
+      - name: Tag the release
+        if: steps.level.outputs.dry_run != 'true'
+        run: |
+          tag="v${{ steps.bump.outputs.version }}"
+          if git rev-parse "$tag" >/dev/null 2>&1; then
+            echo "==> Tag $tag already exists; skipping."
+            exit 0
+          fi
+          git tag -a "$tag" -m "Dayseam $tag"
+          git push origin "$tag"
+
+      # Publish the GitHub Release with the DMG + SHA-256 attached.
+      # The body is the CHANGELOG's Unreleased section verbatim, which
+      # preserves the phase-review shape (bullets + links) without
+      # introducing a second authoring surface. `gh release create
+      # --latest` makes this the project's latest release exactly once
+      # per tagged version.
+      - name: Publish GitHub Release
+        if: steps.level.outputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.bump.outputs.version }}
+          DMG: ${{ steps.build.outputs.dmg }}
+        run: |
+          body_file="$(mktemp)"
+          awk '
+            /^## \[Unreleased\]/ { in_block = 1; next }
+            /^## \[/ { in_block = 0 }
+            in_block { print }
+          ' CHANGELOG.md >"$body_file"
+          if [[ ! -s "$body_file" ]]; then
+            echo "::error::Release body is empty after CHANGELOG slice." >&2
+            exit 1
+          fi
+          gh release create "v${VERSION}" \
+            "${DMG}" \
+            "${DMG}.sha256" \
+            --title "Dayseam v${VERSION}" \
+            --notes-file "$body_file" \
+            --latest
