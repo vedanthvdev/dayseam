@@ -8,6 +8,19 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **Phase 3 plan published.**
+  [`docs/plan/2026-04-20-v0.1-phase-3-gitlab-release.md`](docs/plan/2026-04-20-v0.1-phase-3-gitlab-release.md)
+  is the implementation plan for v0.1 Phase 3 (GitLab connector,
+  per-source error cards, cross-source `CommitAuthored` dedup,
+  Playwright E2E happy path, downloadable `.dmg`, first tagged
+  GitHub release). Nine PRs total: PRs 1–8 carry `semver:none`; the
+  capstone PR 9 carries `semver:minor` and flips `VERSION` from
+  `0.0.0` to `0.1.0`. Two scope decisions are recorded inline with
+  the plan: v0.1.0 ships **unsigned** with a documented Gatekeeper
+  bypass (real Developer ID codesign tracked as Phase 3.5 / v0.1.1),
+  and the Phase 2 dogfood sweep is folded into Task 8 (Phase 3
+  hardening) rather than retroactively reopened. `docs/plan/README.md`
+  is updated to point at the new plan.
 - **Source chip edit + delete.** Local-git source chips now expose an
   Edit (✎) and Delete (✕) affordance on hover (or keyboard focus).
   Edit reopens `AddLocalGitSourceDialog` in edit mode with the label
