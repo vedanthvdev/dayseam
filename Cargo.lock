@@ -1044,6 +1044,7 @@ dependencies = [
  "dayseam-db",
  "dayseam-events",
  "dayseam-report",
+ "serde_json",
  "sink-markdown-file",
  "sinks-sdk",
  "sqlx",

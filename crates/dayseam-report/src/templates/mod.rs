@@ -27,7 +27,9 @@ pub const DEV_EOD_TEMPLATE_ID: &str = "dayseam.dev_eod";
 /// * `2026-04-20` — DAY-52: one bullet per commit for `CommitSet`
 ///   groups, inline short-SHA in verbose mode, and `rollup`-side
 ///   deduplication of `CommitSet` groups that share a repo/date.
-pub const DEV_EOD_TEMPLATE_VERSION: &str = "2026-04-20";
+/// * `2026-04-22` — Phase 3 Task 2: cross-source `CommitAuthored`
+///   dedup + `rolled_into_mr` annotation visible in verbose mode.
+pub const DEV_EOD_TEMPLATE_VERSION: &str = "2026-04-22";
 
 /// Build a fresh [`Handlebars`] registry with every bundled template
 /// + partial registered.

@@ -45,3 +45,7 @@ tempfile = "3"
 # and forbid the orchestrator from depending on any Tauri / desktop
 # crate — the orchestrator must stay usable from a future CLI.
 cargo_metadata = "0.19"
+# Task 2's multi-source dedup test constructs an MR event with a
+# `commit_shas` metadata array so the orchestrator's rollup pass
+# observes the same shape the future GitLab MR enrichment will emit.
+serde_json = { workspace = true }

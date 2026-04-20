@@ -26,12 +26,21 @@ use crate::error::ReportError;
 /// [`crate::render::CommitBulletCtx`] (see `render.rs`).
 ///
 /// * Non-verbose: `{{headline}}` — a single markdown bullet.
-/// * Verbose: `{{headline}} · `{{short_sha}}`` — the plain text is
-///   a strict prefix of the verbose text, which
+/// * Verbose: `{{headline}} · `{{short_sha}}` (rolled into !42)` —
+///   the short-SHA and the optional `(rolled into !N)` suffix both
+///   render only when `verbose_mode` is true. The plain text is a
+///   strict prefix of the verbose text, which
 ///   `tests/invariants.rs::verbose_mode_only_adds_bullets`
-///   depends on.
-const SECTION_COMMITS: &str =
-    "{{headline}}{{#if verbose_mode}}{{#if short_sha}} · `{{short_sha}}`{{/if}}{{/if}}";
+///   depends on. The `(rolled into !N)` suffix lands here per
+///   Phase 3 Task 2 when the orchestrator's
+///   `annotate_rolled_into_mr` pass stamps the event with an MR iid.
+const SECTION_COMMITS: &str = concat!(
+    "{{headline}}",
+    "{{#if verbose_mode}}",
+    "{{#if short_sha}} · `{{short_sha}}`{{/if}}",
+    "{{#if rolled_into_mr}} (rolled into {{rolled_into_mr}}){{/if}}",
+    "{{/if}}",
+);
 
 pub(crate) fn register(reg: &mut Handlebars<'_>) -> Result<(), ReportError> {
     reg.register_partial("section_commits", SECTION_COMMITS)

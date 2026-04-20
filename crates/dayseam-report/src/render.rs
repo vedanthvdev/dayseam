@@ -224,6 +224,11 @@ fn render_commit_bullet(
             } else {
                 None
             },
+            rolled_into_mr: if verbose_mode {
+                rolled_into_mr_label(event)
+            } else {
+                None
+            },
         };
         registry
             .render(PARTIAL_SECTION_COMMITS, &ctx)
@@ -257,6 +262,22 @@ fn commit_headline(repo_path: &std::path::Path, event: &ActivityEvent) -> String
 
 fn short_sha(sha: &str) -> String {
     sha.chars().take(7).collect()
+}
+
+/// Format the `rolled_into_mr` label for the verbose-mode suffix.
+///
+/// Returns `Some("!42")` when the event carries a GitLab-style MR
+/// iid (a string starting with `!`). Plain parent ids without a
+/// leading `!` (e.g. GitHub's `#123`, future connectors' own
+/// schemes) are passed through verbatim so the template stays
+/// connector-agnostic. `None` means "no MR annotation to render".
+///
+/// A future connector adding a non-iid parent on a `CommitAuthored`
+/// would show up here as-is; the template-level contract is "if
+/// `parent_external_id` is set, show it in parentheses". Mis-set
+/// parents are a connector bug, not a render concern.
+fn rolled_into_mr_label(event: &ActivityEvent) -> Option<String> {
+    event.parent_external_id.clone()
 }
 
 // ---- id computation -------------------------------------------------------
@@ -325,4 +346,10 @@ struct CommitBulletCtx {
     headline: String,
     verbose_mode: bool,
     short_sha: Option<String>,
+    /// When the event's `parent_external_id` points at an MR (set by
+    /// the orchestrator's `annotate_rolled_into_mr` pass), the
+    /// verbose-mode template renders `(rolled into !42)` after the
+    /// short-SHA suffix. `None` in non-verbose mode or when the
+    /// commit is not part of any MR.
+    rolled_into_mr: Option<String>,
 }

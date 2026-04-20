@@ -35,7 +35,10 @@ use dayseam_core::{
     SyncRunStatus, SyncRunTrigger,
 };
 use dayseam_events::{LogReceiver, ProgressReceiver, ProgressSender, RunStreams};
-use dayseam_report::{ReportInput, DEV_EOD_TEMPLATE_ID};
+use dayseam_report::{
+    annotate_rolled_into_mr, dedup_commit_authored, MergeRequestArtifact, ReportInput,
+    DEV_EOD_TEMPLATE_ID,
+};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -345,6 +348,24 @@ async fn run_background(
     // failed, local git is still complete" rather than a silently
     // incomplete report.
     let (events, artifacts, per_source_state, per_source_syncrun) = split_fan_out(per_source);
+
+    // Phase 3 Task 2: cross-source `CommitAuthored` dedup +
+    // `rolled_into_mr` rollup. Both passes are pure functions and
+    // run before `activity_events` is persisted so the on-disk
+    // table never carries two rows for the same SHA (which would
+    // re-inflate the bullet count on a later regen via the
+    // `INSERT OR IGNORE` path). Order matters: dedup collapses
+    // collisions first so the MR-rollup pass sees one canonical
+    // event per SHA, then rollup stamps each surviving
+    // `CommitAuthored` with the MR iid whose commit list claims
+    // its SHA. Single-source inputs (v0.1 local-git-only
+    // deployments) walk both passes as no-ops: `dedup` emits its
+    // input unchanged when no SHA collides, and `annotate` is
+    // gated behind a non-empty MR list.
+    let events = dedup_commit_authored(events);
+    let mrs = collect_mr_artifacts(&events);
+    let mut events = events;
+    annotate_rolled_into_mr(&mut events, &mrs);
 
     // Persist the raw `activity_events` to disk before render. The
     // evidence popover in the UI hydrates `ReportDraft::evidence`
@@ -691,6 +712,49 @@ fn split_fan_out(
     }
 
     (events, artifacts, per_source_state, per_source_syncrun)
+}
+
+/// Extract a [`MergeRequestArtifact`] per MR event that carries a
+/// `commit_shas` list in its `metadata`.
+///
+/// The GitLab connector's per-MR enrichment (Phase 3 follow-up)
+/// stashes the branch's commit SHAs under `metadata.commit_shas` on
+/// each `MrOpened` / `MrMerged` / `MrClosed` / `MrApproved` event so
+/// the report engine can thread them through
+/// [`annotate_rolled_into_mr`] without minting a new artifact kind.
+/// Events without the field contribute nothing — a
+/// local-git-only run returns an empty vec and the MR-rollup pass
+/// is a no-op.
+fn collect_mr_artifacts(events: &[ActivityEvent]) -> Vec<MergeRequestArtifact> {
+    use dayseam_core::ActivityKind::{MrApproved, MrClosed, MrMerged, MrOpened};
+
+    let mut by_id: std::collections::BTreeMap<String, MergeRequestArtifact> =
+        std::collections::BTreeMap::new();
+    for event in events {
+        if !matches!(event.kind, MrOpened | MrMerged | MrClosed | MrApproved) {
+            continue;
+        }
+        let Some(array) = event.metadata.get("commit_shas").and_then(|v| v.as_array()) else {
+            continue;
+        };
+        let shas: Vec<String> = array
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_string))
+            .collect();
+        if shas.is_empty() {
+            continue;
+        }
+        // Latest event for a given MR wins — an `MrMerged` with a
+        // fuller commit list supersedes an earlier `MrOpened`.
+        by_id.insert(
+            event.external_id.clone(),
+            MergeRequestArtifact {
+                external_id: event.external_id.clone(),
+                commit_shas: shas,
+            },
+        );
+    }
+    by_id.into_values().collect()
 }
 
 /// `run_id` is no longer the in-flight entry for `key`. Returns the

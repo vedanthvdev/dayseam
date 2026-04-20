@@ -8,6 +8,23 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **Cross-source `CommitAuthored` dedup and `rolled_into_mr`
+  annotation (DAY-55).** Phase 3 Task 2 lands two pure helpers in
+  `dayseam-report` — `dedup_commit_authored` and
+  `annotate_rolled_into_mr` — and wires them into the orchestrator's
+  generate pipeline between `split_fan_out` and the
+  `activity_events` insert. When local-git and GitLab both emit a
+  `CommitAuthored` for the same commit SHA, dedup keeps the row
+  with the longer `body` (lex-smallest `source_id` breaks ties),
+  unions `links` and `entities`, and monotonically upgrades
+  `privacy` to `RedactedPrivateRepo` if either side carries it.
+  The MR-rollup pass then stamps each surviving `CommitAuthored`
+  with `parent_external_id = Some(mr.external_id)` when the MR
+  event's `metadata.commit_shas` claims that SHA. Verbose-mode
+  `dev_eod` bullets on rolled-up commits render a
+  `(rolled into !42)` suffix; plain mode is unchanged.
+  `DEV_EOD_TEMPLATE_VERSION` bumps from `2026-04-20` to
+  `2026-04-22` so every draft header flags the behavioural change.
 - **GitLab connector (DAY-54).** Introduces the `connector-gitlab`
   crate with PAT-backed authentication (`read_api`), a day-window
   Events API walker, and schema-drift-tolerant normalisation into

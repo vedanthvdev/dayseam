@@ -17,15 +17,19 @@
 
 #![deny(missing_docs)]
 
+mod dedup;
 mod error;
 mod input;
 mod render;
 mod rollup;
+mod rollup_mr;
 mod templates;
 
 pub use dayseam_core::{Evidence, RenderedBullet, RenderedSection, ReportDraft};
+pub use dedup::dedup_commit_authored;
 pub use error::ReportError;
 pub use input::ReportInput;
+pub use rollup_mr::{annotate_rolled_into_mr, MergeRequestArtifact};
 pub use templates::{DEV_EOD_TEMPLATE_ID, DEV_EOD_TEMPLATE_VERSION};
 
 /// Render a [`ReportInput`] into a [`ReportDraft`].

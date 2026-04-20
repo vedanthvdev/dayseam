@@ -360,6 +360,157 @@ fn dev_eod_deduplicates_same_repo_across_sources() {
     assert_eq!(ids.len(), bullets.len(), "duplicate bullet ids: {ids:?}");
 }
 
+/// Phase 3 Task 2: cross-source `CommitAuthored` dedup. Local-git
+/// and GitLab both emit a `CommitAuthored` on the same SHA; after
+/// the orchestrator-side `dedup_commit_authored` pass the render
+/// shows exactly one bullet, and the surviving event carries the
+/// union of links (so the UI's evidence popover can still deep-link
+/// to both the local working copy and the GitLab commit page).
+#[test]
+fn dev_eod_dedups_commitauthored_across_sources() {
+    use dayseam_core::Link;
+
+    let src_local = source_id(14);
+    let src_gitlab = source_id(15);
+    let mut input = fixture_input();
+    input.source_identities = vec![
+        self_git_identity(src_local, "self@example.com"),
+        self_git_identity(src_gitlab, "self@example.com"),
+    ];
+
+    let sha = "sha3ph32";
+    let mut local = commit_event(
+        src_local,
+        sha,
+        "/work/dayseam",
+        "self@example.com",
+        9,
+        "feat: cross-source dedup",
+        Privacy::Normal,
+    );
+    local.links = vec![Link {
+        url: "file:///work/dayseam/.git".into(),
+        label: Some("local".into()),
+    }];
+    // The GitLab-side row carries a longer body so the dedup
+    // pass picks it as the canonical survivor.
+    let mut gitlab = commit_event(
+        src_gitlab,
+        sha,
+        "/work/dayseam",
+        "self@example.com",
+        9,
+        "feat: cross-source dedup",
+        Privacy::Normal,
+    );
+    gitlab.body = Some("Long GitLab-enriched commit message".into());
+    gitlab.links = vec![Link {
+        url: format!("https://gitlab.example/commit/{sha}"),
+        label: Some("gitlab".into()),
+    }];
+
+    let deduped = dayseam_report::dedup_commit_authored(vec![local, gitlab]);
+    assert_eq!(deduped.len(), 1, "dedup must collapse cross-source SHA");
+    assert_eq!(
+        deduped[0].source_id, src_gitlab,
+        "richer body wins (GitLab-enriched row)"
+    );
+    assert_eq!(deduped[0].links.len(), 2, "links unioned across sources");
+
+    input.events = deduped;
+    // Leave `artifacts` empty so the rollup mints a synthetic
+    // `CommitSet` for the single surviving event — this matches the
+    // orchestrator shape when no connector pre-grouped.
+    input.per_source_state.insert(src_local, succeeded_state(1));
+    input
+        .per_source_state
+        .insert(src_gitlab, succeeded_state(1));
+
+    let draft = dayseam_report::render(input).expect("render must succeed");
+    let bullets: Vec<&str> = draft
+        .sections
+        .iter()
+        .flat_map(|s| s.bullets.iter().map(|b| b.text.as_str()))
+        .collect();
+    assert_eq!(
+        bullets.len(),
+        1,
+        "one bullet per SHA regardless of producer count, got: {bullets:?}"
+    );
+    assert!(
+        bullets[0].contains("feat: cross-source dedup"),
+        "bullet text missing commit title: {bullets:?}"
+    );
+}
+
+/// Phase 3 Task 2: verbose mode renders `(rolled into !N)` when the
+/// orchestrator's `annotate_rolled_into_mr` pass stamped the MR iid
+/// on a `CommitAuthored`. The plain-mode rendering is unchanged (the
+/// verbose suffix only lives behind the `verbose_mode` gate).
+#[test]
+fn dev_eod_verbose_annotates_rolled_into_mr() {
+    use dayseam_report::{annotate_rolled_into_mr, MergeRequestArtifact};
+
+    let src = source_id(16);
+    let mut input = fixture_input();
+    input.source_identities = vec![self_git_identity(src, "self@example.com")];
+    input.verbose_mode = true;
+
+    let c_on_mr = commit_event(
+        src,
+        "mr111111",
+        "/work/dayseam",
+        "self@example.com",
+        9,
+        "feat: MR part one",
+        Privacy::Normal,
+    );
+    let c_outside = commit_event(
+        src,
+        "solo2222",
+        "/work/dayseam",
+        "self@example.com",
+        10,
+        "chore: unrelated",
+        Privacy::Normal,
+    );
+
+    let mut events = vec![c_on_mr, c_outside];
+    annotate_rolled_into_mr(
+        &mut events,
+        &[MergeRequestArtifact {
+            external_id: "!42".into(),
+            commit_shas: vec!["mr111111".into()],
+        }],
+    );
+    input.events = events;
+    input.per_source_state.insert(src, succeeded_state(2));
+
+    let draft = dayseam_report::render(input).expect("render must succeed");
+    let bullets: Vec<&str> = draft
+        .sections
+        .iter()
+        .flat_map(|s| s.bullets.iter().map(|b| b.text.as_str()))
+        .collect();
+    let on_mr_bullet = bullets
+        .iter()
+        .find(|b| b.contains("MR part one"))
+        .unwrap_or_else(|| panic!("on-MR bullet missing, bullets: {bullets:?}"));
+    assert!(
+        on_mr_bullet.contains("(rolled into !42)"),
+        "verbose bullet missing (rolled into !42) suffix: {on_mr_bullet:?}"
+    );
+
+    let outside_bullet = bullets
+        .iter()
+        .find(|b| b.contains("unrelated"))
+        .unwrap_or_else(|| panic!("outside bullet missing, bullets: {bullets:?}"));
+    assert!(
+        !outside_bullet.contains("rolled into"),
+        "non-MR bullet must not carry the rolled-into suffix: {outside_bullet:?}"
+    );
+}
+
 /// Sanity: `generated_at` threads through untouched. If the engine
 /// ever starts calling `Utc::now()` this test catches it — drift
 /// here is a leaked side-effect, not a template change.

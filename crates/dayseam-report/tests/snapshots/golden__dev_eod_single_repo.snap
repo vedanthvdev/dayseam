@@ -5,7 +5,7 @@ expression: draft
 id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
 date: 2026-04-18
 template_id: dayseam.dev_eod
-template_version: 2026-04-20
+template_version: 2026-04-22
 sections:
   - id: commits
     title: Commits
