@@ -117,13 +117,15 @@ jobs:
       # is a smell (either the PR forgot to document, or the release
       # is vacuous) and the workflow should fail fast, not publish.
       #
-      # The helper prefers `[Unreleased]` (the normal contributor-
-      # authored shape) and falls back to `[$TARGET]` for Task 9-style
-      # capstone PRs that close the section inside the PR itself. The
-      # extracted body is written to $RUNNER_TEMP/release-notes.md so
-      # the later `gh release create --notes-file` call reuses exactly
-      # what preflight validated — no second extraction, no drift
-      # between gate and body.
+      # The helper prefers the explicit `[$TARGET]` section (the Task
+      # 9-style capstone shape, and the only correct choice once
+      # `[Unreleased]` has started accumulating entries for a *later*
+      # release) and falls back to `[Unreleased]` for normal
+      # `semver:patch` bumps where no `[$TARGET]` block exists yet.
+      # The extracted body is written to $RUNNER_TEMP/release-notes.md
+      # so the later `gh release create --notes-file` call reuses
+      # exactly what preflight validated — no second extraction, no
+      # drift between gate and body.
       - name: Preflight — extract release notes and assert non-empty
         id: notes
         env:

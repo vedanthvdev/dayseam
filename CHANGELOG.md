@@ -8,6 +8,22 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Fixed
 
+- **Release notes extraction prefers `[$TARGET]` over `[Unreleased]`
+  (DAY-64).** DAY-63 shipped `scripts/release/extract-release-notes.sh`
+  with `[Unreleased]` as the first choice and `[$TARGET]` as the
+  fallback — the right order for a normal `semver:patch` bump where
+  only `[Unreleased]` exists, but the *wrong* order the moment the
+  CHANGELOG contains both a populated `[Unreleased]` (DAY-63's own
+  entry, accumulating for v0.1.1) and an explicit `[0.1.0]` block
+  from the Task 9 capstone. Dispatching v0.1.0 under that shape
+  would publish the DAY-63 infrastructure notes as the v0.1.0
+  release body. This change flips the priority so the explicit
+  `[$TARGET]` section wins when present, with `[Unreleased]` as
+  the fallback for normal patch/minor bumps. Test coverage in
+  `scripts/release/test-extract-release-notes.sh` was rewritten to
+  prove both shapes and to guard the subheader-only vacuity check
+  under the new ordering. Ships `semver:none` because only the
+  release tooling behaviour changes.
 - **Release workflow unblocks v0.1.0 and all future releases (DAY-63).**
   The v0.1.0 capstone surfaced two latent bugs in `release.yml` the
   moment it ran for real: (1) the CHANGELOG preflight gate only
@@ -22,9 +38,11 @@ All notable changes to Dayseam are documented in this file. The format follows
   (`scripts/release/resolve-prev-version.sh` and
   `scripts/release/extract-release-notes.sh`) the workflow now
   delegates to, each with a bash unit-test suite wired into a new
-  `shell-scripts` CI job. The new preflight prefers `[Unreleased]`
-  (the normal contributor-authored shape) and falls back to
-  `[$TARGET]`; the new PREV resolver prefers the most recent `v*`
+  `shell-scripts` CI job. The new preflight prefers the explicit
+  `[$TARGET]` section (the Task 9 capstone shape) and falls back
+  to `[Unreleased]` for normal semver bumps — see DAY-64 above for
+  why this priority is the correct one; the new PREV resolver
+  prefers the most recent `v*`
   tag, falls back to VERSION at `HEAD^`, and defaults to `0.0.0`
   for bootstrap. The `has_content` filter was also rewritten to
   avoid a `set -o pipefail` + `grep -q` SIGPIPE race that silently

@@ -22,16 +22,37 @@
 #   extract-release-notes.sh <version> [<changelog_path>]
 #
 #   <version>         The target release version, e.g. "0.1.0". The
-#                     helper tries `[Unreleased]` first; if that
-#                     section is empty it falls back to
-#                     `[$version]`.
+#                     helper tries `[$version]` first; if that
+#                     section is absent or empty it falls back to
+#                     `[Unreleased]`.
 #   <changelog_path>  Optional; defaults to CHANGELOG.md in the repo
 #                     root.
+#
+# Priority rationale:
+#
+# `[$version]` is the *explicit* answer — "here are the notes for
+# this specific version". `[Unreleased]` is the *implicit* answer —
+# "here are the notes for whatever the next release happens to be".
+# When both exist, the explicit one is authoritative. This ordering
+# handles three release shapes with the same code path:
+#
+#   1. Capstone PR closes `[Unreleased]` → `[$version]` in the PR
+#      itself (Task 9 pattern). `[$version]` has the notes,
+#      `[Unreleased]` is deliberately empty → `[$version]` wins.
+#   2. Normal `semver:patch` PR adds entries to `[Unreleased]`, the
+#      release workflow bumps the version and tags. No `[$version]`
+#      block exists yet → `[Unreleased]` wins.
+#   3. `workflow_dispatch` re-publishes an already-named version
+#      (say, v0.1.0) while `[Unreleased]` is accumulating notes for
+#      the *next* release (v0.1.1). `[$version]=[0.1.0]` has the
+#      right body; `[Unreleased]` has v0.1.1 content. Preferring
+#      `[$version]` is the only order that publishes the correct
+#      notes.
 #
 # Output:
 #   On success, prints the section body to stdout (without the
 #   `## [X]` header line itself) and prints the selected source
-#   (`Unreleased` or the version string) to stderr.
+#   (`[$version]` or `[Unreleased]`) to stderr.
 #
 # Exit codes:
 #   0  success (non-empty body printed to stdout)
@@ -108,19 +129,19 @@ has_content() {
   [[ -n "$filtered" ]]
 }
 
-unreleased_body="$(extract_section "Unreleased")"
-if has_content "$unreleased_body"; then
-  printf '%s\n' "==> Using [Unreleased]" >&2
-  printf '%s' "$unreleased_body"
-  exit 0
-fi
-
 versioned_body="$(extract_section "$VERSION")"
 if has_content "$versioned_body"; then
-  printf '%s\n' "==> [Unreleased] empty, using [$VERSION]" >&2
+  printf '%s\n' "==> Using [$VERSION]" >&2
   printf '%s' "$versioned_body"
   exit 0
 fi
 
-echo "extract-release-notes.sh: no non-empty section in [Unreleased] or [$VERSION]" >&2
+unreleased_body="$(extract_section "Unreleased")"
+if has_content "$unreleased_body"; then
+  printf '%s\n' "==> [$VERSION] empty or absent, using [Unreleased]" >&2
+  printf '%s' "$unreleased_body"
+  exit 0
+fi
+
+echo "extract-release-notes.sh: no non-empty section in [$VERSION] or [Unreleased]" >&2
 exit 2

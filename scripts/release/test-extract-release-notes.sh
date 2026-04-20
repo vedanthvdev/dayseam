@@ -4,11 +4,14 @@
 #
 # What the suite proves:
 #
-#   1. Populated `[Unreleased]` wins: the helper emits the
-#      Unreleased body regardless of whether a `[$VERSION]` section
-#      also exists.
-#   2. Capstone shape: `[Unreleased]` exists but is empty; the
-#      helper falls back to `[$VERSION]` and emits its body.
+#   1. Populated `[$VERSION]` wins: when the CHANGELOG has an
+#      explicit `[$VERSION]` section the helper uses it, even if
+#      `[Unreleased]` also has content (which would be the
+#      "accumulating for the *next* release" case). This is the
+#      behaviour `workflow_dispatch`-driven re-releases depend on.
+#   2. Normal semver-bump shape: `[$VERSION]` is absent (no
+#      capstone pre-close), `[Unreleased]` has the PR's notes,
+#      helper falls back to `[Unreleased]` and emits its body.
 #   3. Both empty: helper exits 2 with an error so the workflow
 #      refuses to release a vacuous version.
 #   4. Subheader-only is "empty": a section that contains only a
@@ -22,6 +25,8 @@
 #   6. Next-section boundary: the helper stops at the next `## [`
 #      heading and does not bleed the following version's body
 #      into the current release's notes.
+#   7. Large body survives the pipefail+grep-q SIGPIPE race that
+#      misread a real 73 KB v0.1.0 release body as empty.
 
 set -euo pipefail
 
@@ -80,7 +85,13 @@ run_test() {
   rm -rf "$scratch"
 }
 
-test_populated_unreleased_wins() {
+test_explicit_version_wins_over_unreleased() {
+  # [$VERSION] is the explicit answer for what goes into the
+  # release being published. [Unreleased] is for the *next* release.
+  # When both exist and carry different content, the explicit block
+  # is authoritative. This is what makes a workflow_dispatch
+  # re-release of v0.1.0 publish the v0.1.0 notes even after
+  # [Unreleased] has started accumulating v0.1.1 work.
   local root="$1"
   local cl="$root/CHANGELOG.md"
   write_changelog "$cl" <<'EOF'
@@ -90,45 +101,13 @@ test_populated_unreleased_wins() {
 
 ### Added
 
-- unreleased entry
+- next-release entry for v0.1.1
 
 ## [0.1.0] - 2026-04-20
 
 ### Added
 
-- historical entry
-EOF
-  local out
-  out="$(run_helper "$cl" "0.1.0")"
-  if ! printf '%s' "$out" | grep -q 'unreleased entry'; then
-    echo "  FAIL: expected unreleased body, got:" >&2
-    printf '%s\n' "$out" >&2
-    return 1
-  fi
-  if printf '%s' "$out" | grep -q 'historical entry'; then
-    echo "  FAIL: bled into [0.1.0] body" >&2
-    return 1
-  fi
-  return 0
-}
-
-test_capstone_falls_back_to_version() {
-  local root="$1"
-  local cl="$root/CHANGELOG.md"
-  write_changelog "$cl" <<'EOF'
-# Changelog
-
-## [Unreleased]
-
-## [0.1.0] - 2026-04-20
-
-### Added
-
-- capstone entry
-
-### Changed
-
-- other entry
+- v0.1.0 release entry
 
 ## [0.0.1] - 2026-04-15
 
@@ -138,13 +117,55 @@ test_capstone_falls_back_to_version() {
 EOF
   local out
   out="$(run_helper "$cl" "0.1.0")"
-  if ! printf '%s' "$out" | grep -q 'capstone entry'; then
+  if ! printf '%s' "$out" | grep -q 'v0.1.0 release entry'; then
     echo "  FAIL: expected [0.1.0] body, got:" >&2
     printf '%s\n' "$out" >&2
     return 1
   fi
+  if printf '%s' "$out" | grep -q 'next-release entry for v0.1.1'; then
+    echo "  FAIL: published [Unreleased] (v0.1.1 prep) as v0.1.0" >&2
+    return 1
+  fi
   if printf '%s' "$out" | grep -q 'old entry'; then
     echo "  FAIL: bled into [0.0.1] body" >&2
+    return 1
+  fi
+  return 0
+}
+
+test_falls_back_to_unreleased_when_version_absent() {
+  # Normal semver-bump shape: no `[$VERSION]` block exists yet
+  # (the release workflow does not rewrite the CHANGELOG on the
+  # way out); `[Unreleased]` carries the PR's notes; helper falls
+  # back to [Unreleased].
+  local root="$1"
+  local cl="$root/CHANGELOG.md"
+  write_changelog "$cl" <<'EOF'
+# Changelog
+
+## [Unreleased]
+
+### Added
+
+- patch-release entry
+
+## [0.1.0] - 2026-04-20
+
+### Added
+
+- older release entry
+EOF
+  # Ask for 0.1.1 — no [0.1.1] block exists, so helper must fall
+  # back to [Unreleased].
+  local out
+  out="$(run_helper "$cl" "0.1.1")"
+  if ! printf '%s' "$out" | grep -q 'patch-release entry'; then
+    echo "  FAIL: expected [Unreleased] body, got:" >&2
+    printf '%s\n' "$out" >&2
+    return 1
+  fi
+  if printf '%s' "$out" | grep -q 'older release entry'; then
+    echo "  FAIL: bled into [0.1.0] body" >&2
     return 1
   fi
   return 0
@@ -185,20 +206,24 @@ test_subheader_only_is_empty() {
 
 ### Added
 
-### Changed
+- real entry
 
 ## [0.1.0] - 2026-04-20
 
 ### Added
 
-- real entry
+### Changed
 EOF
-  # Unreleased has subheaders but no bullets — should NOT count as
-  # content, so the helper falls back to [0.1.0].
+  # [0.1.0] has subheaders but no bullets — should NOT count as
+  # content, so the helper falls back to [Unreleased]. This
+  # exercises the subheader filter under the new `[$VERSION]`-first
+  # priority: the explicit section is present but vacuous, and the
+  # helper must recognise that vacuity rather than publishing an
+  # empty release.
   local out
   out="$(run_helper "$cl" "0.1.0")"
   if ! printf '%s' "$out" | grep -q 'real entry'; then
-    echo "  FAIL: expected [0.1.0] fallback, got:" >&2
+    echo "  FAIL: expected [Unreleased] fallback, got:" >&2
     printf '%s\n' "$out" >&2
     return 1
   fi
@@ -240,20 +265,22 @@ test_stops_at_next_version_header() {
 
 ## [Unreleased]
 
-- in unreleased
-
 ## [0.1.0] - 2026-04-20
 
 - in version 0.1.0
+
+## [0.0.1] - 2026-04-15
+
+- in version 0.0.1
 EOF
   local out
   out="$(run_helper "$cl" "0.1.0")"
-  if ! printf '%s' "$out" | grep -q 'in unreleased'; then
-    echo "  FAIL: expected 'in unreleased', got:" >&2
+  if ! printf '%s' "$out" | grep -q 'in version 0.1.0'; then
+    echo "  FAIL: expected 'in version 0.1.0', got:" >&2
     printf '%s\n' "$out" >&2
     return 1
   fi
-  if printf '%s' "$out" | grep -q 'in version 0.1.0'; then
+  if printf '%s' "$out" | grep -q 'in version 0.0.1'; then
     echo "  FAIL: bled past the next ## [ heading" >&2
     return 1
   fi
@@ -310,8 +337,8 @@ EOF
   return 0
 }
 
-run_test "populated [Unreleased] wins over [\$VERSION]" test_populated_unreleased_wins
-run_test "capstone shape falls back to [\$VERSION]" test_capstone_falls_back_to_version
+run_test "populated [\$VERSION] wins over [Unreleased]" test_explicit_version_wins_over_unreleased
+run_test "normal-bump shape falls back to [Unreleased]" test_falls_back_to_unreleased_when_version_absent
 run_test "both sections empty exits 2" test_both_empty_fails
 run_test "subheader-only section counts as empty" test_subheader_only_is_empty
 run_test "dots in version are treated as literals" test_dots_are_literal
