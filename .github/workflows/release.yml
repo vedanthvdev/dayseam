@@ -178,28 +178,51 @@ jobs:
           echo "==> DMG artefact: $dmg"
 
       # Universal-bundle assertion: the fused binary inside the .app
-      # MUST carry both arm64 and x86_64 slices. `lipo -archs` emits a
-      # space-separated list we grep to fail-fast on a thin build.
+      # MUST carry both arm64 and x86_64 slices. `lipo -archs` emits
+      # a space-separated list we grep to fail-fast on a thin build.
       #
       # `cargo metadata` resolves the workspace target directory
       # rather than hardcoding `apps/desktop/src-tauri/target/...`.
       # Cargo workspaces write to `<workspace_root>/target/`, not
-      # per-crate — DAY-66 hit this exactly: the `.app` landed at
-      # `<repo>/target/universal-apple-darwin/.../Dayseam.app` while
-      # the hardcoded path was empty, and this step blamed a
-      # perfectly good build for being missing. `shell: bash`
-      # enables pipefail so a failed `cargo metadata` or `jq`
-      # surfaces at the pipeline itself.
+      # per-crate — DAY-66 fixed that and also enabled pipefail so a
+      # failed `cargo metadata | jq` surfaces at the pipeline.
+      #
+      # The binary *inside* Dayseam.app/Contents/MacOS/ is named
+      # after the cargo crate binary name (`dayseam-desktop`), NOT
+      # `productName` (`Dayseam`) — Tauri renames the `.app`
+      # directory via productName but leaves the inner executable
+      # at the cargo name unless `mainBinaryName` is set. DAY-67 was
+      # the assertion assuming the inner binary matched the app
+      # name. Globbing the single executable under Contents/MacOS/
+      # is robust against a future `mainBinaryName` override or a
+      # cargo-crate rename; we validate that exactly one is present
+      # so a bundler that starts emitting helper bins (unlikely but
+      # possible for sidecars) trips the check instead of picking
+      # the wrong one silently.
       - name: Assert universal binary (arm64 + x86_64)
         shell: bash
         run: |
           target_dir="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml | jq -r '.target_directory')"
           app="${target_dir}/universal-apple-darwin/release/bundle/macos/Dayseam.app"
-          bin="$app/Contents/MacOS/Dayseam"
-          if [[ ! -f "$bin" ]]; then
-            echo "::error::Binary not found at $bin" >&2
+          macos_dir="$app/Contents/MacOS"
+          if [[ ! -d "$macos_dir" ]]; then
+            echo "::error::Dayseam.app bundle missing at $app" >&2
             exit 1
           fi
+          echo "==> Contents/MacOS listing:"
+          ls -la "$macos_dir"
+          # macOS runners ship bash 3.2 (no `mapfile`), so collect
+          # executables with a plain while-read loop.
+          bins=()
+          while IFS= read -r candidate; do
+            bins+=("$candidate")
+          done < <(find "$macos_dir" -maxdepth 1 -type f -perm +111)
+          if (( ${#bins[@]} != 1 )); then
+            echo "::error::Expected exactly one executable in $macos_dir, found ${#bins[@]}: ${bins[*]}" >&2
+            exit 1
+          fi
+          bin="${bins[0]}"
+          echo "==> Resolved main binary: $bin"
           archs="$(lipo -archs "$bin")"
           echo "==> lipo -archs: $archs"
           if ! [[ "$archs" == *"arm64"* && "$archs" == *"x86_64"* ]]; then
@@ -219,7 +242,16 @@ jobs:
         shell: bash
         run: |
           target_dir="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml | jq -r '.target_directory')"
-          bin="${target_dir}/universal-apple-darwin/release/bundle/macos/Dayseam.app/Contents/MacOS/Dayseam"
+          macos_dir="${target_dir}/universal-apple-darwin/release/bundle/macos/Dayseam.app/Contents/MacOS"
+          bins=()
+          while IFS= read -r candidate; do
+            bins+=("$candidate")
+          done < <(find "$macos_dir" -maxdepth 1 -type f -perm +111)
+          if (( ${#bins[@]} != 1 )); then
+            echo "::error::Expected exactly one executable in $macos_dir, found ${#bins[@]}: ${bins[*]}" >&2
+            exit 1
+          fi
+          bin="${bins[0]}"
           forbidden="$(nm -g "$bin" 2>/dev/null | grep -E 'dev_emit_toast|dev_start_demo_run' || true)"
           if [[ -n "$forbidden" ]]; then
             echo "::error::Release binary exposes dev-only IPC symbols:" >&2

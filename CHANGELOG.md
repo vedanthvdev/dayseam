@@ -8,6 +8,24 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Fixed
 
+- **Release assertions glob the actual `.app` main binary instead
+  of assuming it matches `productName` (DAY-67).** Post-DAY-66 the
+  universal `Dayseam.app` landed at the right path, but the lipo
+  and dev-IPC-symbol checks still failed with `Binary not found
+  at .../Dayseam.app/Contents/MacOS/Dayseam`. The executable
+  *inside* `Dayseam.app/Contents/MacOS/` is named after the cargo
+  crate binary name (`dayseam-desktop`), not after `productName`
+  (`Dayseam`) — Tauri renames the `.app` directory via
+  `productName` but leaves the inner executable at the cargo name
+  unless `mainBinaryName` is explicitly set. Both assertion steps
+  now `find` the single executable under `Contents/MacOS/` at
+  runtime, with an explicit "exactly one" guard so a future
+  bundler change that emits helper binaries (e.g. sidecars) trips
+  the check instead of picking the wrong one silently. The loop
+  uses `while IFS= read -r ... < <(find ...)` because GHA macOS
+  runners ship `/bin/bash` 3.2 without `mapfile`. Ships
+  `semver:none`; followed by a `workflow_dispatch` run on master
+  to publish v0.1.0.
 - **Release workflow resolves Cargo's workspace `target/` instead
   of a per-crate path (DAY-66).** Post-DAY-65 the DMG build
   finally produced artefacts — the tauri bundler reported
