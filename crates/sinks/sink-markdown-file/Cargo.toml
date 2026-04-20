@@ -6,11 +6,12 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 description = "Dayseam markdown-file sink: atomic write, marker-block contract, Obsidian-friendly filenames."
 
 [dependencies]
-sinks-sdk = { path = "../../sinks-sdk", version = "0.0.0" }
-dayseam-core = { path = "../../dayseam-core", version = "0.0.0" }
+sinks-sdk = { path = "../../sinks-sdk" }
+dayseam-core = { path = "../../dayseam-core" }
 
 async-trait = { workspace = true }
 chrono = { workspace = true }
@@ -22,5 +23,5 @@ tempfile = "3"
 [dev-dependencies]
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
 tokio-util = { version = "0.7", features = ["rt"] }
-dayseam-events = { path = "../../dayseam-events", version = "0.0.0" }
+dayseam-events = { path = "../../dayseam-events" }
 cargo_metadata = "0.19"

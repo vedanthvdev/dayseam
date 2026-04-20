@@ -6,10 +6,11 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 description = "Deterministic report engine for Dayseam: rollup, template rendering, and evidence linking. Pure — no IO, no clocks, no randomness."
 
 [dependencies]
-dayseam-core = { path = "../dayseam-core", version = "0.0.0" }
+dayseam-core = { path = "../dayseam-core" }
 
 serde = { workspace = true }
 serde_json = { workspace = true }

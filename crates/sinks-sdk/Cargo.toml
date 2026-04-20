@@ -6,11 +6,12 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 description = "SDK for Dayseam sink adapters: SinkAdapter trait, SinkCtx, MockSink."
 
 [dependencies]
-dayseam-core = { path = "../dayseam-core", version = "0.0.0" }
-dayseam-events = { path = "../dayseam-events", version = "0.0.0" }
+dayseam-core = { path = "../dayseam-core" }
+dayseam-events = { path = "../dayseam-events" }
 
 async-trait = { workspace = true }
 chrono = { workspace = true }

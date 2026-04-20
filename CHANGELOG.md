@@ -6,6 +6,93 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-04-20
+
+### Release highlights
+
+Dayseam v0.1.0 is the first user-installable release. It turns a local
+macOS checkout of your work day into a reviewed, save-to-markdown
+Dev EOD report, with evidence you can click through back to the
+original commits and merge requests.
+
+What's in the box:
+
+- **Two source connectors — local git and GitLab** (self-hosted or
+  SaaS). Local-git walks every repo under your configured scan roots
+  via `libgit2`, filtered by `is_private` so excluded repos never
+  surface commit content. GitLab uses a PAT with `read_api`, walks
+  the Events API for the day window, and is identity-filtered by
+  the numeric `user_id` (not username/email) so username renames
+  don't silently break your report.
+- **Cross-source de-duplication** — when local-git and GitLab both
+  emit a `CommitAuthored` for the same commit SHA, the report keeps
+  one bullet with unioned evidence and annotates rolled-up commits
+  with `(rolled into !42)` in verbose mode.
+- **Per-source error cards with typed error codes and Reconnect.**
+  Expired PATs, missing scopes, and schema-drift failures each
+  surface with their own `gitlab.*` error code, a plain-language
+  explanation, and (for auth errors) a one-click Reconnect button
+  that re-opens the add-source dialog pre-seeded for in-place
+  rotation.
+- **Evidence-clickable report bullets.** Every bullet has a popover
+  that fetches the referenced `ActivityEvent`s and renders their
+  links as clickable chips gated by a scheme allow-list
+  (`http`, `https`, `file`, `vscode`, `obsidian`).
+- **Markdown file sink (Obsidian-friendly).** Atomic tempfile +
+  rename writes, `<!-- dayseam:start … -->` marker blocks so
+  user-authored text around the generated region survives
+  regeneration, optional YAML frontmatter, and a
+  `WriteReceipt` per destination so the UI can deep-link the
+  written files.
+- **First-run onboarding** with a four-step setup checklist gate
+  (name, source, identity, sink), source chips with edit/delete
+  affordances, a native folder picker for sink destinations, and
+  dark-mode calendar popovers.
+- **Universal macOS `.dmg`** at
+  [Releases / v0.1.0](https://github.com/vedanthvdev/dayseam/releases/tag/v0.1.0).
+  Single download works on Apple Silicon and Intel Macs (macOS 13+).
+  The build is **unsigned** — first-run Gatekeeper bypass is a
+  right-click → Open, documented step-by-step in
+  [docs/release/UNSIGNED-FIRST-RUN.md](docs/release/UNSIGNED-FIRST-RUN.md).
+  Codesigning + notarization are tracked as
+  [#59](https://github.com/vedanthvdev/dayseam/issues/59) for v0.1.1
+  and will make that whole first-run page obsolete.
+
+Every detail of what landed in Phase 3 is inventoried in the
+per-PR entries below; this `[0.1.0]` block also carries the full
+Phase 1 and Phase 2 change history because v0.1.0 is the first
+tagged release — nothing has shipped to a user before now.
+
+### Added
+
+- **v0.1.0 capstone — `VERSION` 0.0.0 → 0.1.0 (DAY-62).** Phase 3
+  Task 9 flips every published version marker in the tree to
+  `0.1.0`: the root `VERSION` file, the workspace
+  `[workspace.package].version` in `Cargo.toml` (which every member
+  crate picks up through `version.workspace = true`), and the
+  `"version"` field in
+  `apps/desktop/src-tauri/tauri.conf.json`. `Cargo.lock` is
+  regenerated so every Dayseam crate resolves to `0.1.0`. This PR
+  is the only Phase 3 PR carrying the `semver:minor` label — every
+  earlier PR landed under `semver:none` — so merging it runs the
+  release workflow (DAY-59) against a real `semver:minor`
+  trigger, producing the tagged `v0.1.0` GitHub Release, the
+  universal `Dayseam-v0.1.0.dmg`, and its `.sha256` sibling.
+  Alongside the version flip, this PR retires a latent bug found
+  by the capstone's `cargo check`: every internal path dep in
+  every crate's `Cargo.toml` pinned `version = "0.0.0"` as a
+  crates.io publishability hint, but `[workspace.package].publish`
+  is `false` workspace-wide so those version specifiers were
+  noise that would have silently broken every future semver bump
+  (a `0.1.1` patch would have left all 34 path-dep sites stuck at
+  `0.0.0`, failing resolver validation). The specifiers are
+  removed — path-only deps resolve fine through the workspace —
+  and the `bump-version.sh` contract is now genuinely complete
+  with the three files its six-case test suite already covers.
+  README's install section is also tag-pinned to the v0.1.0
+  release page so the "Download the DMG" link never 404s between
+  tagged releases.
+
 ### Changed
 
 - **`graphify` adopt-or-defer decision: deferred to v0.2 (DAY-60).**
