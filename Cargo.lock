@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "connector-gitlab"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "connector-local-git"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -674,7 +674,7 @@ dependencies = [
 
 [[package]]
 name = "connectors-sdk"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -963,7 +963,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-core"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "insta",
@@ -977,7 +977,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-db"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "dayseam-core",
@@ -992,7 +992,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-desktop"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "connector-gitlab",
@@ -1022,7 +1022,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-events"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "chrono",
  "dayseam-core",
@@ -1033,7 +1033,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-orchestrator"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -1058,7 +1058,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-report"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "cargo_metadata",
  "chrono",
@@ -1075,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-secrets"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "keyring",
  "thiserror 1.0.69",
@@ -4844,7 +4844,7 @@ checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "sink-markdown-file"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -4862,7 +4862,7 @@ dependencies = [
 
 [[package]]
 name = "sinks-sdk"
-version = "0.0.0"
+version = "0.1.0"
 dependencies = [
  "async-trait",
  "cargo_metadata",

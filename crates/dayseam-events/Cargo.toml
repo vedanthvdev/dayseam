@@ -6,10 +6,11 @@ license.workspace = true
 repository.workspace = true
 authors.workspace = true
 rust-version.workspace = true
+publish.workspace = true
 description = "Per-run streams and app-wide broadcast bus for Dayseam progress, log, and toast events."
 
 [dependencies]
-dayseam-core = { path = "../dayseam-core", version = "0.0.0" }
+dayseam-core = { path = "../dayseam-core" }
 tokio = { workspace = true }
 chrono = { workspace = true }
 uuid = { workspace = true }

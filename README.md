@@ -8,25 +8,29 @@ evidence-linked report of what you actually did on a given day. Pick a
 date, click generate, and get a clean markdown report you can save to
 disk or drop into your Obsidian vault.
 
-> **Status: Phase 3 in flight; v0.1.0 targets a tagged GitHub
-> Release.** The Rust workspace, Tauri 2 desktop shell, local-git
-> connector, GitLab connector, cross-source dedup, markdown sink,
-> and Playwright E2E suite are all landed on `master`. Phase 3
-> closes with a universal-macOS `.dmg` published through GitHub
-> Releases (this PR's work) and the v0.1.0 capstone that flips
-> `VERSION` from `0.0.0` to `0.1.0`.
+> **Status: v0.1.0 released.** The Rust workspace, Tauri 2 desktop
+> shell, local-git connector, GitLab connector, cross-source
+> dedup, markdown sink, Playwright E2E suite, and the universal
+> macOS `.dmg` are all on `master` and published. Phase 3
+> hardening (cross-cutting review pass, three-day dogfood sweep,
+> fresh-Mac smoke test) lands immediately after v0.1.0 ships and
+> folds any findings into v0.1.1.
 
 ## Install
 
-Once v0.1.0 lands, download the latest DMG from the
-[GitHub Releases page](https://github.com/vedanthvdev/dayseam/releases).
-v0.1.0 ships **unsigned**, so macOS Gatekeeper will require you to
-right-click → Open on the first launch; see
+Download the latest DMG from the
+[v0.1.0 release page](https://github.com/vedanthvdev/dayseam/releases/tag/v0.1.0)
+(Apple Silicon + Intel, same file). v0.1.0 ships **unsigned**, so
+macOS Gatekeeper will require you to right-click → Open on the
+first launch; see
 [`docs/release/UNSIGNED-FIRST-RUN.md`](./docs/release/UNSIGNED-FIRST-RUN.md)
 for the two-click path and the macOS 15 Sequoia variant. Real
 Developer ID codesign + notarization is tracked as
 [Phase 3.5 / v0.1.1](https://github.com/vedanthvdev/dayseam/issues/59)
-and will land in a subsequent release.
+and will land in a subsequent release; once it ships this whole
+first-run dance goes away. For future releases, the
+[Releases landing page](https://github.com/vedanthvdev/dayseam/releases/latest)
+always points at the latest tagged build.
 
 Requirements: macOS 13 (Ventura) or newer. Windows and Linux
 builds are on the v0.6 roadmap.
