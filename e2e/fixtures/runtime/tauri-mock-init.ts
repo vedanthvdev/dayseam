@@ -44,6 +44,13 @@ export const MOCK_HANDLED_COMMANDS = [
   "report_save",
   "activity_events_get",
   "shell_open",
+  // DAY-83: the Atlassian happy-path scenarios drive
+  // `AddAtlassianSourceDialog` → validate → persist through the
+  // real IPC surface. Adding both commands here (with
+  // `satisfies readonly CommandName[]`) turns a rename on the
+  // Rust side into a compile-time failure at the mock boundary.
+  "atlassian_validate_credentials",
+  "atlassian_sources_add",
 ] as const satisfies readonly CommandName[];
 
 export type MockedCommand = (typeof MOCK_HANDLED_COMMANDS)[number];
@@ -128,6 +135,7 @@ export function dayseamTauriMockInit(catalogue: Catalogue): void {
     invocations: [],
     captured: {
       saveCalls: [],
+      atlassianAddCalls: [],
     },
     handlers: defaultHandlers(),
   };
@@ -211,35 +219,86 @@ export function dayseamTauriMockInit(catalogue: Catalogue): void {
     MockHandlers {
     const nowIso = new Date().toISOString();
 
-    // ── Domain: reporting ────────────────────────────────────────
-    const draft = {
-      id: catalogue.ids.draft,
-      date: new Date().toISOString().slice(0, 10),
-      template_id: catalogue.draft.templateId,
-      template_version: catalogue.draft.templateVersion,
-      sections: [
-        {
-          id: "completed",
-          title: "Completed",
-          bullets: catalogue.draft.completedBullets.map((text, idx) => ({
-            id: `completed.${idx}`,
-            text,
-          })),
+    // ── Domain: sources ──────────────────────────────────────────
+    // Closure-local mutable list: `sources_list` reads from it,
+    // `atlassian_sources_add` appends to it, `report_generate` /
+    // `report_get` derive the bullet set from its current state.
+    // Every scenario starts with the seeded LocalGit row so the
+    // onboarding-complete gate stays satisfied; Atlassian rows are
+    // added dynamically by the DAY-83 scenarios via the real
+    // `AddAtlassianSourceDialog` click-path.
+    const sources: Array<Record<string, unknown>> = [
+      {
+        id: catalogue.ids.source,
+        kind: "LocalGit",
+        label: catalogue.sources.label,
+        config: {
+          LocalGit: { scan_roots: [...catalogue.sources.scanRoots] },
         },
-      ],
-      evidence: [],
-      per_source_state: {
-        [catalogue.ids.source]: {
+        secret_ref: null,
+        created_at: nowIso,
+        last_sync_at: null,
+        last_health: { ok: true, checked_at: null, last_error: null },
+      },
+    ];
+
+    // ── Domain: reporting ────────────────────────────────────────
+    // `buildDraft()` is called on every `report_get` so the bullet
+    // set reflects which sources are currently connected — a
+    // scenario that adds a Jira row through the dialog sees the
+    // Jira bullet; a scenario that adds Confluence sees the
+    // Confluence bullet; Journey A sees both. The LocalGit baseline
+    // bullets are always emitted so the happy-path scenario's
+    // assertions keep working unchanged.
+    function buildDraft(): Record<string, unknown> {
+      const bullets: Array<{ id: string; text: string }> = [];
+      catalogue.draft.completedBullets.forEach((text, idx) => {
+        bullets.push({ id: `completed.${idx}`, text });
+      });
+      const hasJira = sources.some((s) => s.kind === "Jira");
+      const hasConfluence = sources.some((s) => s.kind === "Confluence");
+      if (hasJira) {
+        bullets.push({
+          id: "completed.atlassian.jira",
+          text: catalogue.draft.atlassianJiraBullet,
+        });
+      }
+      if (hasConfluence) {
+        bullets.push({
+          id: "completed.atlassian.confluence",
+          text: catalogue.draft.atlassianConfluenceBullet,
+        });
+      }
+
+      const perSourceState: Record<string, unknown> = {};
+      for (const src of sources) {
+        perSourceState[String(src.id)] = {
           status: "Completed",
           started_at: nowIso,
           finished_at: nowIso,
           fetched_count: 2,
           error: null,
-        },
-      },
-      verbose_mode: false,
-      generated_at: nowIso,
-    };
+        };
+      }
+
+      return {
+        id: catalogue.ids.draft,
+        date: new Date().toISOString().slice(0, 10),
+        template_id: catalogue.draft.templateId,
+        template_version: catalogue.draft.templateVersion,
+        sections: [
+          {
+            id: "completed",
+            title: "Completed",
+            bullets,
+          },
+        ],
+        evidence: [],
+        per_source_state: perSourceState,
+        verbose_mode: false,
+        generated_at: nowIso,
+      };
+    }
 
     const handlers: Record<MockedCommand, MockInvokeHandler> = {
       // ── Domain: people ────────────────────────────────────────
@@ -250,20 +309,7 @@ export function dayseamTauriMockInit(catalogue: Catalogue): void {
       }),
 
       // ── Domain: sources ───────────────────────────────────────
-      sources_list: async () => [
-        {
-          id: catalogue.ids.source,
-          kind: "LocalGit",
-          label: catalogue.sources.label,
-          config: {
-            LocalGit: { scan_roots: [...catalogue.sources.scanRoots] },
-          },
-          secret_ref: null,
-          created_at: nowIso,
-          last_sync_at: null,
-          last_health: { ok: true, checked_at: null, last_error: null },
-        },
-      ],
+      sources_list: async () => sources.map((s) => ({ ...s })),
       local_repos_list: async () =>
         catalogue.sources.repos.map((repo) => ({
           path: repo.path,
@@ -347,7 +393,7 @@ export function dayseamTauriMockInit(catalogue: Catalogue): void {
         });
         return catalogue.ids.run;
       },
-      report_get: async () => draft,
+      report_get: async () => buildDraft(),
       report_save: async (args) => {
         // Capture the Save payload so the test body can assert the
         // marker-block contract end-to-end without a second IPC
@@ -372,6 +418,120 @@ export function dayseamTauriMockInit(catalogue: Catalogue): void {
 
       // ── Domain: shell ─────────────────────────────────────────
       shell_open: async () => null,
+
+      // ── Domain: Atlassian add-source ──────────────────────────
+      // DAY-83. Mirrors the Rust-side contract documented in
+      // `apps/desktop/src-tauri/src/ipc/atlassian.rs`:
+      //
+      //   * `atlassian_validate_credentials` returns the
+      //     `AtlassianAccountInfo` triple the dialog pins to the
+      //     "Connected as …" ribbon and, on submit, stamps onto the
+      //     fresh `SourceIdentity` via `atlassian_sources_add`.
+      //   * `atlassian_sources_add` returns the freshly-inserted
+      //     source rows (one for Journey B / C, two for Journey A)
+      //     and appends them to the closure-local `sources` list
+      //     so the next `sources_list` IPC reflects the connect —
+      //     the same ordering the real Rust side provides.
+      //
+      // Every supplied argument is stashed on
+      // `state.captured.atlassianAddCalls` so an
+      // `@atlassian-add-ipc-contract` scenario can assert the
+      // exact payload shape without a second round-trip.
+      atlassian_validate_credentials: async (args) => {
+        const emailArg = typeof args.email === "string" ? args.email : "";
+        return {
+          account_id: catalogue.atlassian.accountId,
+          display_name: catalogue.atlassian.displayName,
+          email: emailArg || catalogue.atlassian.email,
+          cloud_id: catalogue.atlassian.cloudId,
+        };
+      },
+      atlassian_sources_add: async (args) => {
+        const workspaceUrl = String(args.workspaceUrl ?? "");
+        const emailArg = String(args.email ?? "");
+        const apiTokenRaw = args.apiToken;
+        const apiToken =
+          typeof apiTokenRaw === "string" ? apiTokenRaw : null;
+        const accountId = String(args.accountId ?? "");
+        const enableJira = Boolean(args.enableJira);
+        const enableConfluence = Boolean(args.enableConfluence);
+        const reuseSecretRefRaw = args.reuseSecretRef as
+          | { keychain_service?: unknown; keychain_account?: unknown }
+          | null
+          | undefined;
+        const reuseSecretRef =
+          reuseSecretRefRaw && typeof reuseSecretRefRaw === "object"
+            ? {
+                keychain_service: String(reuseSecretRefRaw.keychain_service),
+                keychain_account: String(reuseSecretRefRaw.keychain_account),
+              }
+            : null;
+
+        state.captured.atlassianAddCalls.push({
+          workspaceUrl,
+          email: emailArg,
+          apiToken,
+          accountId,
+          enableJira,
+          enableConfluence,
+          reuseSecretRef,
+        });
+
+        // Mirrors the Rust-side keychain contract: Journey A shares
+        // a single `secret_ref` across both rows; Journey C mode 1
+        // clones an existing one. We don't simulate Journey C mode
+        // 2's separate secret_ref here — no DAY-83 scenario
+        // exercises it, and the existing `AddAtlassianSourceDialog`
+        // unit tests cover the branch.
+        const sharedSecretRef = reuseSecretRef ?? {
+          keychain_service: catalogue.atlassian.sharedSecretRef.keychain_service,
+          keychain_account: catalogue.atlassian.sharedSecretRef.keychain_account,
+        };
+
+        const created: Array<Record<string, unknown>> = [];
+        if (enableJira) {
+          const row = {
+            id: catalogue.ids.atlassianJiraSource,
+            kind: "Jira",
+            label: "Jira",
+            config: {
+              Jira: {
+                workspace_url: workspaceUrl,
+                email: emailArg,
+              },
+            },
+            secret_ref: { ...sharedSecretRef },
+            created_at: new Date().toISOString(),
+            last_sync_at: null,
+            last_health: { ok: true, checked_at: null, last_error: null },
+          };
+          sources.push(row);
+          created.push(row);
+        }
+        if (enableConfluence) {
+          const row = {
+            id: catalogue.ids.atlassianConfluenceSource,
+            kind: "Confluence",
+            label: "Confluence",
+            config: {
+              Confluence: { workspace_url: workspaceUrl },
+            },
+            secret_ref: { ...sharedSecretRef },
+            created_at: new Date().toISOString(),
+            last_sync_at: null,
+            last_health: { ok: true, checked_at: null, last_error: null },
+          };
+          sources.push(row);
+          created.push(row);
+        }
+        // `accountId` is retained on the captured payload so a
+        // future test can assert we stamped the validated identity
+        // onto the new row. The mock itself doesn't track
+        // `SourceIdentity` rows — the Rust side owns that table.
+        void accountId;
+        void apiToken;
+        return created;
+      },
     };
 
     return handlers;
