@@ -8,6 +8,69 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **v0.2 `connector-confluence::walk` — CQL-driven day walker (DAY-80).**
+  Eighth task of the v0.2 Atlassian arc. DAY-79 stood up the Confluence
+  scaffold with `sync` stubbed as `DayseamError::Unsupported` across
+  every `SyncRequest`; this task wires `SyncRequest::Day` onto a real
+  walker that GETs `/wiki/rest/api/search` with
+  `cql=contributor = currentUser() AND lastModified >= "<start>" AND
+  lastModified < "<end>" ORDER BY lastModified DESC` (`Range` / `Since`
+  stay `Unsupported` until v0.3's incremental scheduler lands, matching
+  the Jira connector). **Walker.** `walk_day` derives a UTC window from
+  a `NaiveDate + FixedOffset`, pages the endpoint via
+  `connector_atlassian_common::V2CursorPaginator` (the shared
+  `_links.next` → `cursor=` extractor), enforces a `MAX_PAGES = 50`
+  safety cap, asks for `expand=content.space,content.history,
+  content.version,content.body.atlas_doc_format,content.extensions,
+  content.ancestors,content.container` on every call (spike §8.5: one
+  body format, one normalisation path through
+  `connector_atlassian_common::adf_to_plain`), and rebrands the SDK's
+  retry-exhausted 429 onto `confluence.walk.rate_limited` while mapping
+  other non-2xx via `connector_atlassian_common::map_status`. A missing
+  or un-parseable `results` array hard-fails with
+  `confluence.walk.upstream_shape_changed` (DAY-71 invariant). An
+  identity miss (no `SourceIdentityKind::AtlassianAccountId` registered
+  for the source) short-circuits with an empty `WalkOutcome` instead
+  of burning a rate-limit call. **Normaliser.** A new
+  `normalise.rs` transforms each CQL `results[i]` row into at most one
+  `ActivityEvent`: pages with `version.number == 1 && createdBy == self
+  && createdDate ∈ window` emit `ActivityKind::ConfluencePageCreated`;
+  pages with `version.number > 1 && version.by == self &&
+  version.when ∈ window` emit `ActivityKind::ConfluencePageEdited`;
+  comments authored by self inside the window emit
+  `ActivityKind::ConfluenceComment` with ADF body rendered through
+  `adf_to_plain` and `metadata.location ∈ { "inline", "footer" }`
+  pulled from `content.extensions.location`. Non-self rows drop
+  silently. Links are assembled from `result.url +
+  _links.base`, falling back to `content._links.webui`. Entity refs
+  seed `confluence_space` + `confluence_page` / `confluence_comment`
+  so DAY-78's group-by-space rollup lights up without further work.
+  **Rollup.** `rollup.rs` owns the 5-minute rapid-save collapse
+  (`RAPID_SAVE_WINDOW_SECONDS = 300`): consecutive
+  `ConfluencePageEdited` records for the same `(content_id, author)`
+  within the window fold into a single event whose
+  `metadata.save_count` records the run length and whose title reads
+  "Edited page \"…\" (rolled up from N saves)". The CQL search
+  itself returns one row per content-id today (its `contributor =
+  currentUser()` query folds versions), so for live data the collapse
+  is a no-op; the machinery is still exercised end-to-end by an
+  integration test that pre-fabricates a five-version fixture. When
+  the walker paginates, every follow-up request also carries
+  `expand=...content.body.atlas_doc_format...` — a wiremock assertion
+  walks every received request and pins this, because a silent flip
+  to `storage` format would leak raw HTML through `adf_to_plain`.
+  **Tests.** The plan's Task 8 matrix lands as nine wiremock-driven
+  integration tests in `connector-confluence/tests/walk.rs` (created
+  vs edited, ADF comment with `@mention` rendering displayName,
+  self-filter drops colleague's comments + page-versions, rapid-save
+  collapse of five autosaves into one event, pagination via
+  `_links.next`, 429 rebrand, shape guard on missing `results`,
+  identity-miss early-bail, and the ADF expand assertion) plus 27
+  inline unit tests across `walk.rs` / `normalise.rs` / `rollup.rs`.
+  The scaffold test that previously pinned "Day is Unsupported"
+  flips to assert the new identity-miss short-circuit. `semver:none`
+  — additive: no existing consumer path changes shape.
+
 - **v0.2 `connector-confluence` — crate scaffold (DAY-79).**
   Seventh task of the v0.2 Atlassian arc. Parallels the DAY-76 Jira
   scaffold: a new `crates/connectors/connector-confluence` crate that

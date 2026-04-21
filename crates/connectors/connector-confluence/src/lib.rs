@@ -39,15 +39,30 @@
 //!   [`connector::ConfluenceMux`] that dispatches
 //!   [`SourceConnector::sync`] by `ctx.source_id` to the right
 //!   [`connector::ConfluenceConnector`] instance, mirroring
-//!   [`connector_jira::JiraMux`]. The per-day CQL walker lands in
-//!   DAY-80; in this scaffold every [`connectors_sdk::SyncRequest`]
-//!   variant returns [`dayseam_core::DayseamError::Unsupported`].
+//!   [`connector_jira::JiraMux`]. Wired in DAY-80 to route
+//!   [`connectors_sdk::SyncRequest::Day`] into [`walk::walk_day`];
+//!   `Range` / `Since` remain [`dayseam_core::DayseamError::Unsupported`]
+//!   until v0.3's incremental scheduler, matching the Jira shape.
+//! * [`walk`] — the per-day CQL walker. Runs
+//!   `GET /wiki/rest/api/search?cql=contributor%20%3D%20currentUser()%20…`,
+//!   paginates via the shared `_links.next` helper, and hands each row
+//!   to [`normalise::normalise_result`].
+//! * [`normalise`] — one CQL result → at most one [`ActivityEvent`].
+//!   Arms per `content.type` (`"page"` / `"comment"`) matching the
+//!   spike §8 taxonomy.
+//! * [`rollup`] — rapid-save collapse for `ConfluencePageEdited`
+//!   events. Pure-function parallel to
+//!   [`connector_jira::rollup::collapse_rapid_transitions`].
 //!
 //! [`SourceConnector`]: connectors_sdk::SourceConnector
+//! [`ActivityEvent`]: dayseam_core::ActivityEvent
 
 pub mod auth;
 pub mod config;
 pub mod connector;
+pub mod normalise;
+pub mod rollup;
+pub mod walk;
 
 pub use auth::{list_identities, validate_auth};
 pub use config::ConfluenceConfig;

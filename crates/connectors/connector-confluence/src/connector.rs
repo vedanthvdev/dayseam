@@ -2,45 +2,60 @@
 //! Confluence.
 //!
 //! The shape mirrors [`connector_jira::JiraMux`] one-for-one; see
-//! that type's docs for the "why a mux per kind" rationale. The only
-//! scaffold-era difference is that every
-//! [`SourceConnector::sync`] variant returns
-//! [`DayseamError::Unsupported`]: the per-day CQL walker lands in
-//! DAY-80 and flips the `SyncRequest::Day` arm, keeping the scaffold
-//! and the walker as two independently-reviewable PRs (mirroring the
-//! DAY-76 → DAY-77 split on the Jira side).
+//! that type's docs for the "why a mux per kind" rationale.
+//! [`SourceConnector::sync`] routes
+//! [`SyncRequest::Day`] into [`crate::walk::walk_day`] (DAY-80) and
+//! continues to return [`DayseamError::Unsupported`] for
+//! `Range` / `Since` until v0.3's incremental scheduler — identical
+//! split to the DAY-76 → DAY-77 Jira sequence.
 //!
-//! `healthcheck` is wired up in this scaffold because the Settings
-//! "Test connection" button (DAY-83 UI) uses it to prove the stored
-//! Basic-auth credential still authenticates, and a green probe here
-//! is a precondition the walker assumes at run time.
+//! `healthcheck` probes `GET /rest/api/3/myself` so the Settings
+//! "Test connection" button (DAY-83 UI) and the orchestrator's
+//! "source healthy?" gate both key on a real authenticated round-trip.
 
 use std::collections::HashMap;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Utc;
-use connectors_sdk::{ConnCtx, SourceConnector, SyncRequest, SyncResult};
-use dayseam_core::{error_codes, DayseamError, SourceHealth, SourceId, SourceKind};
+use chrono::{FixedOffset, Utc};
+use connectors_sdk::{ConnCtx, SourceConnector, SyncRequest, SyncResult, SyncStats};
+use dayseam_core::{error_codes, DayseamError, ProgressPhase, SourceHealth, SourceId, SourceKind};
 use tokio::sync::RwLock;
 
 use crate::config::ConfluenceConfig;
+use crate::walk::walk_day;
 
 /// One configured Confluence source. Holds only the per-source
 /// configuration that does **not** live on the
 /// [`connectors_sdk::BasicAuth`] attached to each [`ConnCtx`].
 /// Cloning is cheap — [`ConfluenceConfig`] is one short `String`
 /// wrapped in a `Url`.
+///
+/// `local_tz` is the user's configured timezone, threaded through
+/// from [`ConfluenceMux::new`] so the CQL walker can compute the
+/// correct UTC window for a local day.
 #[derive(Debug, Clone)]
 pub struct ConfluenceConnector {
     config: ConfluenceConfig,
+    local_tz: FixedOffset,
 }
 
 impl ConfluenceConnector {
     /// Construct a connector handle for a single Confluence source.
+    /// `local_tz` defaults to UTC when the connector is built outside
+    /// a [`ConfluenceMux`]; production paths always go through the
+    /// mux and inherit the orchestrator's configured offset.
     #[must_use]
     pub fn new(config: ConfluenceConfig) -> Self {
-        Self { config }
+        Self::with_local_tz(config, FixedOffset::east_opt(0).expect("0 offset"))
+    }
+
+    /// Construct a connector handle with an explicit `local_tz`. The
+    /// mux uses this variant so every connector in the map shares
+    /// whatever timezone the orchestrator was booted with.
+    #[must_use]
+    pub fn with_local_tz(config: ConfluenceConfig, local_tz: FixedOffset) -> Self {
+        Self { config, local_tz }
     }
 
     /// Borrow the configured workspace URL. Exposed for the Settings
@@ -101,21 +116,67 @@ impl SourceConnector for ConfluenceConnector {
         }
     }
 
-    async fn sync(&self, ctx: &ConnCtx, _request: SyncRequest) -> Result<SyncResult, DayseamError> {
-        // Scaffold PR (DAY-79). DAY-80 flips `SyncRequest::Day` onto
-        // the CQL walker; `Range` / `Since` stay `Unsupported` until
-        // v0.3's incremental scheduler — identical split to the
-        // DAY-76 → DAY-77 Jira sequence. Returning `Unsupported`
-        // across the board here is the simplest way to keep the
-        // scaffold honest: no silent empty result that looks like
-        // success, no panics, just an error code the orchestrator
-        // already knows how to surface.
+    async fn sync(&self, ctx: &ConnCtx, request: SyncRequest) -> Result<SyncResult, DayseamError> {
         ctx.bail_if_cancelled()?;
-        Err(DayseamError::Unsupported {
-            code: error_codes::CONNECTOR_UNSUPPORTED_SYNC_REQUEST.to_string(),
-            message: "confluence connector v0.2-scaffold does not yet service any SyncRequest; \
-                     DAY-80 adds the CQL walker for SyncRequest::Day"
-                .to_string(),
+
+        let day = match request {
+            SyncRequest::Day(d) => d,
+            SyncRequest::Range { .. } | SyncRequest::Since(_) => {
+                return Err(DayseamError::Unsupported {
+                    code: error_codes::CONNECTOR_UNSUPPORTED_SYNC_REQUEST.to_string(),
+                    message: "confluence connector v0.2 only services SyncRequest::Day; \
+                             Range + Since land with v0.3's incremental scheduler"
+                        .to_string(),
+                });
+            }
+        };
+
+        ctx.progress.send(
+            Some(ctx.source_id),
+            ProgressPhase::Starting {
+                message: format!("Fetching Confluence activity for {day}"),
+            },
+        );
+
+        let outcome = walk_day(
+            &ctx.http,
+            ctx.auth.clone(),
+            &self.config.workspace_url,
+            ctx.source_id,
+            &ctx.source_identities,
+            day,
+            self.local_tz,
+            &ctx.cancel,
+            Some(&ctx.progress),
+            Some(&ctx.logs),
+        )
+        .await?;
+
+        ctx.progress.send(
+            Some(ctx.source_id),
+            ProgressPhase::Completed {
+                message: format!(
+                    "Confluence fetched {} content row(s), emitted {} event(s)",
+                    outcome.fetched_count,
+                    outcome.events.len(),
+                ),
+            },
+        );
+
+        let stats = SyncStats {
+            fetched_count: outcome.fetched_count,
+            filtered_by_identity: outcome.filtered_by_identity,
+            filtered_by_date: outcome.filtered_by_date,
+            http_retries: 0,
+        };
+
+        Ok(SyncResult {
+            events: outcome.events,
+            artifacts: Vec::new(),
+            checkpoint: None,
+            stats,
+            warnings: Vec::new(),
+            raw_refs: Vec::new(),
         })
     }
 }
@@ -136,29 +197,47 @@ pub struct ConfluenceSourceCfg {
 /// Semantically identical to [`connector_jira::JiraMux`]: an
 /// `Arc<RwLock<HashMap<SourceId, ConfluenceConnector>>>` the
 /// Add-Source / Reconnect flow can upsert into without rebuilding the
-/// registry.
-#[derive(Debug, Clone, Default)]
+/// registry. `local_tz` is shared by every inner connector so a single
+/// user timezone applies across all Confluence workspaces.
+#[derive(Debug, Clone)]
 pub struct ConfluenceMux {
+    local_tz: FixedOffset,
     inner: Arc<RwLock<HashMap<SourceId, ConfluenceConnector>>>,
+}
+
+impl Default for ConfluenceMux {
+    fn default() -> Self {
+        Self::new(
+            FixedOffset::east_opt(0).expect("0 offset"),
+            std::iter::empty(),
+        )
+    }
 }
 
 impl ConfluenceMux {
     /// Build a mux pre-populated with `sources`. Empty iterators are
     /// the common case at boot on a brand-new install.
     #[must_use]
-    pub fn new(sources: impl IntoIterator<Item = ConfluenceSourceCfg>) -> Self {
+    pub fn new(
+        local_tz: FixedOffset,
+        sources: impl IntoIterator<Item = ConfluenceSourceCfg>,
+    ) -> Self {
         let mut map = HashMap::new();
         for cfg in sources {
-            map.insert(cfg.source_id, ConfluenceConnector::new(cfg.config));
+            map.insert(
+                cfg.source_id,
+                ConfluenceConnector::with_local_tz(cfg.config, local_tz),
+            );
         }
         Self {
+            local_tz,
             inner: Arc::new(RwLock::new(map)),
         }
     }
 
     /// Add or replace the inner connector for `cfg.source_id`.
     pub async fn upsert(&self, cfg: ConfluenceSourceCfg) {
-        let conn = ConfluenceConnector::new(cfg.config);
+        let conn = ConfluenceConnector::with_local_tz(cfg.config, self.local_tz);
         self.inner.write().await.insert(cfg.source_id, conn);
     }
 

@@ -1,15 +1,17 @@
-//! Smoke tests proving the DAY-79 scaffold invariants.
+//! Smoke tests proving the DAY-79 scaffold + DAY-80 walker-wiring
+//! invariants.
 //!
-//! From the plan (§Task 7):
+//! From the plan (§Task 7 + §Task 8):
 //!
 //! 1. **Registered kind.** `ConfluenceConnector::kind()` /
 //!    `ConfluenceMux::kind()` both return
 //!    [`SourceKind::Confluence`] — the orchestrator registry keys off
 //!    this, so a wrong return here would silently route Confluence
 //!    fan-out to whatever mux accidentally got registered.
-//! 2. **Non-Day unsupported.** Every [`SyncRequest`] variant returns
-//!    [`DayseamError::Unsupported`] in the scaffold PR; DAY-80 flips
-//!    `Day` onto the CQL walker.
+//! 2. **Non-Day unsupported.** After DAY-80 wired the CQL walker into
+//!    `SyncRequest::Day`, `Range` / `Since` still return
+//!    [`DayseamError::Unsupported`] until v0.3's incremental
+//!    scheduler lands — matching the Jira connector's exact shape.
 //! 3. Object-safety through `Arc<dyn SourceConnector>` — the
 //!    registry stores mux handles behind exactly that bound, so a
 //!    regression here would fail every `default_registries` call
@@ -17,7 +19,8 @@
 //! 4. `ConfluenceMux::upsert` / `remove` round-trip by `source_id`.
 //!
 //! The `validate_auth` + `list_identities` happy paths live in
-//! `tests/auth.rs` alongside the shared-identity invariant.
+//! `tests/auth.rs` alongside the shared-identity invariant; the
+//! walker end-to-end path lives in `tests/walk.rs`.
 
 use std::sync::Arc;
 
@@ -114,12 +117,11 @@ async fn confluence_mux_sync_on_unregistered_source_returns_source_not_found() {
 
 #[tokio::test]
 async fn non_day_sync_request_unsupported() {
-    // Plan invariant 2: the scaffold PR makes every non-Day request
-    // return `Unsupported`. Day is also currently unsupported —
-    // DAY-80 flips that arm onto the CQL walker — but the invariant
-    // the plan guards against (someone accidentally wiring Range or
-    // Since into the scaffold without the scheduler) is the one
-    // this test pins.
+    // Post DAY-80, `Day` is handled by the CQL walker (see
+    // `tests/walk.rs`). `Range` / `Since` continue to return
+    // `Unsupported` until v0.3's incremental scheduler lands — the
+    // invariant this test pins is that someone accidentally wiring
+    // either of them without the scheduler fails loudly.
     let conn = ConfluenceConnector::new(test_config());
     let ctx = mk_ctx(Uuid::new_v4());
 
@@ -155,23 +157,24 @@ async fn non_day_sync_request_unsupported() {
 }
 
 #[tokio::test]
-async fn sync_day_is_also_unsupported_in_scaffold() {
-    // DAY-80 flips this arm onto the CQL walker. The scaffold PR
-    // deliberately keeps it `Unsupported` so a bug in the
-    // Add-Source flow that ran a sync against a Confluence source
-    // pre-DAY-80 fails loudly (matching error code the orchestrator
-    // already surfaces) rather than silently returning an empty
-    // event list.
+async fn sync_day_routes_into_walker_when_no_identity_configured() {
+    // Post DAY-80, `SyncRequest::Day` no longer returns Unsupported.
+    // With no `AtlassianAccountId` identity registered on the ctx,
+    // the walker bails early with an empty SyncResult — this test
+    // verifies the wiring + the early-bail short-circuit so a future
+    // refactor that forgets to plumb `source_identities` through
+    // `ConnCtx` fails here instead of leaking a real HTTP call.
     let conn = ConfluenceConnector::new(test_config());
     let ctx = mk_ctx(Uuid::new_v4());
-    let err = conn
+    let result = conn
         .sync(
             &ctx,
             SyncRequest::Day(NaiveDate::from_ymd_opt(2026, 4, 20).unwrap()),
         )
         .await
-        .expect_err("Day is unsupported until DAY-80");
-    assert_eq!(err.code(), error_codes::CONNECTOR_UNSUPPORTED_SYNC_REQUEST);
+        .expect("identity miss should short-circuit, not error");
+    assert!(result.events.is_empty(), "empty identity → empty events");
+    assert_eq!(result.stats.fetched_count, 0);
 }
 
 #[test]

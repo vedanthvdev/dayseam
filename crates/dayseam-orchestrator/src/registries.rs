@@ -193,14 +193,14 @@ pub fn default_registries(cfg: DefaultRegistryConfig) -> (ConnectorRegistry, Sin
         SourceKind::Jira,
         Arc::new(JiraMux::new(cfg.local_tz, cfg.jira_sources)),
     );
-    // DAY-79: same "register-empty, upsert-later" contract for the
-    // Confluence kind. The scaffold mux returns
-    // `DayseamError::Unsupported` from `sync` today; DAY-80 flips
-    // the `SyncRequest::Day` arm onto the CQL walker without any
-    // registry change here.
+    // DAY-79 / DAY-80: same "register-empty, upsert-later" contract
+    // for the Confluence kind. DAY-80 wired `SyncRequest::Day` onto
+    // the CQL walker; `local_tz` threads through the mux exactly the
+    // way it does for GitLab and Jira so the walker can derive the
+    // correct UTC window from a local day.
     connectors.insert(
         SourceKind::Confluence,
-        Arc::new(ConfluenceMux::new(cfg.confluence_sources)),
+        Arc::new(ConfluenceMux::new(cfg.local_tz, cfg.confluence_sources)),
     );
 
     let mut sinks = SinkRegistry::new();
