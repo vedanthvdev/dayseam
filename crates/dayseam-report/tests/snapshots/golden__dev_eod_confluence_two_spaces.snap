@@ -1,5 +1,6 @@
 ---
 source: crates/dayseam-report/tests/golden.rs
+assertion_line: 590
 expression: draft
 ---
 id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
@@ -7,19 +8,19 @@ date: 2026-04-18
 template_id: dayseam.dev_eod
 template_version: 2026-04-22
 sections:
-  - id: commits
-    title: Commits
+  - id: confluence_pages
+    title: Confluence pages
     bullets:
-      - id: b_c32e45e319063151
+      - id: b_ee63920f7ff2912b
         text: "**Engineering** (ENG) — Edited: Release runbook"
-      - id: b_7cc3caee63cf93b8
+      - id: b_fd8862cec14f7c43
         text: "**Operations** (OPS) — Edited: On-call rotation"
 evidence:
-  - bullet_id: b_c32e45e319063151
+  - bullet_id: b_ee63920f7ff2912b
     event_ids:
       - efa61d64-29c0-5f71-a45a-d38aadb83522
     reason: 1 Confluence event
-  - bullet_id: b_7cc3caee63cf93b8
+  - bullet_id: b_fd8862cec14f7c43
     event_ids:
       - 4490ab23-436c-5f14-9621-84fa10b51ec1
     reason: 1 Confluence event

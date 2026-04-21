@@ -26,6 +26,7 @@ mod pipeline;
 mod render;
 mod rollup;
 mod rollup_mr;
+mod sections;
 mod templates;
 
 pub use dayseam_core::{Evidence, RenderedBullet, RenderedSection, ReportDraft};

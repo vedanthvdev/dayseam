@@ -30,10 +30,9 @@ use crate::error::ReportError;
 use crate::group_key::{group_key_from_event, GroupKind};
 use crate::input::ReportInput;
 use crate::rollup::{group_kind_for_payload, roll_up, RolledUpArtifact};
+use crate::sections::ReportSection;
 use crate::templates::{build_registry, DEV_EOD_TEMPLATE_ID};
 
-const COMMITS_SECTION_ID: &str = "commits";
-const COMMITS_SECTION_TITLE: &str = "Commits";
 const REDACTED_BULLET_TEXT: &str = "(private work)";
 const PARTIAL_SECTION_COMMITS: &str = "section_commits";
 
@@ -116,45 +115,93 @@ fn event_is_self(event: &ActivityEvent, identities: &[&SourceIdentity]) -> bool 
 
 // ---- section + bullet construction ---------------------------------------
 
+/// Bucket each rolled-up artifact into its [`ReportSection`], render
+/// every group's bullets under that section's id, and emit one
+/// [`RenderedSection`] per non-empty bucket in the enum's derived
+/// `Ord` order (which is its declaration order — pinned by
+/// `sections::tests::ord_matches_render_order`).
+///
+/// Empty buckets are dropped — a day with only Jira activity renders
+/// as a single `## Jira issues` section, not "`## Commits` (empty) →
+/// `## Jira issues`". The fully-empty-day fallback
+/// ([`empty_section`]) is handled by the caller, so this function
+/// does not observe "zero groups total"; its contract is "given
+/// non-empty groups, produce 1..N non-empty sections."
+///
+/// The `section_id` passed into [`render_group`] (and from there
+/// into [`bullet_id`]) is the per-section id — `"commits"` /
+/// `"jira_issues"` / `"confluence_pages"` — not the v0.1/v0.2
+/// catch-all `"commits"`. That rotates the hashes of Jira and
+/// Confluence bullets, which is why the v0.3 release is a
+/// `semver:minor` bump.
+///
+/// ### Evidence vs bullet ordering
+///
+/// The returned `Vec<Evidence>` preserves *rollup traversal order*
+/// (grouped by artifact), while the returned sections' bullets are
+/// re-bucketed into section order. Consumers that need to join
+/// evidence back to a bullet must key on [`Evidence::bullet_id`] —
+/// positional alignment between the two vectors is not guaranteed
+/// across section boundaries.
 fn build_sections(
     groups: &[RolledUpArtifact],
     registry: &handlebars::Handlebars<'_>,
     template_id: &str,
     verbose_mode: bool,
 ) -> Result<(Vec<RenderedSection>, Vec<Evidence>), ReportError> {
-    // Pre-size for the common case where every group is a CommitSet
-    // with a handful of events. Under-allocating is fine; the
-    // allocator will grow the vec as needed.
-    let mut bullets: Vec<RenderedBullet> = Vec::with_capacity(groups.len());
+    use std::collections::BTreeMap;
+
+    // BTreeMap keyed by `ReportSection` gives us two guarantees
+    // in one data structure: (1) bullets land in the right bucket
+    // by payload kind, (2) the iteration order is the derived
+    // `Ord` (which `sections.rs::ord_matches_ordinal` pins to the
+    // render order). No manual sort pass downstream.
+    let mut bucketed: BTreeMap<ReportSection, Vec<RenderedBullet>> = BTreeMap::new();
     let mut evidence: Vec<Evidence> = Vec::new();
 
     for group in groups {
-        let rendered = render_group(
-            group,
-            registry,
-            template_id,
-            COMMITS_SECTION_ID,
-            verbose_mode,
-        )?;
+        let section = ReportSection::from_payload(&group.artifact.payload);
+        let rendered = render_group(group, registry, template_id, section.id(), verbose_mode)?;
+        let bucket = bucketed.entry(section).or_default();
         for (bullet, ev) in rendered {
             evidence.push(ev);
-            bullets.push(bullet);
+            bucket.push(bullet);
         }
     }
 
-    let section = RenderedSection {
-        id: COMMITS_SECTION_ID.to_string(),
-        title: COMMITS_SECTION_TITLE.to_string(),
-        bullets,
-    };
+    let sections: Vec<RenderedSection> = bucketed
+        .into_iter()
+        // A bucket can end up empty if every event inside a group
+        // was filtered out (e.g. a CommitSet whose commits all
+        // redacted to nothing upstream). Dropping empty buckets
+        // keeps the rendered markdown free of `## Commits\n\n`-only
+        // fragments that the streaming preview would otherwise
+        // render as an empty heading.
+        .filter(|(_, bullets)| !bullets.is_empty())
+        .map(|(section, bullets)| RenderedSection {
+            id: section.id().to_string(),
+            title: section.title().to_string(),
+            bullets,
+        })
+        .collect();
 
-    Ok((vec![section], evidence))
+    Ok((sections, evidence))
 }
 
+/// The fully-empty-day fallback.
+///
+/// Rendered when the rollup produced zero groups *and* zero events
+/// survived self-filtering — i.e. the report has nothing to say.
+/// The section is pinned to [`ReportSection::Commits`] so the
+/// heading reads `## Commits` (matching v0.1/v0.2 behaviour the
+/// desktop preview and E2E smoke test assert against). Keeping the
+/// fallback under `Commits` instead of inventing a fourth "empty"
+/// section also means the markdown file writer never produces a
+/// heading it has not seen before.
 fn empty_section(date: chrono::NaiveDate) -> RenderedSection {
     RenderedSection {
-        id: COMMITS_SECTION_ID.to_string(),
-        title: COMMITS_SECTION_TITLE.to_string(),
+        id: ReportSection::Commits.id().to_string(),
+        title: ReportSection::Commits.title().to_string(),
         bullets: vec![RenderedBullet {
             id: empty_state_bullet_id(date),
             text: format!("*No tracked activity for {}.*", format_date_long(date)),
@@ -440,11 +487,16 @@ fn bullet_id(
 
 fn empty_state_bullet_id(date: chrono::NaiveDate) -> String {
     // Stable id so the empty-state bullet has the same shape as a
-    // real bullet and can be targeted by evidence-less tests.
+    // real bullet and can be targeted by evidence-less tests. The
+    // section id is deliberately [`ReportSection::Commits`] — the
+    // same section the empty-day fallback renders under — so this
+    // id round-trips with the section it lives in and survives any
+    // future bucketing changes as long as `empty_section` keeps
+    // using `ReportSection::Commits`.
     let mut hasher = Sha256::new();
     hasher.update(DEV_EOD_TEMPLATE_ID.as_bytes());
     hasher.update(b"\0");
-    hasher.update(COMMITS_SECTION_ID.as_bytes());
+    hasher.update(ReportSection::Commits.id().as_bytes());
     hasher.update(b"\0");
     hasher.update(b"empty\0");
     hasher.update(date.to_string().as_bytes());

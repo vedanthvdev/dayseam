@@ -590,6 +590,124 @@ fn dev_eod_confluence_two_spaces() {
     insta::assert_yaml_snapshot!("dev_eod_confluence_two_spaces", draft);
 }
 
+/// DAY-86 regression for issue #86: a day that mixes commits, Jira
+/// transitions and Confluence edits must render as **three distinct
+/// sections** (`Commits` → `Jira issues` → `Confluence pages`), not
+/// one catch-all `Commits` heading the way v0.1/v0.2 did.
+///
+/// This is the exact scenario the user hit in dogfood — a Confluence
+/// edit + two Jira transitions + a commit, all rendered under a
+/// single `## Commits` heading. The golden snapshot locks:
+///
+/// 1. **Section count**: three sections, none of them empty.
+/// 2. **Section order**: Commits first (shipping), Jira second
+///    (triage), Confluence third (docs), as
+///    `sections::ReportSection`'s derived `Ord` dictates. Even
+///    though the Confluence event arrives *before* the Jira events
+///    in wall-clock time in this fixture (hour 8 vs 10/12), the
+///    render order is by section-ordinal, not event-time.
+/// 3. **Section ids / titles**: `commits` / `jira_issues` /
+///    `confluence_pages` — the contract the markdown sink and the
+///    streaming preview key on.
+/// 4. **Bullets in each section only contain the right kind**:
+///    no Jira or Confluence bullet leaks into `Commits`, which is
+///    the v0.2.x bug this work fixes.
+#[test]
+fn dev_eod_mixed_commits_jira_confluence() {
+    let git_src = source_id(30);
+    let jira_src = source_id(31);
+    let conf_src = source_id(32);
+
+    let mut input = fixture_input();
+    input.source_identities = vec![
+        self_git_identity(git_src, "self@example.com"),
+        self_atlassian_identity(jira_src, "acct-self"),
+        self_atlassian_identity(conf_src, "acct-self"),
+    ];
+
+    // Confluence event fires earliest in wall-clock order (hour 8).
+    // Rendering order must still be Commits → Jira → Confluence
+    // regardless, because sections render by ordinal not by
+    // occurred-at.
+    let conf = confluence_page_edited_event(
+        conf_src,
+        "page-3003",
+        "ST",
+        "Delivery Tribes",
+        "acct-self",
+        8,
+        "Edited page: Kanban Release Process",
+    );
+    let commit = commit_event(
+        git_src,
+        "sha1aaaa",
+        "/work/repo-a",
+        "self@example.com",
+        9,
+        "feat: wire per-kind report sections",
+        Privacy::Normal,
+    );
+    let jira_a = jira_transition_event(
+        jira_src,
+        "CAR-5117",
+        "CAR",
+        "Carbon Team",
+        "acct-self",
+        10,
+        "CAR-5117 Production Verification → Done",
+    );
+    let jira_b = jira_transition_event(
+        jira_src,
+        "CAR-5190",
+        "CAR",
+        "Carbon Team",
+        "acct-self",
+        12,
+        "CAR-5190: Test affected test plugin",
+    );
+
+    let commit_artifact = commit_set_artifact(git_src, "/work/repo-a", &[&commit]);
+
+    input.events = vec![conf, commit, jira_a, jira_b];
+    input.artifacts = vec![commit_artifact];
+    // Deliberately one per_source_state entry only. `per_source_state`
+    // is a `HashMap<Uuid, SourceRunState>` and its iteration order is
+    // non-deterministic, so snapshotting a map with >1 entry flakes
+    // across runs. This test is about section bucketing; the other
+    // sources' state is irrelevant. If `per_source_state` ever
+    // stabilises on an ordered container, populate all three here.
+    input.per_source_state.insert(git_src, succeeded_state(1));
+
+    let draft = dayseam_report::render(input).expect("render must succeed");
+
+    // Structural invariants first — the snapshot pins everything
+    // else, but these three assertions make the *intent* of the
+    // test obvious at read time and give a better failure message
+    // than a diff of YAML if a regression flips them.
+    assert_eq!(
+        draft.sections.len(),
+        3,
+        "mixed-day must render 3 sections (Commits / Jira issues / Confluence pages)",
+    );
+    let ids: Vec<&str> = draft.sections.iter().map(|s| s.id.as_str()).collect();
+    assert_eq!(
+        ids,
+        vec!["commits", "jira_issues", "confluence_pages"],
+        "section order must be Commits → Jira issues → Confluence pages",
+    );
+    let commits_section = &draft.sections[0];
+    assert!(
+        commits_section
+            .bullets
+            .iter()
+            .all(|b| !b.text.contains("Jira") && !b.text.contains("Confluence")),
+        "Jira/Confluence bullets must not leak into the Commits section \
+         (the v0.2.x bug this test guards against)",
+    );
+
+    insta::assert_yaml_snapshot!("dev_eod_mixed_commits_jira_confluence", draft);
+}
+
 /// Sanity: `generated_at` threads through untouched. If the engine
 /// ever starts calling `Utc::now()` this test catches it — drift
 /// here is a leaked side-effect, not a template change.

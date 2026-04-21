@@ -635,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "connector-atlassian-common"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "connectors-sdk",
  "dayseam-core",
@@ -652,7 +652,7 @@ dependencies = [
 
 [[package]]
 name = "connector-confluence"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -672,7 +672,7 @@ dependencies = [
 
 [[package]]
 name = "connector-gitlab"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -692,7 +692,7 @@ dependencies = [
 
 [[package]]
 name = "connector-jira"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "chrono",
@@ -711,7 +711,7 @@ dependencies = [
 
 [[package]]
 name = "connector-local-git"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -730,7 +730,7 @@ dependencies = [
 
 [[package]]
 name = "connectors-sdk"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-core"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "insta",
@@ -1034,7 +1034,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-db"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "dayseam-core",
@@ -1049,7 +1049,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-desktop"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "connector-atlassian-common",
@@ -1082,7 +1082,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-events"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "chrono",
  "dayseam-core",
@@ -1093,7 +1093,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-orchestrator"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -1120,7 +1120,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-report"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "cargo_metadata",
  "chrono",
@@ -1137,7 +1137,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-secrets"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "keyring",
  "thiserror 1.0.69",
@@ -4906,7 +4906,7 @@ checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "sink-markdown-file"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -4924,7 +4924,7 @@ dependencies = [
 
 [[package]]
 name = "sinks-sdk"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "async-trait",
  "cargo_metadata",

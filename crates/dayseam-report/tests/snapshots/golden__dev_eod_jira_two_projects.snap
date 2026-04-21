@@ -1,5 +1,6 @@
 ---
 source: crates/dayseam-report/tests/golden.rs
+assertion_line: 555
 expression: draft
 ---
 id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
@@ -7,25 +8,25 @@ date: 2026-04-18
 template_id: dayseam.dev_eod
 template_version: 2026-04-22
 sections:
-  - id: commits
-    title: Commits
+  - id: jira_issues
+    title: Jira issues
     bullets:
-      - id: b_b9c3405e5dc1e513
+      - id: b_582adb056c2fe4eb
         text: "**Cardtronics** (CAR) — CAR-5117: In Progress → In Review"
-      - id: b_512da8d886f5732b
+      - id: b_75326f1281d9d580
         text: "**Cardtronics** (CAR) — CAR-6001: To Do → In Progress"
-      - id: b_6202b7e868868e99
+      - id: b_19eb50c537874b70
         text: "**Kontiki** (KTON) — KTON-4550: In Review → Done"
 evidence:
-  - bullet_id: b_b9c3405e5dc1e513
+  - bullet_id: b_582adb056c2fe4eb
     event_ids:
       - 8e155c34-eb52-53c6-9c46-ac05b1e91e99
     reason: 1 Jira event
-  - bullet_id: b_512da8d886f5732b
+  - bullet_id: b_75326f1281d9d580
     event_ids:
       - 25639500-6582-534f-a859-3ee3ff6bbf22
     reason: 1 Jira event
-  - bullet_id: b_6202b7e868868e99
+  - bullet_id: b_19eb50c537874b70
     event_ids:
       - 72422b0a-9e93-5907-8597-d8a0e37f962c
     reason: 1 Jira event

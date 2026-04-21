@@ -1,0 +1,53 @@
+---
+source: crates/dayseam-report/tests/golden.rs
+assertion_line: 708
+expression: draft
+---
+id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+date: 2026-04-18
+template_id: dayseam.dev_eod
+template_version: 2026-04-22
+sections:
+  - id: commits
+    title: Commits
+    bullets:
+      - id: b_e09d33afcb0781da
+        text: "**repo-a** — feat: wire per-kind report sections"
+  - id: jira_issues
+    title: Jira issues
+    bullets:
+      - id: b_7e8c11c205db1969
+        text: "**Carbon Team** (CAR) — CAR-5117 Production Verification → Done"
+      - id: b_64634a18dd17403c
+        text: "**Carbon Team** (CAR) — CAR-5190: Test affected test plugin"
+  - id: confluence_pages
+    title: Confluence pages
+    bullets:
+      - id: b_38c82ff23ae34848
+        text: "**Delivery Tribes** (ST) — Edited page: Kanban Release Process"
+evidence:
+  - bullet_id: b_e09d33afcb0781da
+    event_ids:
+      - e421bce8-5951-56b9-a767-0271087619dc
+    reason: 1 commit
+  - bullet_id: b_38c82ff23ae34848
+    event_ids:
+      - 63ab6a80-b64c-5b85-ab53-72a07b625578
+    reason: 1 Confluence event
+  - bullet_id: b_7e8c11c205db1969
+    event_ids:
+      - 86068756-1609-59aa-8bf3-650cc85a7159
+    reason: 1 Jira event
+  - bullet_id: b_64634a18dd17403c
+    event_ids:
+      - 0f5b8313-aafb-57a7-bbc9-499f35029878
+    reason: 1 Jira event
+per_source_state:
+  1e000000-0000-0000-0000-000000000000:
+    status: Succeeded
+    started_at: "2026-04-18T23:00:00Z"
+    finished_at: "2026-04-18T23:00:00Z"
+    fetched_count: 1
+    error: ~
+verbose_mode: false
+generated_at: "2026-04-18T23:00:00Z"
