@@ -34,6 +34,14 @@ export const CATALOGUE = {
     sink: "44444444-4444-4444-4444-444444444444",
     run: "99999999-9999-9999-9999-999999999999",
     draft: "88888888-8888-8888-8888-888888888888",
+    // DAY-83 — the Atlassian happy-path scenarios seed freshly-
+    // created Jira and Confluence source rows through
+    // `atlassian_sources_add`. Pinning both ids ahead of time keeps
+    // the mock handler deterministic and lets future assertions
+    // name the row explicitly ("the `sources_list` IPC includes
+    // the Jira row at `…5…`" reads better than an anonymous UUID).
+    atlassianJiraSource: "55555555-5555-5555-5555-555555555555",
+    atlassianConfluenceSource: "66666666-6666-6666-6666-666666666666",
   },
 
   persons: {
@@ -73,6 +81,48 @@ export const CATALOGUE = {
       "Wired up the Playwright E2E happy path",
       "Closed Phase 2 deferral cleanup (DAY-57)",
     ],
+    // DAY-83 — per-product bullets the mock appends to the draft
+    // when a matching Atlassian source is present at report time.
+    // The feature file asserts against these exact strings so the
+    // human-readable scenario ("the draft contains the Atlassian
+    // Jira bullet") stays tied to the string the mock actually
+    // serves — drift surfaces as a failing assertion, not as silent
+    // pass.
+    atlassianJiraBullet: "Moved CAR-5117 to Production Verification",
+    atlassianConfluenceBullet:
+      "Published runbook on /wiki/spaces/ENG/pages/release-process",
+  },
+
+  // DAY-83 — fixture for the Add-Atlassian-source flow. The Atlassian
+  // happy-path scenarios drive the real `AddAtlassianSourceDialog`
+  // (URL → validate → Add source) so these values have to satisfy
+  // the dialog's client-side validation:
+  //   * `workspaceUrl` normalises to `https://<host>` via
+  //     `normaliseWorkspaceUrl` (bare-slug form accepted so the mock
+  //     exercises the common user-typed shape).
+  //   * `email` is a real-looking Atlassian account email.
+  //   * `apiToken` is a non-empty placeholder (the mock never checks
+  //     the token bytes — it mirrors the happy `GET /myself` shape).
+  //   * `accountId` / `displayName` / `cloudId` are the triple the
+  //     mocked `atlassian_validate_credentials` returns; the dialog
+  //     persists them onto the new `SourceIdentity` via
+  //     `atlassian_sources_add`.
+  atlassian: {
+    workspaceSlug: "dayseam-e2e",
+    workspaceUrl: "https://dayseam-e2e.atlassian.net",
+    email: "e2e@dayseam.app",
+    apiToken: "ATATT-e2e-fixture-token",
+    accountId: "557058:e2e-account-id",
+    displayName: "Dayseam E2E",
+    cloudId: "cloud-id-e2e",
+    // SecretRef the mock stamps onto newly-created Atlassian source
+    // rows. The shared-PAT Journey A writes the same SecretRef onto
+    // both rows; separate-PAT Journeys would write distinct values
+    // (no DAY-83 scenario exercises that path today).
+    sharedSecretRef: {
+      keychain_service: "dayseam.atlassian",
+      keychain_account: "slot:e2e-shared-pat",
+    },
   },
 } as const;
 

@@ -7,16 +7,19 @@
 
 import type { Page } from "@playwright/test";
 import { AppShellPage } from "../../page-objects/app-shell/app-shell-page";
+import { AtlassianDialogPage } from "../../page-objects/atlassian/atlassian-dialog-page";
 import { ReportPage } from "../../page-objects/report/report-page";
 import { SaveDialogPage } from "../../page-objects/save/save-dialog-page";
 
 export class PageFactory {
   readonly appShell: AppShellPage;
+  readonly atlassian: AtlassianDialogPage;
   readonly report: ReportPage;
   readonly save: SaveDialogPage;
 
   constructor(page: Page) {
     this.appShell = new AppShellPage(page);
+    this.atlassian = new AtlassianDialogPage(page);
     this.report = new ReportPage(page);
     this.save = new SaveDialogPage(page);
   }

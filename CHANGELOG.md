@@ -8,6 +8,74 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **v0.2 orchestrator registry wiring + Playwright happy-path E2E for
+  Atlassian (DAY-83).** Eleventh task of the v0.2 Atlassian arc.
+  Closes the loop between the DAY-76/77 Jira connector, the
+  DAY-79/80 Confluence connector, the DAY-82 add-source dialog, and
+  the user-visible "a Jira/Confluence bullet appears in my daily
+  report" contract, with three BDD scenarios exercising the full
+  renderer stack on every PR. **Registry hydration smoke.**
+  `default_registries_populate_shipping_kinds` now asserts the
+  connector registry's `.kinds()` is **exactly** `{LocalGit, GitLab,
+  Jira, Confluence}` and the sink registry's is exactly
+  `{MarkdownFile}`. Using a `HashSet` equality (rather than
+  individual `.get(kind).is_some()` probes) catches both directions
+  of regression — a kind that silently drops out (orchestrator
+  fan-out skips it) and a spurious extra kind that slips in without
+  a matching `DefaultRegistryConfig` field (mux running on a default
+  config that ignores the user's sources). **Three new Playwright
+  scenarios under `@connector:atlassian`.** The suite drives the
+  real `AddAtlassianSourceDialog` end-to-end — sidebar menu → product
+  checkboxes → workspace URL normalisation → email + API token →
+  `atlassian_validate_credentials` → submit via
+  `atlassian_sources_add` → generate report → assert per-product
+  bullet appears. (1) `@atlassian-jira-only` wires one Jira source,
+  confirms the workspace slug `dayseam-e2e` normalises to the
+  canonical `https://dayseam-e2e.atlassian.net` origin, then checks
+  the Jira bullet lands in the Completed section. (2)
+  `@atlassian-confluence-only` does the same for Confluence.  (3)
+  `@atlassian-both` ticks both products (Journey A — shared PAT),
+  submits once, and asserts both bullets appear in the same
+  Completed section — the "grouped correctly" invariant from the
+  plan. Every scenario ends with `no console or page errors were
+  captured during the run` so an uncaught renderer exception in any
+  Atlassian code path fails the build loudly. **Mock surface
+  extension.** `tauri-mock-init.ts` gains handlers for
+  `atlassian_validate_credentials` (returns the catalogue-seeded
+  account triple) and `atlassian_sources_add` (captures the full
+  IPC payload on `state.captured.atlassianAddCalls` for future
+  contract assertions, appends the fresh Jira / Confluence rows to
+  a closure-local sources array the sidebar reads via
+  `sources_list`, and mints a shared `secret_ref` that mirrors the
+  Rust-side `dayseam.atlassian::slot:<uuid>` contract). The draft
+  returned by `report_get` is now built on demand from the current
+  sources list, so a scenario that adds Jira sees the Jira bullet,
+  one that adds Confluence sees the Confluence bullet, and one that
+  adds both sees both — the same per-source-conditioning the real
+  Rust renderer applies. **New infrastructure pieces.**
+  `e2e/page-objects/atlassian/atlassian-dialog-page.ts` is the
+  single surface the steps talk to (one intent-named method per
+  user action — `openFromSidebar`, `selectOnlyJira`,
+  `selectOnlyConfluence`, `selectBothProducts`,
+  `fillCredentialsFromFixture`, `validateCredentials`, `submit`,
+  `expectNormalisedWorkspaceUrl`); `atlassian-dialog-locators.ts`
+  pins every `data-testid` the dialog exposes so a React-side
+  rename is a single edit here. `e2e/steps/ui-steps/atlassian/
+  atlassian-steps.ts` hosts the new Gherkin bindings, registering
+  the new `@atlassian` domain tag and `@connector:atlassian`
+  family per the README's tag taxonomy. **Catalogue additions.**
+  `e2e/fixtures/runtime/catalogue.ts` gains the Atlassian fixture
+  (workspace slug + canonical URL, email, API token placeholder,
+  account triple, shared `SecretRef` slot) and two per-product
+  bullet strings the mock appends when the matching source is
+  present; the feature file asserts against those exact strings
+  so a drift between "what the mock serves" and "what the scenario
+  expects" is a fixture-pinned change, not a silently-passing
+  test. **Stability.** All three scenarios pass on three
+  consecutive `pnpm e2e` runs (the README's "not stable at three =
+  not done" invariant), with headless total time ≈3.5s for the
+  Atlassian feature.
+
 - **v0.2 `apps/desktop` — Atlassian add-source UI + IPC (DAY-82).**
   Tenth task of the v0.2 Atlassian arc. Ships the user-facing surface
   for connecting Jira and Confluence so every earlier task in the arc

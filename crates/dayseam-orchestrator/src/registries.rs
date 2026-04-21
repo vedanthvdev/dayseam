@@ -249,6 +249,35 @@ mod tests {
             confluence_sources: Vec::new(),
         };
         let (connectors, sinks) = default_registries(cfg);
+        // DAY-83 Task 11.1 — hydration smoke: the shipping connector
+        // set is **exactly** {LocalGit, GitLab, Jira, Confluence}.
+        // Asserting the full kind set (rather than individual
+        // `.get(kind).is_some()` probes) catches both directions of
+        // regression: a kind that silently drops out (→ orchestrator
+        // fan-out skips it), and a spurious extra kind that gets
+        // wired in without a matching `DefaultRegistryConfig` field
+        // (→ a connector mux running with a default config that
+        // ignores the user's sources). Using `HashSet` keeps the
+        // assertion insensitive to the HashMap iteration order the
+        // `.kinds()` method returns.
+        use std::collections::HashSet;
+        let connector_kinds: HashSet<SourceKind> = connectors.kinds().into_iter().collect();
+        assert_eq!(
+            connector_kinds,
+            HashSet::from([
+                SourceKind::LocalGit,
+                SourceKind::GitLab,
+                SourceKind::Jira,
+                SourceKind::Confluence,
+            ]),
+            "default_registries must hydrate exactly the four shipping connector kinds",
+        );
+        let sink_kinds: HashSet<SinkKind> = sinks.kinds().into_iter().collect();
+        assert_eq!(
+            sink_kinds,
+            HashSet::from([SinkKind::MarkdownFile]),
+            "default_registries must hydrate exactly the shipping sink kinds",
+        );
         assert!(connectors.get(SourceKind::LocalGit).is_some());
         // The GitLab connector is always registered as a mux — even
         // a brand-new user with zero GitLab sources gets a live

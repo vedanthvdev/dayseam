@@ -81,9 +81,10 @@ Pick from the existing families before inventing a new one — an
 unruly tag vocabulary is the first thing that rots a BDD suite.
 
 - `@<domain>` — the primary surface the scenario covers.
-  Current families: `@happy-path`, and (soon) `@sources`,
-  `@identities`, `@sinks`, `@reports`, `@onboarding`. A scenario
-  has **exactly one** `@<domain>` tag at the feature level.
+  Current families: `@happy-path`, `@atlassian`, and (soon)
+  `@sources`, `@identities`, `@sinks`, `@reports`, `@onboarding`.
+  A scenario has **exactly one** `@<domain>` tag at the feature
+  level.
 - `@smoke` — scenario is cheap and critical enough to gate every
   PR. The CI workflow runs the full suite today; the tag future-
   proofs a "pre-merge subset" split when the suite grows past the
@@ -93,11 +94,11 @@ unruly tag vocabulary is the first thing that rots a BDD suite.
   Rust-side command shape will fail this scenario loudly; reviewers
   should treat flake here as a real regression, not a retry target.
 - `@connector:<kind>` — scenario only makes sense for a specific
-  connector (`@connector:gitlab`, `@connector:local-git`). Use on
-  connector-specific scenarios so a CI job that lacks the
-  connector's fixtures can `--grep` them out, and so `--grep
-  @connector:gitlab` becomes the one-liner answer to "did my
-  change break GitLab?".
+  connector (`@connector:gitlab`, `@connector:local-git`,
+  `@connector:atlassian`). Use on connector-specific scenarios so
+  a CI job that lacks the connector's fixtures can `--grep` them
+  out, and so `--grep @connector:atlassian` becomes the one-liner
+  answer to "did my change break Jira + Confluence?".
 
 New tags should be added to this list in the same PR that
 introduces them.
@@ -114,12 +115,16 @@ e2e/
   features/                        # ← the human-readable scenario catalogue
     happy-path/
       generate-and-save-report.feature
+    atlassian/
+      connect-and-report.feature   # DAY-83: Jira-only, Confluence-only, both
 
   steps/                           # Gherkin → TypeScript bindings
     meta-steps.ts                  # cross-cutting (e.g. console-error guard)
     ui-steps/
       app-shell/
         app-shell-steps.ts         # "the Dayseam desktop app is open on the main screen"
+      atlassian/
+        atlassian-steps.ts         # Add-Atlassian-source dialog + per-product bullets
       report/
         report-steps.ts            # Generate → streaming preview → draft text
       save/
@@ -130,6 +135,9 @@ e2e/
     app-shell/
       app-shell-page.ts
       app-shell-locators.ts
+    atlassian/
+      atlassian-dialog-page.ts
+      atlassian-dialog-locators.ts
     report/
       report-page.ts
       report-locators.ts

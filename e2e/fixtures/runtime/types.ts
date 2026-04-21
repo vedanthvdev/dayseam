@@ -14,6 +14,22 @@ export type MockInvokeHandler = (
 
 export type MockHandlers = Record<string, MockInvokeHandler>;
 
+export type CapturedAtlassianAddCall = {
+  workspaceUrl: string;
+  email: string;
+  // Matches the IPC contract: Journey C mode 1 passes `null` when
+  // reusing an existing keychain row. Captured verbatim (not a
+  // boolean flag) so the test body can assert exactly what the
+  // renderer sent, not a summarised approximation.
+  apiToken: string | null;
+  accountId: string;
+  enableJira: boolean;
+  enableConfluence: boolean;
+  reuseSecretRef:
+    | { keychain_service: string; keychain_account: string }
+    | null;
+};
+
 export type MockState = {
   invocations: Array<{ cmd: string; args: unknown }>;
   captured: {
@@ -22,6 +38,11 @@ export type MockState = {
       sinkId: string;
       destinations: string[];
     }>;
+    // DAY-83: capture every `atlassian_sources_add` payload so an
+    // `@atlassian-add-ipc-contract`-tagged scenario can assert the
+    // exact renderer-side IPC shape (journey A / B / C mode 1 /
+    // C mode 2). Kept symmetrical with `saveCalls` above.
+    atlassianAddCalls: CapturedAtlassianAddCall[];
   };
   handlers: MockHandlers;
 };
