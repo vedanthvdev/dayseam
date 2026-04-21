@@ -280,6 +280,13 @@ async fn resolve_registry_config(pool: &SqlitePool) -> Result<DefaultRegistryCon
         local_tz: chrono::Local::now().offset().fix(),
         markdown_dest_dirs: Vec::new(),
         gitlab_sources,
+        // DAY-76: Jira sources land at boot via the same
+        // `sources` table once the Add-Source dialog (DAY-82) knows
+        // how to write a `SourceConfig::Jira` row. Until then the
+        // mux boots empty; the default registry still registers the
+        // kind so the IPC layer has a handle to `upsert` into on
+        // first-add.
+        jira_sources: Vec::new(),
     })
 }
 

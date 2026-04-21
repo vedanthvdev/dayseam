@@ -77,9 +77,13 @@ pub async fn seed_source(
                 user_id: 1,
                 username: "mock".to_string(),
             },
-            SourceKind::Jira | SourceKind::Confluence => {
+            SourceKind::Jira => SourceConfig::Jira {
+                workspace_url: "https://mock.atlassian.net".to_string(),
+                email: "vedanth@mock.atlassian.net".to_string(),
+            },
+            SourceKind::Confluence => {
                 unreachable!(
-                    "Atlassian seed_source helper lands with SourceConfig variants in DAY-74"
+                    "Confluence SourceConfig variant lands with connector-confluence in DAY-79"
                 )
             }
         },

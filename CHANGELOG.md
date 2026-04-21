@@ -8,6 +8,48 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **v0.2 `connector-jira` crate scaffold (DAY-76).** Fourth task of
+  the combined Jira + Confluence phase: lands the Jira Cloud
+  `SourceConnector` shell that DAY-77's per-day JQL walker will plug
+  into, without yet shipping the walker itself. Introduces the
+  `SourceConfig::Jira { workspace_url, email }` variant in
+  `dayseam-core` (with the matching `ts-rs` binding for the desktop
+  IPC layer), plus a `connector-jira` crate containing: (1)
+  `JiraConfig::from_raw` which parses the raw `workspace_url` into a
+  `url::Url` and normalises the trailing slash so every downstream
+  `Url::join("rest/api/3/…")` stays inside the intended Cloud site;
+  (2) `validate_auth` + `list_identities` thin wrappers over
+  `connector-atlassian-common::{discover_cloud, seed_atlassian_identity}`
+  that the DAY-82 Add-Source IPC will call from the popover — keeping
+  credential-probing and identity-seeding product-scoped even though
+  the primitives are shared; (3) `JiraConnector` implementing
+  `SourceConnector` with a `GET /rest/api/3/myself` healthcheck that
+  authenticates through `ctx.auth` (so any `AuthStrategy` trait
+  object, not just `BasicAuth`, can drive the probe) and a `sync`
+  method that deliberately returns
+  `DayseamError::Unsupported { code: CONNECTOR_UNSUPPORTED_SYNC_REQUEST, … }`
+  for every `SyncRequest` variant — the orchestrator can register and
+  health-check Jira sources today, while DAY-77 is free to land the
+  JQL walker as a pure replacement of the `sync` body without
+  touching the crate's public surface; (4) a `JiraMux` multi-source
+  dispatcher mirroring `GitlabMux` so the orchestrator registry holds
+  one entry per `SourceKind::Jira` and the DAY-82 popover can
+  `upsert`/`remove` live without rebuilding the registry. Registered
+  in `dayseam-orchestrator::default_registries` behind a
+  `DefaultRegistryConfig::jira_sources: Vec<JiraSourceCfg>` field the
+  desktop `startup.rs` now wires (empty for now; DAY-82 populates it
+  from the source table). 19 unit + wiremock tests (config
+  round-trip + trailing-slash idempotency, `validate_auth` 200 /
+  401 / 403 / 404 status mapping through `atlassian.*` codes,
+  `list_identities` emits exactly one `SourceIdentity` row,
+  `JiraMux` object safety + `upsert`/`remove`, `sync` returns
+  `Unsupported` for `Day` / `Range` / `Since`). Ships as
+  `semver:none`: no public surface lands that a caller could rely
+  on for real work yet — the connector exists to receive DAY-77's
+  walker. See
+  [`docs/plan/2026-04-20-v0.2-atlassian.md`](docs/plan/2026-04-20-v0.2-atlassian.md)
+  §Task 4 for the full invariant list.
+
 - **v0.2 `connector-atlassian-common` crate (DAY-75).** Third task of
   the combined Jira + Confluence phase: extracts the five primitives
   the per-product walkers (DAY-77 / DAY-80) will each call into a

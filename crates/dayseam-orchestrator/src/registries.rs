@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use chrono::FixedOffset;
 use connector_gitlab::{GitlabMux, GitlabSourceCfg};
+use connector_jira::{JiraMux, JiraSourceCfg};
 use connector_local_git::LocalGitConnector;
 use connectors_sdk::SourceConnector;
 use dayseam_core::{SinkKind, SourceKind};
@@ -147,6 +148,13 @@ pub struct DefaultRegistryConfig {
     /// `(base_url, user_id)` at sync time. Empty in the local-git-only
     /// deployment; the Task 3 add-source flow populates it.
     pub gitlab_sources: Vec<GitlabSourceCfg>,
+    /// Configured Jira sources (one entry per `SourceConfig::Jira`
+    /// row). The [`JiraMux`] registered for [`SourceKind::Jira`]
+    /// dispatches per `source_id` to the right workspace + email at
+    /// sync time. Empty in every deployment today (the DAY-76
+    /// scaffold registers the kind but does not yet service a real
+    /// walk); DAY-82 wires the Add-Source dialog to populate this.
+    pub jira_sources: Vec<JiraSourceCfg>,
 }
 
 /// Build the pair of registries used in production. Tests that need
@@ -167,6 +175,11 @@ pub fn default_registries(cfg: DefaultRegistryConfig) -> (ConnectorRegistry, Sin
         SourceKind::GitLab,
         Arc::new(GitlabMux::new(cfg.local_tz, cfg.gitlab_sources)),
     );
+    // Always register the Jira kind, even on an install with zero
+    // Jira sources, so the DAY-82 Add-Source flow can `upsert` into
+    // a live mux without rebuilding the registry — mirroring the
+    // GitLab path above.
+    connectors.insert(SourceKind::Jira, Arc::new(JiraMux::new(cfg.jira_sources)));
 
     let mut sinks = SinkRegistry::new();
     sinks.insert(
@@ -210,6 +223,7 @@ mod tests {
             local_tz: FixedOffset::east_opt(0).expect("UTC offset"),
             markdown_dest_dirs: vec![tmp.path().to_path_buf()],
             gitlab_sources: Vec::new(),
+            jira_sources: Vec::new(),
         };
         let (connectors, sinks) = default_registries(cfg);
         assert!(connectors.get(SourceKind::LocalGit).is_some());
@@ -218,6 +232,17 @@ mod tests {
         // handle so Task 3's add-source flow can `upsert` into it
         // without re-registering.
         assert!(connectors.get(SourceKind::GitLab).is_some());
+        // Same contract for Jira: the DAY-76 scaffold registers the
+        // kind with an empty mux so the DAY-82 Add-Source flow can
+        // slot a fresh source in without re-registering. Also
+        // double-check the registered handle self-reports the right
+        // kind — a wrong kind there would silently route Jira
+        // fan-out to whatever mux we accidentally registered,
+        // mirroring the Phase 3 GitLab invariant check.
+        let jira = connectors
+            .get(SourceKind::Jira)
+            .expect("Jira kind registered");
+        assert_eq!(jira.kind(), SourceKind::Jira);
         assert!(sinks.get(SinkKind::MarkdownFile).is_some());
     }
 }
