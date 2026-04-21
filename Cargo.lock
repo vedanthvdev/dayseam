@@ -634,6 +634,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "connector-atlassian-common"
+version = "0.1.0"
+dependencies = [
+ "connectors-sdk",
+ "dayseam-core",
+ "dayseam-events",
+ "reqwest 0.12.28",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tokio-util",
+ "url",
+ "uuid",
+ "wiremock",
+]
+
+[[package]]
 name = "connector-gitlab"
 version = "0.1.0"
 dependencies = [

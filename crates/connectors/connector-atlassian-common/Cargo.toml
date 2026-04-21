@@ -1,0 +1,27 @@
+[package]
+name = "connector-atlassian-common"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Shared Atlassian Cloud primitives (ADF walker, cloudId discovery, identity seed, cursor pagination, error taxonomy) used by connector-jira and connector-confluence."
+
+[dependencies]
+connectors-sdk = { path = "../../connectors-sdk" }
+dayseam-core = { path = "../../dayseam-core" }
+dayseam-events = { path = "../../dayseam-events" }
+
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
+uuid = { workspace = true }
+url = "2"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+wiremock = "0.6"

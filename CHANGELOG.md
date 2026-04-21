@@ -8,6 +8,43 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **v0.2 `connector-atlassian-common` crate (DAY-75).** Third task of
+  the combined Jira + Confluence phase: extracts the five primitives
+  the per-product walkers (DAY-77 / DAY-80) will each call into a
+  shared, once-and-only-once layer, so a 401 from Jira and a 401 from
+  Confluence surface the same way, an `@mention` renders the same
+  way in both products' bullets, and a malformed `accountId` is
+  caught by the same shape check regardless of which product
+  returned it. The five primitives: (1) an ADF → plain-text walker
+  (`adf_to_plain`) covering `text`, `mention`, `paragraph`,
+  `hardBreak`, `bulletList`, `orderedList`, `heading`, `blockquote`,
+  `codeBlock`, `rule`, `inlineCard`, `emoji` — with the spike §12
+  privacy rule (mentions emit only `attrs.text`, never `attrs.id` /
+  `attrs.email`) baked into the walker and guarded by a dedicated
+  test; (2) a `discover_cloud` probe that hits
+  `GET /rest/api/3/myself` to validate credentials and surface the
+  `accountId + displayName + emailAddress?` triple identity seeding
+  needs; (3) `seed_atlassian_identity`, a pure helper that builds the
+  `SourceIdentity { kind: AtlassianAccountId, … }` value DAY-82's
+  IPC layer will persist — keeping DB writes in the IPC layer (the
+  `ensure_gitlab_self_identity` precedent) and this crate
+  database-free; (4) two cursor-pagination state machines
+  (`JqlTokenPaginator` for Jira v3 `{isLast, nextPageToken}` and
+  `V2CursorPaginator` for Confluence v2 `_links.next`); (5) an
+  `AtlassianError` taxonomy + `map_status(Product, StatusCode, …)`
+  classifier that routes 401/403/404/429/5xx responses to the nine
+  `atlassian.*`/`jira.walk.*`/`confluence.walk.*` registry codes
+  DAY-73 reserved — this is the CORR-01 classifier DAY-74 deferred
+  here. 50 unit tests + 7 wiremock integration tests (5 for
+  `discover_cloud` happy-path + 401/403/404/malformed-accountId, 2
+  for paginator end-to-end termination). Ships as `semver:minor`:
+  the shared crate becomes a public surface a third-party consumer
+  could build against, and the ADF walker + cloud-discovery helpers
+  are additions no existing caller can have taken a dep on (the two
+  product crates land in DAY-76 / DAY-79). See
+  [`docs/plan/2026-04-20-v0.2-atlassian.md`](docs/plan/2026-04-20-v0.2-atlassian.md)
+  §Task 3 for the full invariant list.
+
 - **v0.2 Atlassian `BasicAuth` strategy (DAY-74).** Second task of the
   combined Jira + Confluence phase: lands the HTTP-Basic auth shape
   the walkers in DAY-77 / DAY-80 will authenticate through, plus the
