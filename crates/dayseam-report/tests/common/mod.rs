@@ -167,6 +167,126 @@ pub fn commit_event(
     }
 }
 
+/// Atlassian-identity convenience: the DAY-73 `SourceIdentityKind::AtlassianAccountId`
+/// row the render stage keys off for `actor.external_id`.
+pub fn self_atlassian_identity(source_id: SourceId, account_id: &str) -> SourceIdentity {
+    SourceIdentity {
+        id: Uuid::new_v4(),
+        person_id: self_person().id,
+        source_id: Some(source_id),
+        kind: SourceIdentityKind::AtlassianAccountId,
+        external_actor_id: account_id.into(),
+    }
+}
+
+/// Jira `JiraIssueTransitioned` event matching the shape the
+/// DAY-77 walker produces.
+pub fn jira_transition_event(
+    source_id: SourceId,
+    issue_key: &str,
+    project_key: &str,
+    project_name: &str,
+    account_id: &str,
+    occurred_at_hour: u32,
+    title: &str,
+) -> ActivityEvent {
+    let external_id = format!("{issue_key}::transition::{occurred_at_hour}");
+    ActivityEvent {
+        id: ActivityEvent::deterministic_id(
+            &source_id.to_string(),
+            &external_id,
+            "JiraIssueTransitioned",
+        ),
+        source_id,
+        external_id,
+        kind: ActivityKind::JiraIssueTransitioned,
+        occurred_at: Utc
+            .with_ymd_and_hms(2026, 4, 18, occurred_at_hour, 0, 0)
+            .unwrap(),
+        actor: Actor {
+            display_name: "Self".into(),
+            email: None,
+            external_id: Some(account_id.into()),
+        },
+        title: title.into(),
+        body: None,
+        links: vec![],
+        entities: vec![
+            EntityRef {
+                kind: "jira_project".into(),
+                external_id: project_key.into(),
+                label: Some(project_name.into()),
+            },
+            EntityRef {
+                kind: "jira_issue".into(),
+                external_id: issue_key.into(),
+                label: None,
+            },
+        ],
+        parent_external_id: Some(issue_key.into()),
+        metadata: serde_json::Value::Null,
+        raw_ref: RawRef {
+            storage_key: format!("jira:{issue_key}"),
+            content_type: "application/json".into(),
+        },
+        privacy: Privacy::Normal,
+    }
+}
+
+/// Confluence `ConfluencePageEdited` event matching the shape the
+/// DAY-80 walker will produce. Pre-Task-8 fixtures rely on this.
+pub fn confluence_page_edited_event(
+    source_id: SourceId,
+    page_id: &str,
+    space_key: &str,
+    space_name: &str,
+    account_id: &str,
+    occurred_at_hour: u32,
+    title: &str,
+) -> ActivityEvent {
+    let external_id = format!("{page_id}::edited::{occurred_at_hour}");
+    ActivityEvent {
+        id: ActivityEvent::deterministic_id(
+            &source_id.to_string(),
+            &external_id,
+            "ConfluencePageEdited",
+        ),
+        source_id,
+        external_id,
+        kind: ActivityKind::ConfluencePageEdited,
+        occurred_at: Utc
+            .with_ymd_and_hms(2026, 4, 18, occurred_at_hour, 0, 0)
+            .unwrap(),
+        actor: Actor {
+            display_name: "Self".into(),
+            email: None,
+            external_id: Some(account_id.into()),
+        },
+        title: title.into(),
+        body: None,
+        links: vec![],
+        entities: vec![
+            EntityRef {
+                kind: "confluence_space".into(),
+                external_id: space_key.into(),
+                label: Some(space_name.into()),
+            },
+            EntityRef {
+                kind: "confluence_page".into(),
+                external_id: page_id.into(),
+                label: None,
+            },
+        ],
+        parent_external_id: None,
+        metadata: serde_json::Value::Null,
+        raw_ref: RawRef {
+            storage_key: format!("confluence:{page_id}"),
+            content_type: "application/json".into(),
+        },
+        privacy: Privacy::Normal,
+    }
+}
+
 pub fn commit_set_artifact(
     source_id: SourceId,
     repo_path: &str,

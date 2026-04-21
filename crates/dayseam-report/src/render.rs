@@ -27,8 +27,9 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::error::ReportError;
+use crate::group_key::{group_key_from_event, GroupKind};
 use crate::input::ReportInput;
-use crate::rollup::{roll_up, RolledUpArtifact};
+use crate::rollup::{group_kind_for_payload, roll_up, RolledUpArtifact};
 use crate::templates::{build_registry, DEV_EOD_TEMPLATE_ID};
 
 const COMMITS_SECTION_ID: &str = "commits";
@@ -197,17 +198,91 @@ fn render_group(
             }
             Ok(out)
         }
-        // DAY-73. Atlassian payloads are recognised by the type
-        // system but not yet rendered — DAY-77 (Jira) and DAY-80
-        // (Confluence) plus the generalised `group_key_from_event`
-        // in DAY-78 add dedicated renderers. Returning an empty
-        // bullet vec here means a Jira or Confluence artefact that
-        // somehow reaches the current renderer (e.g. because a
-        // future DB hand-edit dropped one in) produces an empty
-        // section rather than a panic, matching the "no tracked
-        // activity" fallthrough the orchestrator already expects.
-        ArtifactPayload::JiraIssue { .. } | ArtifactPayload::ConfluencePage { .. } => Ok(vec![]),
+        // DAY-78: Jira / Confluence artefacts get a kind-aware
+        // bullet prefix (`**<project_name>** (<project_key>) — …`
+        // for Jira, `**<space_name>** (<space_key>) — …` for
+        // Confluence) so a day mixing commits and Atlassian
+        // activity still renders one bullet per event with a
+        // visually distinct section header per kind. Per-event
+        // text is the event title verbatim — no regex / adf churn
+        // here; the Jira walker's `normalise.rs` already plain-text
+        // rendered comments via `adf_to_plain` before the event
+        // reached the report engine.
+        ArtifactPayload::JiraIssue { .. } | ArtifactPayload::ConfluencePage { .. } => {
+            let group_kind = group_kind_for_payload(&group.artifact.payload);
+            let mut out = Vec::with_capacity(group.events.len());
+            for event in &group.events {
+                out.push(render_atlassian_bullet(
+                    group.artifact.id,
+                    group_kind,
+                    event,
+                    template_id,
+                    section_id,
+                )?);
+            }
+            Ok(out)
+        }
     }
+}
+
+/// Render one Jira / Confluence bullet as
+/// `**<label>** (<value>) — <title>`.
+///
+/// `<label>` comes from the event's `jira_project.label` /
+/// `confluence_space.label` (or `jira_issue` / `confluence_page`
+/// label in the fallback path); `<value>` is the stable key. When
+/// the label is missing the prefix degrades to `**<value>** —
+/// <title>` — the same shape `commit_headline` uses for repos, so
+/// a malformed upstream still renders without panicking.
+fn render_atlassian_bullet(
+    artifact_id: ArtifactId,
+    group_kind: GroupKind,
+    event: &ActivityEvent,
+    template_id: &str,
+    section_id: &str,
+) -> Result<(RenderedBullet, Evidence), ReportError> {
+    let event_ids = vec![event.id];
+    let id = bullet_id(template_id, section_id, artifact_id, &event_ids);
+    let reason = match group_kind {
+        GroupKind::Project => "1 Jira event".to_string(),
+        GroupKind::Space => "1 Confluence event".to_string(),
+        // `Repo` never lands here (commit bullets render via
+        // `render_commit_bullet`). Defensive fallback so a future
+        // Atlassian-adjacent kind doesn't silently break the
+        // evidence reason copy.
+        GroupKind::Repo => "1 event".to_string(),
+    };
+
+    // Redaction is a `Privacy::RedactedPrivateRepo` concept tied to
+    // local-git. Jira / Confluence events never carry that flag
+    // today; we still gate on `Privacy::Normal` so a future
+    // redaction extension (e.g. a restricted-project Jira source)
+    // can piggyback on the same render path without silently
+    // leaking titles.
+    let text = if matches!(event.privacy, Privacy::RedactedPrivateRepo) {
+        REDACTED_BULLET_TEXT.to_string()
+    } else {
+        let gk = group_key_from_event(event);
+        let display = gk.display();
+        if gk.value.is_empty() || gk.value == "/" {
+            event.title.clone()
+        } else if display == gk.value {
+            format!("**{}** — {}", gk.value, event.title)
+        } else {
+            format!("**{display}** ({}) — {}", gk.value, event.title)
+        }
+    };
+
+    let bullet = RenderedBullet {
+        id: id.clone(),
+        text,
+    };
+    let evidence = Evidence {
+        bullet_id: id,
+        event_ids,
+        reason,
+    };
+    Ok((bullet, evidence))
 }
 
 #[allow(clippy::too_many_arguments)]

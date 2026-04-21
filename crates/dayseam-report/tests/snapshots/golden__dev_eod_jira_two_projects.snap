@@ -1,0 +1,40 @@
+---
+source: crates/dayseam-report/tests/golden.rs
+expression: draft
+---
+id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
+date: 2026-04-18
+template_id: dayseam.dev_eod
+template_version: 2026-04-22
+sections:
+  - id: commits
+    title: Commits
+    bullets:
+      - id: b_b9c3405e5dc1e513
+        text: "**Cardtronics** (CAR) — CAR-5117: In Progress → In Review"
+      - id: b_512da8d886f5732b
+        text: "**Cardtronics** (CAR) — CAR-6001: To Do → In Progress"
+      - id: b_6202b7e868868e99
+        text: "**Kontiki** (KTON) — KTON-4550: In Review → Done"
+evidence:
+  - bullet_id: b_b9c3405e5dc1e513
+    event_ids:
+      - 8e155c34-eb52-53c6-9c46-ac05b1e91e99
+    reason: 1 Jira event
+  - bullet_id: b_512da8d886f5732b
+    event_ids:
+      - 25639500-6582-534f-a859-3ee3ff6bbf22
+    reason: 1 Jira event
+  - bullet_id: b_6202b7e868868e99
+    event_ids:
+      - 72422b0a-9e93-5907-8597-d8a0e37f962c
+    reason: 1 Jira event
+per_source_state:
+  14000000-0000-0000-0000-000000000000:
+    status: Succeeded
+    started_at: "2026-04-18T23:00:00Z"
+    finished_at: "2026-04-18T23:00:00Z"
+    fetched_count: 3
+    error: ~
+verbose_mode: false
+generated_at: "2026-04-18T23:00:00Z"

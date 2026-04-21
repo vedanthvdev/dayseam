@@ -35,10 +35,7 @@ use dayseam_core::{
     SyncRunStatus, SyncRunTrigger,
 };
 use dayseam_events::{LogReceiver, ProgressReceiver, ProgressSender, RunStreams};
-use dayseam_report::{
-    annotate_rolled_into_mr, dedup_commit_authored, MergeRequestArtifact, ReportInput,
-    DEV_EOD_TEMPLATE_ID,
-};
+use dayseam_report::{pipeline, MergeRequestArtifact, ReportInput, DEV_EOD_TEMPLATE_ID};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
@@ -360,23 +357,21 @@ async fn run_background(
     // incomplete report.
     let (events, artifacts, per_source_state, per_source_syncrun) = split_fan_out(per_source);
 
-    // Phase 3 Task 2: cross-source `CommitAuthored` dedup +
-    // `rolled_into_mr` rollup. Both passes are pure functions and
-    // run before `activity_events` is persisted so the on-disk
-    // table never carries two rows for the same SHA (which would
-    // re-inflate the bullet count on a later regen via the
-    // `INSERT OR IGNORE` path). Order matters: dedup collapses
-    // collisions first so the MR-rollup pass sees one canonical
-    // event per SHA, then rollup stamps each surviving
-    // `CommitAuthored` with the MR iid whose commit list claims
-    // its SHA. Single-source inputs (v0.1 local-git-only
-    // deployments) walk both passes as no-ops: `dedup` emits its
-    // input unchanged when no SHA collides, and `annotate` is
-    // gated behind a non-empty MR list.
-    let events = dedup_commit_authored(events);
+    // DAY-78 pipeline: dedup → extract ticket keys → annotate
+    // Jira transitions with their triggering MR → annotate
+    // rolled-into-MR. All four passes are pure and run before
+    // `activity_events` is persisted so the on-disk table never
+    // carries two rows for the same SHA (which would re-inflate
+    // the bullet count on a later regen via the
+    // `INSERT OR IGNORE` path). Single-source inputs (v0.1
+    // local-git-only deployments) walk every pass as a no-op:
+    // dedup emits input unchanged when no SHA collides, ticket-key
+    // extraction is gated by title content, transition-annotation
+    // is gated by the presence of `JiraIssueTransitioned` events,
+    // and rolled-into-MR is gated by a non-empty MR list. See
+    // [`dayseam_report::pipeline`] for the full contract.
     let mrs = collect_mr_artifacts(&events);
-    let mut events = events;
-    annotate_rolled_into_mr(&mut events, &mrs);
+    let events = pipeline(events, &mrs);
 
     // Persist the raw `activity_events` to disk before render. The
     // evidence popover in the UI hydrates `ReportDraft::evidence`
