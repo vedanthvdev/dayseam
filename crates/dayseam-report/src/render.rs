@@ -96,9 +96,17 @@ fn event_is_self(event: &ActivityEvent, identities: &[&SourceIdentity]) -> bool 
                 .email
                 .as_deref()
                 .is_some_and(|e| e.eq_ignore_ascii_case(&id.external_actor_id)),
+            // Atlassian Cloud populates `actor.external_id` with the
+            // workspace-scoped `accountId` returned by
+            // `GET /rest/api/3/myself`, so the match is the same shape
+            // as the GitLab / GitHub identifier families. Added in
+            // DAY-73 so the v0.2 Jira / Confluence walkers (DAY-77,
+            // DAY-80) don't need to amend the self-filter in their
+            // own PRs.
             SourceIdentityKind::GitLabUserId
             | SourceIdentityKind::GitLabUsername
-            | SourceIdentityKind::GitHubLogin => {
+            | SourceIdentityKind::GitHubLogin
+            | SourceIdentityKind::AtlassianAccountId => {
                 event.actor.external_id.as_deref() == Some(id.external_actor_id.as_str())
             }
         }
@@ -189,6 +197,16 @@ fn render_group(
             }
             Ok(out)
         }
+        // DAY-73. Atlassian payloads are recognised by the type
+        // system but not yet rendered — DAY-77 (Jira) and DAY-80
+        // (Confluence) plus the generalised `group_key_from_event`
+        // in DAY-78 add dedicated renderers. Returning an empty
+        // bullet vec here means a Jira or Confluence artefact that
+        // somehow reaches the current renderer (e.g. because a
+        // future DB hand-edit dropped one in) produces an empty
+        // section rather than a panic, matching the "no tracked
+        // activity" fallthrough the orchestrator already expects.
+        ArtifactPayload::JiraIssue { .. } | ArtifactPayload::ConfluencePage { .. } => Ok(vec![]),
     }
 }
 

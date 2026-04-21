@@ -53,6 +53,13 @@ impl ActivityEvent {
 /// The kinds of activity Dayseam currently recognises. Adding a variant is a
 /// minor bump; renaming or removing one is a breaking change that must be
 /// reflected in the upstream connectors and report templates.
+///
+/// The `Jira*` and `Confluence*` variants were added in DAY-73 (v0.2
+/// Atlassian connectors) to anchor the event vocabulary before any
+/// connector can emit them. No connector in this PR produces them — the
+/// walkers in DAY-77 (Jira) and DAY-80 (Confluence) do. Keeping the
+/// enum additive here means later tasks can TDD walker behaviour against
+/// a stable vocabulary without an intermediate core-types amendment.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub enum ActivityKind {
@@ -65,6 +72,65 @@ pub enum ActivityKind {
     IssueOpened,
     IssueClosed,
     IssueComment,
+    /// Jira issue status transition (e.g. "In Progress" → "In Review").
+    /// Emitted once per `changelog` item where `field == "status"` and
+    /// `author.accountId == self`. Rapid cascades within the
+    /// `RAPID_TRANSITION_WINDOW_SECONDS` window collapse into one
+    /// event with `metadata.transition_count` in DAY-77.
+    JiraIssueTransitioned,
+    /// Jira issue comment authored by the user. `body` is the
+    /// ADF-to-plain-text rendering (DAY-75 `connector-atlassian-common::adf`).
+    JiraIssueCommented,
+    /// Jira issue assignee changed to the user (a changelog item where
+    /// `field == "assignee"` and `toString == self.displayName`).
+    /// Distinct from `JiraIssueTransitioned` because being assigned a
+    /// ticket is a discrete calendar event in a dev's EOD narrative even
+    /// when the status stays the same.
+    JiraIssueAssigned,
+    /// Jira issue created by the user (`reporter == self AND created_at in window`).
+    JiraIssueCreated,
+    /// Confluence page created by the user — `createdDate == lastModified`
+    /// AND `createdBy.accountId == self`. Distinct from `ConfluencePageEdited`
+    /// because "I wrote a new doc today" is different signal from
+    /// "I revised a doc today".
+    ConfluencePageCreated,
+    /// Confluence page edited by the user — any `version.number > 1`
+    /// authored by `self`. Multiple rapid autosave versions collapse to
+    /// one event in DAY-80 rollup.
+    ConfluencePageEdited,
+    /// Confluence comment (inline or footer) authored by the user.
+    /// `body` is the ADF-to-plain-text rendering.
+    ConfluenceComment,
+}
+
+impl ActivityKind {
+    /// Every variant, in declaration order.
+    ///
+    /// Exists so tests can exhaustively cover every kind without
+    /// depending on a third-party `EnumIter` derive. The returned slice
+    /// is guaranteed to have exactly one entry per variant at compile
+    /// time; adding a new variant without updating this array breaks
+    /// the `all_activity_kinds_matches_declaration_order` test. DAY-73.
+    pub const fn all() -> &'static [ActivityKind] {
+        &[
+            ActivityKind::CommitAuthored,
+            ActivityKind::MrOpened,
+            ActivityKind::MrMerged,
+            ActivityKind::MrClosed,
+            ActivityKind::MrReviewComment,
+            ActivityKind::MrApproved,
+            ActivityKind::IssueOpened,
+            ActivityKind::IssueClosed,
+            ActivityKind::IssueComment,
+            ActivityKind::JiraIssueTransitioned,
+            ActivityKind::JiraIssueCommented,
+            ActivityKind::JiraIssueAssigned,
+            ActivityKind::JiraIssueCreated,
+            ActivityKind::ConfluencePageCreated,
+            ActivityKind::ConfluencePageEdited,
+            ActivityKind::ConfluenceComment,
+        ]
+    }
 }
 
 /// The person who caused the event. Populated by the connector from
@@ -149,5 +215,33 @@ mod tests {
         let a = ActivityEvent::deterministic_id("src1", "ext1", "CommitAuthored");
         let b = ActivityEvent::deterministic_id("src1", "ext2", "CommitAuthored");
         assert_ne!(a, b);
+    }
+
+    /// DAY-73. Guards against two drift modes on `ActivityKind`:
+    ///
+    /// 1. A future PR adds a variant to the enum but forgets to extend
+    ///    [`ActivityKind::all`], which every serde / rollup / render
+    ///    test iterates over.
+    /// 2. A future PR quietly removes or renames a v0.1 variant, which
+    ///    would break on-disk compatibility for any user's persisted
+    ///    `activity_events.kind` column.
+    ///
+    /// Adjusting the expected count here is deliberate: it forces the
+    /// change author to acknowledge the enum size shift in review.
+    #[test]
+    fn all_activity_kinds_has_expected_count_and_is_unique() {
+        let kinds = ActivityKind::all();
+        assert_eq!(
+            kinds.len(),
+            16,
+            "ActivityKind::all() must list every declared variant exactly once"
+        );
+        let mut set = std::collections::HashSet::new();
+        for k in kinds {
+            assert!(
+                set.insert(*k),
+                "duplicate variant in ActivityKind::all(): {k:?}"
+            );
+        }
     }
 }

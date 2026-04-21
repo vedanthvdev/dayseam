@@ -110,6 +110,13 @@ pub enum SourceIdentityKind {
     GitLabUsername,
     /// GitHub login — the `@handle` form.
     GitHubLogin,
+    /// Atlassian Cloud `accountId` — the workspace-scoped opaque id
+    /// returned by `GET /rest/api/3/myself`. Deliberately one variant
+    /// for both Jira and Confluence: Atlassian Cloud issues one
+    /// `accountId` per human that resolves identically on both
+    /// products, so a Jira source and a Confluence source for the same
+    /// workspace share one `SourceIdentity` row. Added in DAY-73.
+    AtlassianAccountId,
 }
 
 #[cfg(test)]

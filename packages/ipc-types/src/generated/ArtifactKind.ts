@@ -6,4 +6,4 @@
  * change that must be reflected in every connector, in the report
  * engine, and in the migrations.
  */
-export type ArtifactKind = "CommitSet";
+export type ArtifactKind = "CommitSet" | "JiraIssue" | "ConfluencePage";

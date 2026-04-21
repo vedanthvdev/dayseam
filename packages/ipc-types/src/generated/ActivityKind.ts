@@ -4,5 +4,12 @@
  * The kinds of activity Dayseam currently recognises. Adding a variant is a
  * minor bump; renaming or removing one is a breaking change that must be
  * reflected in the upstream connectors and report templates.
+ *
+ * The `Jira*` and `Confluence*` variants were added in DAY-73 (v0.2
+ * Atlassian connectors) to anchor the event vocabulary before any
+ * connector can emit them. No connector in this PR produces them — the
+ * walkers in DAY-77 (Jira) and DAY-80 (Confluence) do. Keeping the
+ * enum additive here means later tasks can TDD walker behaviour against
+ * a stable vocabulary without an intermediate core-types amendment.
  */
-export type ActivityKind = "CommitAuthored" | "MrOpened" | "MrMerged" | "MrClosed" | "MrReviewComment" | "MrApproved" | "IssueOpened" | "IssueClosed" | "IssueComment";
+export type ActivityKind = "CommitAuthored" | "MrOpened" | "MrMerged" | "MrClosed" | "MrReviewComment" | "MrApproved" | "IssueOpened" | "IssueClosed" | "IssueComment" | "JiraIssueTransitioned" | "JiraIssueCommented" | "JiraIssueAssigned" | "JiraIssueCreated" | "ConfluencePageCreated" | "ConfluencePageEdited" | "ConfluenceComment";

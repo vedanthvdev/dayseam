@@ -32,6 +32,8 @@ pub(crate) fn source_kind_to_db(k: &SourceKind) -> &'static str {
     match k {
         SourceKind::GitLab => "GitLab",
         SourceKind::LocalGit => "LocalGit",
+        SourceKind::Jira => "Jira",
+        SourceKind::Confluence => "Confluence",
     }
 }
 
@@ -39,6 +41,8 @@ pub(crate) fn source_kind_from_db(s: &str) -> Result<SourceKind, DbError> {
     match s {
         "GitLab" => Ok(SourceKind::GitLab),
         "LocalGit" => Ok(SourceKind::LocalGit),
+        "Jira" => Ok(SourceKind::Jira),
+        "Confluence" => Ok(SourceKind::Confluence),
         other => Err(DbError::InvalidData {
             column: "sources.kind".into(),
             message: format!("unknown SourceKind `{other}`"),
@@ -57,6 +61,13 @@ pub(crate) fn activity_kind_to_db(k: &ActivityKind) -> &'static str {
         ActivityKind::IssueOpened => "IssueOpened",
         ActivityKind::IssueClosed => "IssueClosed",
         ActivityKind::IssueComment => "IssueComment",
+        ActivityKind::JiraIssueTransitioned => "JiraIssueTransitioned",
+        ActivityKind::JiraIssueCommented => "JiraIssueCommented",
+        ActivityKind::JiraIssueAssigned => "JiraIssueAssigned",
+        ActivityKind::JiraIssueCreated => "JiraIssueCreated",
+        ActivityKind::ConfluencePageCreated => "ConfluencePageCreated",
+        ActivityKind::ConfluencePageEdited => "ConfluencePageEdited",
+        ActivityKind::ConfluenceComment => "ConfluenceComment",
     }
 }
 
@@ -71,6 +82,13 @@ pub(crate) fn activity_kind_from_db(s: &str) -> Result<ActivityKind, DbError> {
         "IssueOpened" => ActivityKind::IssueOpened,
         "IssueClosed" => ActivityKind::IssueClosed,
         "IssueComment" => ActivityKind::IssueComment,
+        "JiraIssueTransitioned" => ActivityKind::JiraIssueTransitioned,
+        "JiraIssueCommented" => ActivityKind::JiraIssueCommented,
+        "JiraIssueAssigned" => ActivityKind::JiraIssueAssigned,
+        "JiraIssueCreated" => ActivityKind::JiraIssueCreated,
+        "ConfluencePageCreated" => ActivityKind::ConfluencePageCreated,
+        "ConfluencePageEdited" => ActivityKind::ConfluencePageEdited,
+        "ConfluenceComment" => ActivityKind::ConfluenceComment,
         other => {
             return Err(DbError::InvalidData {
                 column: "activity_events.kind".into(),
@@ -124,12 +142,16 @@ pub(crate) fn log_level_from_db(s: &str) -> Result<LogLevel, DbError> {
 pub(crate) fn artifact_kind_to_db(k: &ArtifactKind) -> &'static str {
     match k {
         ArtifactKind::CommitSet => "CommitSet",
+        ArtifactKind::JiraIssue => "JiraIssue",
+        ArtifactKind::ConfluencePage => "ConfluencePage",
     }
 }
 
 pub(crate) fn artifact_kind_from_db(s: &str) -> Result<ArtifactKind, DbError> {
     match s {
         "CommitSet" => Ok(ArtifactKind::CommitSet),
+        "JiraIssue" => Ok(ArtifactKind::JiraIssue),
+        "ConfluencePage" => Ok(ArtifactKind::ConfluencePage),
         other => Err(DbError::InvalidData {
             column: "artifacts.kind".into(),
             message: format!("unknown ArtifactKind `{other}`"),
@@ -181,6 +203,7 @@ pub(crate) fn source_identity_kind_to_db(k: &SourceIdentityKind) -> &'static str
         SourceIdentityKind::GitLabUserId => "GitLabUserId",
         SourceIdentityKind::GitLabUsername => "GitLabUsername",
         SourceIdentityKind::GitHubLogin => "GitHubLogin",
+        SourceIdentityKind::AtlassianAccountId => "AtlassianAccountId",
     }
 }
 
@@ -190,6 +213,7 @@ pub(crate) fn source_identity_kind_from_db(s: &str) -> Result<SourceIdentityKind
         "GitLabUserId" => Ok(SourceIdentityKind::GitLabUserId),
         "GitLabUsername" => Ok(SourceIdentityKind::GitLabUsername),
         "GitHubLogin" => Ok(SourceIdentityKind::GitHubLogin),
+        "AtlassianAccountId" => Ok(SourceIdentityKind::AtlassianAccountId),
         other => Err(DbError::InvalidData {
             column: "source_identities.kind".into(),
             message: format!("unknown SourceIdentityKind `{other}`"),

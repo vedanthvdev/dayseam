@@ -9,6 +9,15 @@ expression: ALL
 - gitlab.rate_limited
 - gitlab.upstream_5xx
 - gitlab.upstream_shape_changed
+- atlassian.auth.invalid_credentials
+- atlassian.auth.missing_scope
+- atlassian.cloud.resource_not_found
+- atlassian.identity.malformed_account_id
+- atlassian.adf.unrenderable_node
+- jira.walk.upstream_shape_changed
+- jira.walk.rate_limited
+- confluence.walk.upstream_shape_changed
+- confluence.walk.rate_limited
 - local_git.repo_locked
 - local_git.repo_unreadable
 - local_git.repo_corrupt

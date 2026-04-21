@@ -8,6 +8,29 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **v0.2 Atlassian core types (DAY-73).** First task of the
+  combined Jira + Confluence phase: lands the vocabulary the
+  walkers in DAY-77 / DAY-80 will speak. Adds `SourceKind::Jira`
+  and `SourceKind::Confluence`,
+  `SourceIdentityKind::AtlassianAccountId`, seven new
+  `ActivityKind` variants (`JiraIssueTransitioned`,
+  `JiraIssueCommented`, `JiraIssueAssigned`, `JiraIssueCreated`,
+  `ConfluencePageCreated`, `ConfluencePageEdited`,
+  `ConfluenceComment`), and two new `ArtifactKind` /
+  `ArtifactPayload` variants (`JiraIssue` keyed by
+  `(project_key, date)` and `ConfluencePage` keyed by
+  `(space_key, date)`). Nine new stable error codes under
+  `atlassian.*` / `jira.*` / `confluence.*` are registered in
+  `error_codes::ALL` so connector code in later tasks never has
+  to invent ad-hoc codes. Ships as `semver:none` because every
+  `#[ts(export)]` enum grows additively, the on-disk schema is
+  unchanged (kind columns are plain `TEXT`, the required
+  `(source_id, external_id)` index already exists in migration
+  `0003`), and no connector in this PR emits the new variants
+  yet. See
+  [`docs/plan/2026-04-20-v0.2-atlassian.md`](docs/plan/2026-04-20-v0.2-atlassian.md)
+  §11 row DAY-73.
+
 - **Phase 3 review addendum (DAY-72).** Deeper post-`v0.1.0` hardening
   sweep that runs five new lenses (silent-failure, efficiency,
   dogfood-path, cross-source-consistency, test-quality) on top of the

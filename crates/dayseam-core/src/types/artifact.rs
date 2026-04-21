@@ -99,6 +99,16 @@ pub enum ArtifactKind {
     /// A day's worth of commits on one local-git repo. First and only
     /// variant shipped in Phase 2; `ARCHITECTURE.md` §7A lists the rest.
     CommitSet,
+    /// A single Jira issue, used by the v0.2 Jira connector (DAY-77) to
+    /// carry per-issue state (current status, rolled-up transitions,
+    /// comment bodies) that survives across multiple `ActivityEvent`s
+    /// for the same issue on the same day. Added in DAY-73.
+    JiraIssue,
+    /// A single Confluence page, used by the v0.2 Confluence connector
+    /// (DAY-80) to carry per-page state (final title, version id,
+    /// collapsed rapid-save evidence) that survives across edit
+    /// events. Added in DAY-73.
+    ConfluencePage,
 }
 
 /// Short string used as the `artifacts.kind` column value and as the
@@ -107,6 +117,8 @@ pub enum ArtifactKind {
 pub(crate) const fn artifact_kind_token(kind: ArtifactKind) -> &'static str {
     match kind {
         ArtifactKind::CommitSet => "CommitSet",
+        ArtifactKind::JiraIssue => "JiraIssue",
+        ArtifactKind::ConfluencePage => "ConfluencePage",
     }
 }
 
@@ -127,6 +139,44 @@ pub enum ArtifactPayload {
         date: NaiveDate,
         event_ids: Vec<Uuid>,
         commit_shas: Vec<String>,
+    },
+    /// One Jira issue, aggregated across a single day's transitions,
+    /// comments, and assignee changes. The v0.2 Jira walker (DAY-77)
+    /// writes one of these per `(source_id, issue_key, date)` tuple so
+    /// the report engine can group all of today's activity on
+    /// `CAR-5117` under one bullet rather than rendering each
+    /// transition separately. Shape is intentionally minimal in
+    /// DAY-73; the walker + rollup PRs extend it as concrete
+    /// aggregation needs surface. Added in DAY-73.
+    JiraIssue {
+        /// The Jira issue key as rendered in URLs and UI, e.g.
+        /// `"CAR-5117"`. Used as the grouping key for the EOD bullet
+        /// and as part of `Artifact::external_id` for deterministic
+        /// id derivation.
+        issue_key: String,
+        /// Project key (the prefix of `issue_key`), stored separately
+        /// so the rollup stage can group by project without having to
+        /// re-parse the key.
+        project_key: String,
+        date: NaiveDate,
+        /// Event ids that rolled up into this artefact, so evidence
+        /// links stay traceable the same way `CommitSet` does.
+        event_ids: Vec<Uuid>,
+    },
+    /// One Confluence page, aggregated across a single day's
+    /// created/edited/commented events. The v0.2 Confluence walker
+    /// (DAY-80) writes one of these per `(source_id, page_id, date)`
+    /// tuple so a page that saw an authored event plus several
+    /// autosave edits renders as one bullet. Added in DAY-73.
+    ConfluencePage {
+        /// The Confluence content id for the page (opaque numeric
+        /// string in Cloud). Stable across renames.
+        page_id: String,
+        /// The space key (e.g. `"ENG"`) for grouping by space in the
+        /// report.
+        space_key: String,
+        date: NaiveDate,
+        event_ids: Vec<Uuid>,
     },
 }
 

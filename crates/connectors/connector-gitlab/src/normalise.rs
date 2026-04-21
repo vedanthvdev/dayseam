@@ -133,6 +133,22 @@ fn kind_token(kind: ActivityKind) -> &'static str {
         ActivityKind::IssueOpened => "IssueOpened",
         ActivityKind::IssueClosed => "IssueClosed",
         ActivityKind::IssueComment => "IssueComment",
+        // DAY-73. Atlassian kinds exist in the enum but cannot reach
+        // the GitLab normaliser: only `map_kind` (above) decides what
+        // kind to produce, and every path there returns a GitLab-
+        // flavoured variant. An `unreachable!` documents the
+        // invariant and turns a future bug (GitLab code silently
+        // emitting a Jira kind) into a loud panic in tests rather
+        // than a wrong-looking string in production.
+        ActivityKind::JiraIssueTransitioned
+        | ActivityKind::JiraIssueCommented
+        | ActivityKind::JiraIssueAssigned
+        | ActivityKind::JiraIssueCreated
+        | ActivityKind::ConfluencePageCreated
+        | ActivityKind::ConfluencePageEdited
+        | ActivityKind::ConfluenceComment => unreachable!(
+            "GitLab normaliser saw Atlassian ActivityKind {kind:?}: kind production is local to map_kind",
+        ),
     }
 }
 
@@ -165,6 +181,18 @@ fn event_external_id(event: &GitlabEvent, kind: ActivityKind) -> String {
             .target_id
             .map(|id| format!("note:{id}"))
             .unwrap_or_else(|| format!("event:{}", event.id)),
+        // DAY-73. Atlassian kinds are unreachable here for the same
+        // reason as `kind_token` above — the GitLab normaliser
+        // produces only GitLab kinds.
+        ActivityKind::JiraIssueTransitioned
+        | ActivityKind::JiraIssueCommented
+        | ActivityKind::JiraIssueAssigned
+        | ActivityKind::JiraIssueCreated
+        | ActivityKind::ConfluencePageCreated
+        | ActivityKind::ConfluencePageEdited
+        | ActivityKind::ConfluenceComment => unreachable!(
+            "GitLab normaliser saw Atlassian ActivityKind {kind:?} in event_external_id",
+        ),
     }
 }
 
@@ -203,6 +231,18 @@ fn title_and_body(event: &GitlabEvent, kind: ActivityKind) -> (String, Option<St
             "Commented on issue: {}",
             event.target_title.as_deref().unwrap_or("(no title)")
         ),
+        // DAY-73. Atlassian kinds are unreachable here for the same
+        // reason as `kind_token` above — the GitLab normaliser
+        // produces only GitLab kinds.
+        ActivityKind::JiraIssueTransitioned
+        | ActivityKind::JiraIssueCommented
+        | ActivityKind::JiraIssueAssigned
+        | ActivityKind::JiraIssueCreated
+        | ActivityKind::ConfluencePageCreated
+        | ActivityKind::ConfluencePageEdited
+        | ActivityKind::ConfluenceComment => {
+            unreachable!("GitLab normaliser saw Atlassian ActivityKind {kind:?} in title_and_body",)
+        }
     };
     let body = event
         .note

@@ -78,8 +78,15 @@ pub(crate) fn roll_up(
     let mut groups: Vec<RolledUpArtifact> = Vec::new();
 
     for artifact in artifacts {
+        // Every `ArtifactPayload` variant carries a flat `event_ids`
+        // list in its current shape; collecting them here lets the
+        // rollup behave uniformly without knowing which connector
+        // produced the artefact. DAY-73 added the Atlassian
+        // variants; DAY-77 / DAY-80 fill them with real data.
         let claimed_ids: Vec<Uuid> = match &artifact.payload {
-            ArtifactPayload::CommitSet { event_ids, .. } => event_ids.clone(),
+            ArtifactPayload::CommitSet { event_ids, .. }
+            | ArtifactPayload::JiraIssue { event_ids, .. }
+            | ArtifactPayload::ConfluencePage { event_ids, .. } => event_ids.clone(),
         };
 
         let mut claimed_events: Vec<ActivityEvent> = claimed_ids
@@ -225,6 +232,13 @@ fn commit_set_key(group: &RolledUpArtifact) -> Option<(PathBuf, NaiveDate)> {
         ArtifactPayload::CommitSet {
             repo_path, date, ..
         } => Some((repo_path.clone(), *date)),
+        // DAY-73. Only `CommitSet` artefacts key off `(repo_path,
+        // date)`; Jira / Confluence artefacts group by their own
+        // (project_key / space_key, date) tuples and are handled by
+        // the generalised `group_key_from_event` introduced in
+        // DAY-78. Returning `None` here routes them through the
+        // non-commit-set sentinel path below.
+        ArtifactPayload::JiraIssue { .. } | ArtifactPayload::ConfluencePage { .. } => None,
     }
 }
 
@@ -249,6 +263,8 @@ fn sort_groups(groups: &mut [RolledUpArtifact]) {
 const fn kind_token(kind: ArtifactKind) -> &'static str {
     match kind {
         ArtifactKind::CommitSet => "CommitSet",
+        ArtifactKind::JiraIssue => "JiraIssue",
+        ArtifactKind::ConfluencePage => "ConfluencePage",
     }
 }
 
@@ -325,6 +341,9 @@ mod tests {
             .map(|g| match &g.artifact.payload {
                 ArtifactPayload::CommitSet { repo_path, .. } => {
                     repo_path.to_string_lossy().to_string()
+                }
+                ArtifactPayload::JiraIssue { .. } | ArtifactPayload::ConfluencePage { .. } => {
+                    unreachable!("this test only produces CommitSet artefacts")
                 }
             })
             .collect();

@@ -258,6 +258,23 @@ fn build_source_auth(
 ) -> Result<Arc<dyn AuthStrategy>, DayseamError> {
     match source.kind {
         SourceKind::LocalGit => Ok(Arc::new(NoneAuth)),
+        // DAY-73. `SourceKind::{Jira, Confluence}` exist as enum
+        // discriminants so DB reads round-trip, but no connector is
+        // registered for them in v0.2-pre. If a v0.2-pre user somehow
+        // ends up with a persisted Jira / Confluence source row (only
+        // possible by hand-editing the DB), refuse to build an auth
+        // strategy and surface an `Unsupported` error rather than
+        // silently defaulting to `NoneAuth`. DAY-74 replaces this with
+        // the real `BasicAuth` strategy.
+        SourceKind::Jira | SourceKind::Confluence => Err(DayseamError::Unsupported {
+            code: error_codes::CONNECTOR_UNSUPPORTED_SYNC_REQUEST.to_string(),
+            message: format!(
+                "source kind {:?} has no connector registered in this build; \
+                 Atlassian support lands in DAY-74 (BasicAuth) and DAY-76 / DAY-79 \
+                 (connector scaffolds)",
+                source.kind
+            ),
+        }),
         SourceKind::GitLab => {
             let secret_ref = source
                 .secret_ref

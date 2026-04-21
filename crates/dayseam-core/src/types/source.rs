@@ -34,11 +34,22 @@ pub struct Source {
 
 /// The high-level category of a source. Used for UI grouping and so the
 /// dispatcher knows which connector implementation to call.
+///
+/// `Jira` and `Confluence` were added in DAY-73 (v0.2 Atlassian connectors).
+/// A single email + API-token credential can back one source of each kind
+/// for the same workspace — the sources share a `secret_ref` pointing at
+/// one keychain row (ref-counted on delete in DAY-81). Neither connector
+/// implementation ships in DAY-73: this PR only lands the discriminant so
+/// later tasks can register themselves into the dispatcher without a
+/// core-types amendment. The connector scaffolds in DAY-76 / DAY-79
+/// add the matching [`SourceConfig`] variants.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub enum SourceKind {
     GitLab,
     LocalGit,
+    Jira,
+    Confluence,
 }
 
 /// Per-kind configuration. The enum is externally tagged so the on-disk

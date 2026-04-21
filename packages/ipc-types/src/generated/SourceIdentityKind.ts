@@ -5,4 +5,4 @@
  * lives in. Adding a new variant is an additive schema change and does
  * **not** bump the major version; renaming one **does**.
  */
-export type SourceIdentityKind = "GitEmail" | "GitLabUserId" | "GitLabUsername" | "GitHubLogin";
+export type SourceIdentityKind = "GitEmail" | "GitLabUserId" | "GitLabUsername" | "GitHubLogin" | "AtlassianAccountId";

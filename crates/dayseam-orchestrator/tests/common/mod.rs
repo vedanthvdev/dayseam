@@ -77,6 +77,11 @@ pub async fn seed_source(
                 user_id: 1,
                 username: "mock".to_string(),
             },
+            SourceKind::Jira | SourceKind::Confluence => {
+                unreachable!(
+                    "Atlassian seed_source helper lands with SourceConfig variants in DAY-74"
+                )
+            }
         },
         secret_ref: None,
         created_at: Utc::now(),

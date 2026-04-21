@@ -71,18 +71,13 @@ fn activity_event_round_trips() {
 
 #[test]
 fn activity_kind_round_trips() {
-    for k in [
-        ActivityKind::CommitAuthored,
-        ActivityKind::MrOpened,
-        ActivityKind::MrMerged,
-        ActivityKind::MrClosed,
-        ActivityKind::MrReviewComment,
-        ActivityKind::MrApproved,
-        ActivityKind::IssueOpened,
-        ActivityKind::IssueClosed,
-        ActivityKind::IssueComment,
-    ] {
-        round_trip(&k);
+    // Iterates over `ActivityKind::all()` rather than an inline list so
+    // the test exhaustively covers every new variant the moment it's
+    // added to the enum. DAY-73 introduces seven new variants; the
+    // `all_activity_kinds_has_expected_count_and_is_unique` test in
+    // `types::activity` already guards the slice itself.
+    for k in ActivityKind::all() {
+        round_trip(k);
     }
 }
 
@@ -152,6 +147,7 @@ fn source_identity_round_trips_for_every_kind() {
         SourceIdentityKind::GitLabUserId,
         SourceIdentityKind::GitLabUsername,
         SourceIdentityKind::GitHubLogin,
+        SourceIdentityKind::AtlassianAccountId,
     ] {
         round_trip(&SourceIdentity {
             id: Uuid::new_v4(),
@@ -160,6 +156,21 @@ fn source_identity_round_trips_for_every_kind() {
             kind,
             external_actor_id: "42".into(),
         });
+    }
+}
+
+#[test]
+fn source_kind_round_trips_for_every_variant() {
+    // DAY-73. The `sources.kind` column stores this value verbatim, so
+    // round-tripping each variant is the contract that keeps v0.2
+    // Atlassian rows readable on the next app launch.
+    for kind in [
+        SourceKind::GitLab,
+        SourceKind::LocalGit,
+        SourceKind::Jira,
+        SourceKind::Confluence,
+    ] {
+        round_trip(&kind);
     }
 }
 
@@ -419,12 +430,13 @@ fn artifact_id_round_trips() {
 #[test]
 fn artifact_round_trips_for_every_payload() {
     let source_id = Uuid::nil();
-    let external_id = "/Users/v/Code/dayseam@2026-04-17".to_string();
-    let artifact = Artifact {
-        id: ArtifactId::deterministic(&source_id, ArtifactKind::CommitSet, &external_id),
+
+    let commit_external_id = "/Users/v/Code/dayseam@2026-04-17".to_string();
+    let commit_artifact = Artifact {
+        id: ArtifactId::deterministic(&source_id, ArtifactKind::CommitSet, &commit_external_id),
         source_id,
         kind: ArtifactKind::CommitSet,
-        external_id,
+        external_id: commit_external_id,
         payload: ArtifactPayload::CommitSet {
             repo_path: PathBuf::from("/Users/v/Code/dayseam"),
             date: chrono::NaiveDate::from_ymd_opt(2026, 4, 17).unwrap(),
@@ -433,7 +445,47 @@ fn artifact_round_trips_for_every_payload() {
         },
         created_at: Utc.with_ymd_and_hms(2026, 4, 17, 10, 0, 0).unwrap(),
     };
-    round_trip(&artifact);
+    round_trip(&commit_artifact);
+
+    // DAY-73. The Jira walker in DAY-77 writes these artefacts for
+    // every `(source_id, issue_key, date)` tuple; keeping the
+    // round-trip test here makes the on-disk shape explicit before
+    // the walker lands.
+    let jira_external_id = "CAR-5117@2026-04-20".to_string();
+    let jira_artifact = Artifact {
+        id: ArtifactId::deterministic(&source_id, ArtifactKind::JiraIssue, &jira_external_id),
+        source_id,
+        kind: ArtifactKind::JiraIssue,
+        external_id: jira_external_id,
+        payload: ArtifactPayload::JiraIssue {
+            issue_key: "CAR-5117".into(),
+            project_key: "CAR".into(),
+            date: chrono::NaiveDate::from_ymd_opt(2026, 4, 20).unwrap(),
+            event_ids: vec![Uuid::new_v4()],
+        },
+        created_at: Utc.with_ymd_and_hms(2026, 4, 20, 18, 0, 0).unwrap(),
+    };
+    round_trip(&jira_artifact);
+
+    let confluence_external_id = "123456789@2026-04-20".to_string();
+    let confluence_artifact = Artifact {
+        id: ArtifactId::deterministic(
+            &source_id,
+            ArtifactKind::ConfluencePage,
+            &confluence_external_id,
+        ),
+        source_id,
+        kind: ArtifactKind::ConfluencePage,
+        external_id: confluence_external_id,
+        payload: ArtifactPayload::ConfluencePage {
+            page_id: "123456789".into(),
+            space_key: "ENG".into(),
+            date: chrono::NaiveDate::from_ymd_opt(2026, 4, 20).unwrap(),
+            event_ids: vec![Uuid::new_v4(), Uuid::new_v4()],
+        },
+        created_at: Utc.with_ymd_and_hms(2026, 4, 20, 18, 0, 0).unwrap(),
+    };
+    round_trip(&confluence_artifact);
 }
 
 #[test]

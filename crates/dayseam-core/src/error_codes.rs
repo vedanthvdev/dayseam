@@ -16,6 +16,72 @@ pub const GITLAB_RATE_LIMITED: &str = "gitlab.rate_limited";
 pub const GITLAB_UPSTREAM_5XX: &str = "gitlab.upstream_5xx";
 pub const GITLAB_UPSTREAM_SHAPE_CHANGED: &str = "gitlab.upstream_shape_changed";
 
+// -------- Atlassian (Jira + Confluence) connectors -------------------------
+//
+// Added in DAY-73. Jira and Confluence share one Atlassian Cloud
+// credential and one hostname, so anything that can fail on both
+// products (auth, cloudId discovery, identity row shape, ADF render)
+// lives under the `atlassian.` prefix; anything that only fails inside
+// one product's walker lives under `jira.` or `confluence.`. Keeping
+// the split at the code level means the UI error-card copy (DAY-82)
+// can render shared auth errors once and product-specific ones per
+// source.
+
+/// 401 from any Atlassian endpoint — the email + API token combination
+/// was refused. Surfaced as `DayseamError::Auth` so the UI can render a
+/// Reconnect prompt the same way it does for `gitlab.auth.invalid_token`.
+pub const ATLASSIAN_AUTH_INVALID_CREDENTIALS: &str = "atlassian.auth.invalid_credentials";
+
+/// 403 from an Atlassian endpoint whose body indicates a product-scope
+/// miss — the token is valid for the workspace but not for the product
+/// we're asking about. Surfaced as `DayseamError::Auth` with a
+/// product-specific `action_hint`.
+pub const ATLASSIAN_AUTH_MISSING_SCOPE: &str = "atlassian.auth.missing_scope";
+
+/// `GET /_edge/tenant_info` (or the equivalent `getAccessibleAtlassian
+/// Resources` endpoint under OAuth in a future phase) returned 404 or
+/// an empty body for the configured workspace URL. The Basic-auth path
+/// doesn't strictly need `cloudId`, but a 404 here is a strong signal
+/// the user typed `foo.atlassian.net` when they meant `bar.atlassian.net`.
+pub const ATLASSIAN_CLOUD_RESOURCE_NOT_FOUND: &str = "atlassian.cloud.resource_not_found";
+
+/// The `accountId` returned by `GET /rest/api/3/myself` or found in an
+/// API response failed the sanity check (non-empty ASCII string,
+/// ≤ 128 chars). Emitted as a warn-and-drop in the identity seed path
+/// and as an error in the walker's self-filter — mirrors the
+/// `gitlab.identity.malformed_user_id` warn log from DAY-72 CORR-08.
+pub const ATLASSIAN_IDENTITY_MALFORMED_ACCOUNT_ID: &str = "atlassian.identity.malformed_account_id";
+
+/// ADF walker hit a node type it doesn't know (e.g. a future Atlassian
+/// content block like a new `panel` variant). Degrades gracefully to
+/// `[unsupported content]` in the rendered body rather than panicking;
+/// emitted once per unknown node so the operator can see the shape
+/// change in `reports-debug` and add handling in a follow-up PR.
+pub const ATLASSIAN_ADF_UNRENDERABLE_NODE: &str = "atlassian.adf.unrenderable_node";
+
+/// A JQL search response (`/rest/api/3/search/jql` or
+/// `/rest/api/3/issue/{key}`) contained a `changelog` item with an
+/// unknown `field` / `fromString` / `toString` shape, or an issue with
+/// a missing required field (e.g. `status.statusCategory.key`). Emitted
+/// as `DayseamError::UpstreamChanged` so the orchestrator can degrade
+/// the single issue without killing the whole day's walk.
+pub const JIRA_WALK_UPSTREAM_SHAPE_CHANGED: &str = "jira.walk.upstream_shape_changed";
+
+/// 429 from any Jira walker endpoint. The SDK's rate-limit retry
+/// (carried over from Phase 1 `HttpClient`) handles the backoff;
+/// this code fires only when the retry budget is exhausted.
+pub const JIRA_WALK_RATE_LIMITED: &str = "jira.walk.rate_limited";
+
+/// A CQL search response (`/wiki/rest/api/content/search`) or a v2
+/// content fetch (`/wiki/api/v2/pages/{id}`) returned an unknown
+/// content `type` or `extensions` shape. Same degradation semantics
+/// as `JIRA_WALK_UPSTREAM_SHAPE_CHANGED`.
+pub const CONFLUENCE_WALK_UPSTREAM_SHAPE_CHANGED: &str = "confluence.walk.upstream_shape_changed";
+
+/// 429 from any Confluence walker endpoint, after the SDK's rate-limit
+/// retry budget is exhausted.
+pub const CONFLUENCE_WALK_RATE_LIMITED: &str = "confluence.walk.rate_limited";
+
 // -------- Local-git connector ----------------------------------------------
 
 pub const LOCAL_GIT_REPO_LOCKED: &str = "local_git.repo_locked";
@@ -219,6 +285,15 @@ pub const ALL: &[&str] = &[
     GITLAB_RATE_LIMITED,
     GITLAB_UPSTREAM_5XX,
     GITLAB_UPSTREAM_SHAPE_CHANGED,
+    ATLASSIAN_AUTH_INVALID_CREDENTIALS,
+    ATLASSIAN_AUTH_MISSING_SCOPE,
+    ATLASSIAN_CLOUD_RESOURCE_NOT_FOUND,
+    ATLASSIAN_IDENTITY_MALFORMED_ACCOUNT_ID,
+    ATLASSIAN_ADF_UNRENDERABLE_NODE,
+    JIRA_WALK_UPSTREAM_SHAPE_CHANGED,
+    JIRA_WALK_RATE_LIMITED,
+    CONFLUENCE_WALK_UPSTREAM_SHAPE_CHANGED,
+    CONFLUENCE_WALK_RATE_LIMITED,
     LOCAL_GIT_REPO_LOCKED,
     LOCAL_GIT_REPO_UNREADABLE,
     LOCAL_GIT_REPO_CORRUPT,

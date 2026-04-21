@@ -96,8 +96,13 @@ impl ArtifactRepo {
 }
 
 fn artifact_matches_date(artifact: &Artifact, target: NaiveDate) -> bool {
+    // Every artefact payload carries a `date` the same way; the
+    // or-pattern keeps the match exhaustive without duplicating the
+    // comparison. DAY-73 added the Jira / Confluence variants.
     match &artifact.payload {
-        ArtifactPayload::CommitSet { date, .. } => *date == target,
+        ArtifactPayload::CommitSet { date, .. }
+        | ArtifactPayload::JiraIssue { date, .. }
+        | ArtifactPayload::ConfluencePage { date, .. } => *date == target,
     }
 }
 

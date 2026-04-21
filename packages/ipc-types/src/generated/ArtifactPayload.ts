@@ -6,4 +6,32 @@
  * the payload discriminator. Matches the `SourceConfig` precedent
  * (`crates/dayseam-core/src/types/source.rs`) verbatim.
  */
-export type ArtifactPayload = { "CommitSet": { repo_path: string, date: string, event_ids: Array<string>, commit_shas: Array<string>, } };
+export type ArtifactPayload = { "CommitSet": { repo_path: string, date: string, event_ids: Array<string>, commit_shas: Array<string>, } } | { "JiraIssue": { 
+/**
+ * The Jira issue key as rendered in URLs and UI, e.g.
+ * `"CAR-5117"`. Used as the grouping key for the EOD bullet
+ * and as part of `Artifact::external_id` for deterministic
+ * id derivation.
+ */
+issue_key: string, 
+/**
+ * Project key (the prefix of `issue_key`), stored separately
+ * so the rollup stage can group by project without having to
+ * re-parse the key.
+ */
+project_key: string, date: string, 
+/**
+ * Event ids that rolled up into this artefact, so evidence
+ * links stay traceable the same way `CommitSet` does.
+ */
+event_ids: Array<string>, } } | { "ConfluencePage": { 
+/**
+ * The Confluence content id for the page (opaque numeric
+ * string in Cloud). Stable across renames.
+ */
+page_id: string, 
+/**
+ * The space key (e.g. `"ENG"`) for grouping by space in the
+ * report.
+ */
+space_key: string, date: string, event_ids: Array<string>, } };
