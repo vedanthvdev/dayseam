@@ -1,0 +1,28 @@
+[package]
+name = "connector-jira"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Jira Cloud source connector for Dayseam: Basic-auth credential validation, per-day JQL walk (DAY-77), identity match by Atlassian accountId."
+
+[dependencies]
+connector-atlassian-common = { path = "../connector-atlassian-common" }
+connectors-sdk = { path = "../../connectors-sdk" }
+dayseam-core = { path = "../../dayseam-core" }
+dayseam-events = { path = "../../dayseam-events" }
+
+async-trait = { workspace = true }
+chrono = { workspace = true }
+tokio = { workspace = true }
+tokio-util = { version = "0.7", features = ["rt"] }
+uuid = { workspace = true }
+url = "2"
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }
+wiremock = "0.6"
+serde_json = { workspace = true }

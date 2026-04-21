@@ -70,6 +70,25 @@ pub enum SourceConfig {
     LocalGit {
         scan_roots: Vec<PathBuf>,
     },
+    /// Atlassian Jira Cloud workspace.
+    ///
+    /// `workspace_url` is the tenant base URL the connector joins
+    /// `/rest/api/3/*` onto — e.g. `https://acme.atlassian.net`. The
+    /// `email` is the account identity the per-source
+    /// [`connectors_sdk::BasicAuth`] is constructed from at the IPC
+    /// layer (DAY-82); the API token itself lives behind the source's
+    /// `secret_ref` and never touches this row. Keeping `email` on the
+    /// config (rather than the auth strategy) is what lets two
+    /// sources — one `Jira`, one `Confluence` — share a single
+    /// keychain entry in the "shared PAT" flow while still being
+    /// addressable as independent auth contexts.
+    ///
+    /// Added in DAY-76 (v0.2 Atlassian scaffold). The sibling
+    /// `Confluence` variant lands in DAY-79.
+    Jira {
+        workspace_url: String,
+        email: String,
+    },
 }
 
 impl SourceConfig {
@@ -81,6 +100,7 @@ impl SourceConfig {
         match self {
             SourceConfig::GitLab { .. } => SourceKind::GitLab,
             SourceConfig::LocalGit { .. } => SourceKind::LocalGit,
+            SourceConfig::Jira { .. } => SourceKind::Jira,
         }
     }
 }

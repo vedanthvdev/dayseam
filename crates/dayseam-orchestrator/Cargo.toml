@@ -17,6 +17,7 @@ dayseam-report = { path = "../dayseam-report" }
 connectors-sdk = { path = "../connectors-sdk" }
 sinks-sdk = { path = "../sinks-sdk" }
 connector-gitlab = { path = "../connectors/connector-gitlab" }
+connector-jira = { path = "../connectors/connector-jira" }
 connector-local-git = { path = "../connectors/connector-local-git" }
 sink-markdown-file = { path = "../sinks/sink-markdown-file" }
 

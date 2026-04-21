@@ -9,4 +9,4 @@
  * first-class rows in the `local_repos` table so we never have two
  * sources of truth for the same list.
  */
-export type SourceConfig = { "GitLab": { base_url: string, user_id: number, username: string, } } | { "LocalGit": { scan_roots: Array<string>, } };
+export type SourceConfig = { "GitLab": { base_url: string, user_id: number, username: string, } } | { "LocalGit": { scan_roots: Array<string>, } } | { "Jira": { workspace_url: string, email: string, } };
