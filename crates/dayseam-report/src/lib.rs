@@ -18,8 +18,11 @@
 #![deny(missing_docs)]
 
 mod dedup;
+mod enrich;
 mod error;
+mod group_key;
 mod input;
+mod pipeline;
 mod render;
 mod rollup;
 mod rollup_mr;
@@ -27,8 +30,10 @@ mod templates;
 
 pub use dayseam_core::{Evidence, RenderedBullet, RenderedSection, ReportDraft};
 pub use dedup::dedup_commit_authored;
+pub use enrich::{annotate_transition_with_mr, extract_ticket_keys};
 pub use error::ReportError;
 pub use input::ReportInput;
+pub use pipeline::pipeline;
 pub use rollup_mr::{annotate_rolled_into_mr, MergeRequestArtifact};
 pub use templates::{DEV_EOD_TEMPLATE_ID, DEV_EOD_TEMPLATE_VERSION};
 

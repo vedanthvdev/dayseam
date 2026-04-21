@@ -8,6 +8,66 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **v0.2 `dayseam-report` — `group_key_from_event` + cross-source
+  enrichment (DAY-78).** Sixth task of the v0.2 Atlassian arc. The
+  report engine used to bucket every event by a single `repo_path`
+  primitive, so Jira / Confluence events silently collapsed into a
+  `/` orphan group — one section header for an entire day's
+  Atlassian activity. This task generalises the grouping key and
+  adds the cross-source enrichment pipeline that links MRs to Jira
+  issues with zero Jira API calls. **`GroupKey` + `GroupKind`** — a
+  new `crates/dayseam-report/src/group_key.rs` introduces
+  `GroupKind ∈ { Repo, Project, Space }` and `GroupKey { kind, value,
+  label }` with a `display()` helper that prefers `label` and falls
+  back to `value`; `group_key_from_event` dispatches on
+  `ActivityKind` (commits + GitLab MRs → `repo` entity, `Jira*` →
+  `jira_project`, `Confluence*` → `confluence_space`) and degrades
+  to a synthetic `/` when the canonical entity is absent so render
+  never panics on a malformed upstream. **Orphan rollup** —
+  `rollup.rs` now synthesises `ArtifactKind::JiraIssue` /
+  `ArtifactKind::ConfluencePage` artefacts keyed on the per-event
+  `issue_key` / `page_id` (not the project / space) so the evidence
+  popover maps each bullet back to the exact issue or page that
+  produced it; `merge_duplicate_commit_sets` keeps its DAY-52
+  cross-source behaviour for `CommitSet`s and passes the Atlassian
+  variants through untouched because issue keys and page ids are
+  already globally unique within a workspace. **Render** — Jira /
+  Confluence bullets render with a kind-aware prefix
+  (`**Cardtronics** (CAR) — CAR-5117: …` for Jira,
+  `**Engineering** (ENG) — Edited: …` for Confluence) while the
+  existing `**<repo_label>** — <title>` shape for commits stays
+  byte-identical (all v0.1 goldens remain green). **Enrichment** —
+  a new `crates/dayseam-report/src/enrich.rs` adds two pure passes:
+  `extract_ticket_keys` scans each event's title + body for
+  `[A-Z]{2,10}-\d+` tokens via a hand-rolled ASCII scanner (no
+  `regex` dependency — the report crate is a hot path, the UI
+  re-renders on every filter toggle) and attaches `jira_issue`
+  `EntityRef` targets, bailing out when >3 candidates surface on a
+  single event so a commit message chaining five ticket keys
+  attaches nothing rather than the wrong thing;
+  `annotate_transition_with_mr` builds a `HashMap<issue_key,
+  mr_external_id>` from the MR events in the same day and stamps
+  `parent_external_id` on the matching `JiraIssueTransitioned` so a
+  verbose-mode bullet can show `(triggered by !321)` next to a
+  status change. First-MR-wins on ties, idempotent on re-run.
+  **Pipeline** — `crates/dayseam-report/src/pipeline.rs` exposes
+  `pipeline(events, mrs)` as the single sequence callers run:
+  `dedup_commit_authored → extract_ticket_keys →
+  annotate_transition_with_mr → annotate_rolled_into_mr`. The
+  orchestrator's `generate.rs` now calls this one function in place
+  of the earlier two-pass shape, so every surface (CLI, orchestrator,
+  tests) runs the same chain in the same order.
+  `crates/dayseam-report/tests/enrich.rs` (new) + two new golden
+  fixtures (`dev_eod_jira_two_projects`, `dev_eod_confluence_two_spaces`)
+  prove all nine plan invariants end-to-end: existing goldens
+  unchanged, Jira events group by project, Confluence events group
+  by space, ticket-key extraction attaches / is idempotent / bails
+  on noise, transition annotation links MRs / is idempotent, and
+  the pipeline composition is stable across re-runs. Zero changes to
+  the orchestrator's on-disk shape, the DB schema, or the connector
+  traits — this is a pure refactor + additive enrichment. (SemVer:
+  `none`.)
+
 - **v0.2 `connector-jira` JQL walker (DAY-77).** Fifth task of the
   combined Jira + Confluence phase: lands the per-day JQL walker
   DAY-76 reserved a seat for, turning the scaffold's `sync` stub into

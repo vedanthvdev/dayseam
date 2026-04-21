@@ -511,6 +511,85 @@ fn dev_eod_verbose_annotates_rolled_into_mr() {
     );
 }
 
+/// DAY-78 Jira: three `JiraIssueTransitioned` events across two
+/// projects (CAR, KTON) render as three bullets with project-scoped
+/// prefixes. The goldens lock the `**<project_name>** (<project_key>)
+/// — <title>` shape so future dispatch changes surface as a diff.
+#[test]
+fn dev_eod_jira_two_projects() {
+    let src = source_id(20);
+    let mut input = fixture_input();
+    input.source_identities = vec![self_atlassian_identity(src, "acct-self")];
+
+    let t1 = jira_transition_event(
+        src,
+        "CAR-5117",
+        "CAR",
+        "Cardtronics",
+        "acct-self",
+        9,
+        "CAR-5117: In Progress → In Review",
+    );
+    let t2 = jira_transition_event(
+        src,
+        "CAR-6001",
+        "CAR",
+        "Cardtronics",
+        "acct-self",
+        10,
+        "CAR-6001: To Do → In Progress",
+    );
+    let t3 = jira_transition_event(
+        src,
+        "KTON-4550",
+        "KTON",
+        "Kontiki",
+        "acct-self",
+        11,
+        "KTON-4550: In Review → Done",
+    );
+    input.events = vec![t1, t2, t3];
+    input.per_source_state.insert(src, succeeded_state(3));
+
+    let draft = dayseam_report::render(input).expect("render must succeed");
+    insta::assert_yaml_snapshot!("dev_eod_jira_two_projects", draft);
+}
+
+/// DAY-78 Confluence: two `ConfluencePageEdited` events across two
+/// spaces render with the `**<space_name>** (<space_key>) —` prefix.
+/// Pre-DAY-80 the walker isn't wired yet, but the group-key plumbing
+/// it'll ride on is — this fixture locks that plumbing in place.
+#[test]
+fn dev_eod_confluence_two_spaces() {
+    let src = source_id(21);
+    let mut input = fixture_input();
+    input.source_identities = vec![self_atlassian_identity(src, "acct-self")];
+
+    let p_eng = confluence_page_edited_event(
+        src,
+        "page-1001",
+        "ENG",
+        "Engineering",
+        "acct-self",
+        9,
+        "Edited: Release runbook",
+    );
+    let p_ops = confluence_page_edited_event(
+        src,
+        "page-2002",
+        "OPS",
+        "Operations",
+        "acct-self",
+        10,
+        "Edited: On-call rotation",
+    );
+    input.events = vec![p_eng, p_ops];
+    input.per_source_state.insert(src, succeeded_state(2));
+
+    let draft = dayseam_report::render(input).expect("render must succeed");
+    insta::assert_yaml_snapshot!("dev_eod_confluence_two_spaces", draft);
+}
+
 /// Sanity: `generated_at` threads through untouched. If the engine
 /// ever starts calling `Utc::now()` this test catches it — drift
 /// here is a leaked side-effect, not a template change.
