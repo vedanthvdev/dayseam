@@ -80,7 +80,7 @@ pub(crate) enum ReportSection {
     /// per event.
     ConfluencePages,
     /// Catch-all for events the primary-kind sections can't host
-    /// honestly. DAY-88 / CORR-v0.2-06 adds this for Confluence
+    /// honestly. DAY-88 / CORR-v0.2-06 added this for Confluence
     /// comments whose CQL result carried neither `ancestors[]` nor
     /// `container`, so the normaliser couldn't resolve a parent
     /// page. Before, those comments rolled up under a synthetic
@@ -91,7 +91,16 @@ pub(crate) enum ReportSection {
     /// user. Ordered *last* deliberately — the reading order is
     /// "what I shipped → what I triaged → what I wrote → stray
     /// activity I should triage later".
-    Other,
+    ///
+    /// DAY-98 / CORR-v0.3-01 renamed this from `Other` to
+    /// `Unlinked` (id `"unlinked"`, title `"Unlinked activity"`).
+    /// The section's role didn't change — it still catches
+    /// orphan-shaped events the primary sections can't host — but
+    /// the old heading under-communicated the reason the bullet
+    /// landed there. The new heading reads like a user-facing hint
+    /// ("these comments lost their parent page context") rather
+    /// than a grab-bag label.
+    Unlinked,
 }
 
 impl ReportSection {
@@ -124,7 +133,7 @@ impl ReportSection {
     /// `metadata.unattached == true` (emitted by
     /// `connector_confluence::normalise::normalise_comment` when a
     /// comment has no discoverable parent page — see
-    /// CORR-v0.2-06 in DAY-88) is routed to [`Self::Other`] rather
+    /// CORR-v0.2-06 in DAY-88) is routed to [`Self::Unlinked`] rather
     /// than [`Self::ConfluencePages`]. "All events" is deliberate:
     /// if even one event in the group has a real parent page the
     /// group deserves to render under Confluence pages; the override
@@ -140,7 +149,7 @@ impl ReportSection {
                     && ev.metadata.get("unattached") == Some(&json!(true))
             })
         {
-            return Self::Other;
+            return Self::Unlinked;
         }
         Self::from_payload(&group.artifact.payload)
     }
@@ -158,7 +167,7 @@ impl ReportSection {
             Self::MergeRequests => "merge_requests",
             Self::JiraIssues => "jira_issues",
             Self::ConfluencePages => "confluence_pages",
-            Self::Other => "other",
+            Self::Unlinked => "unlinked",
         }
     }
 
@@ -173,9 +182,52 @@ impl ReportSection {
             Self::MergeRequests => "Merge requests",
             Self::JiraIssues => "Jira issues",
             Self::ConfluencePages => "Confluence pages",
-            Self::Other => "Other",
+            Self::Unlinked => "Unlinked activity",
         }
     }
+
+    /// Dense ordinal for fixed-size-array bucketing.
+    ///
+    /// DAY-98 / PERF-v0.3-01 replaced the old `BTreeMap<ReportSection,
+    /// _>` bucket with a `[_; ReportSection::COUNT]` array indexed by
+    /// this value, trading an `O(log N)` tree insert per bullet for an
+    /// `O(1)` array index. The map's only role was "iterate in Ord
+    /// order"; since the Ord derivation is declaration-order anyway,
+    /// iterating `0..COUNT` does the same job without the allocation.
+    ///
+    /// The indices are private to the engine (this module and
+    /// `render::build_sections` are the only callers); a future
+    /// reordering / insertion of sections is still a one-line change
+    /// here. Kept as `const fn` so the renderer can size its stack
+    /// buffer with no runtime cost.
+    pub(crate) const fn index(self) -> usize {
+        match self {
+            Self::Commits => 0,
+            Self::MergeRequests => 1,
+            Self::JiraIssues => 2,
+            Self::ConfluencePages => 3,
+            Self::Unlinked => 4,
+        }
+    }
+
+    /// Total number of variants — the array length the renderer's
+    /// bucket uses. Kept in one place so adding a new section
+    /// requires exactly two edits (`index()` + this constant).
+    pub(crate) const COUNT: usize = 5;
+
+    /// Render-order iteration of every variant.
+    ///
+    /// Callers walk this slice to emit sections in their declaration
+    /// order (which is also their `Ord` order). Keeping it a
+    /// `const` slice means the compiler can inline the iteration and
+    /// no `Vec` allocates at call time.
+    pub(crate) const ALL: [Self; Self::COUNT] = [
+        Self::Commits,
+        Self::MergeRequests,
+        Self::JiraIssues,
+        Self::ConfluencePages,
+        Self::Unlinked,
+    ];
 }
 
 #[cfg(test)]
@@ -288,12 +340,13 @@ mod tests {
 
     /// CORR-v0.2-06. Confluence group whose every event carries
     /// `metadata.unattached == true` (comments whose parent page
-    /// couldn't be resolved) must route to `Other`, not
+    /// couldn't be resolved) must route to `Unlinked`, not
     /// `ConfluencePages`. Without this override the v0.2 shipped bug
     /// re-surfaces: those bullets lie about belonging to a real
-    /// page.
+    /// page. DAY-98 renamed the variant from `Other` → `Unlinked`
+    /// (CORR-v0.3-01) but the routing rule is unchanged.
     #[test]
-    fn from_group_routes_all_unattached_confluence_comments_to_other() {
+    fn from_group_routes_all_unattached_confluence_comments_to_unlinked() {
         let group = rolled_group(
             confluence_page(),
             vec![
@@ -301,7 +354,7 @@ mod tests {
                 confluence_comment_event(true),
             ],
         );
-        assert_eq!(ReportSection::from_group(&group), ReportSection::Other);
+        assert_eq!(ReportSection::from_group(&group), ReportSection::Unlinked);
     }
 
     /// Symmetric guard: one unattached + one attached → group still
@@ -340,9 +393,10 @@ mod tests {
     #[test]
     fn ids_are_pinned_snake_case() {
         assert_eq!(ReportSection::Commits.id(), "commits");
+        assert_eq!(ReportSection::MergeRequests.id(), "merge_requests");
         assert_eq!(ReportSection::JiraIssues.id(), "jira_issues");
         assert_eq!(ReportSection::ConfluencePages.id(), "confluence_pages");
-        assert_eq!(ReportSection::Other.id(), "other");
+        assert_eq!(ReportSection::Unlinked.id(), "unlinked");
     }
 
     /// Titles appear as `## <title>` in Obsidian notes users have
@@ -350,9 +404,10 @@ mod tests {
     #[test]
     fn titles_are_pinned_sentence_case() {
         assert_eq!(ReportSection::Commits.title(), "Commits");
+        assert_eq!(ReportSection::MergeRequests.title(), "Merge requests");
         assert_eq!(ReportSection::JiraIssues.title(), "Jira issues");
         assert_eq!(ReportSection::ConfluencePages.title(), "Confluence pages");
-        assert_eq!(ReportSection::Other.title(), "Other");
+        assert_eq!(ReportSection::Unlinked.title(), "Unlinked activity");
     }
 
     /// The derived `Ord` is what `build_sections` relies on to emit
@@ -360,24 +415,33 @@ mod tests {
     /// this test is the lock. If someone reorders the enum for
     /// "alphabetical" or similar reasons, Confluence pages will
     /// render before Commits and this assertion fires.
+    ///
+    /// DAY-98 slots `MergeRequests` between `Commits` and
+    /// `JiraIssues` so the reading flow is "what I shipped →
+    /// merge requests I reviewed alongside → Jira I triaged →
+    /// Confluence I wrote → unlinked stragglers". The
+    /// `Other` → `Unlinked` rename keeps the same ordinal.
     #[test]
     fn ord_matches_render_order() {
         let mut sections = vec![
-            ReportSection::Other,
+            ReportSection::Unlinked,
             ReportSection::ConfluencePages,
             ReportSection::Commits,
             ReportSection::JiraIssues,
+            ReportSection::MergeRequests,
         ];
         sections.sort();
         assert_eq!(
             sections,
             vec![
                 ReportSection::Commits,
+                ReportSection::MergeRequests,
                 ReportSection::JiraIssues,
                 ReportSection::ConfluencePages,
-                ReportSection::Other,
+                ReportSection::Unlinked,
             ],
-            "derived Ord must render Commits → Jira issues → Confluence pages → Other",
+            "derived Ord must render Commits → Merge requests → Jira issues → \
+             Confluence pages → Unlinked",
         );
     }
 }

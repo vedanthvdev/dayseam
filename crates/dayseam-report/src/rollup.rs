@@ -43,7 +43,8 @@ use std::path::PathBuf;
 
 use chrono::NaiveDate;
 use dayseam_core::{
-    ActivityEvent, Artifact, ArtifactId, ArtifactKind, ArtifactPayload, EntityKind, SourceId,
+    ActivityEvent, ActivityKind, Artifact, ArtifactId, ArtifactKind, ArtifactPayload, EntityKind,
+    MergeRequestProvider, SourceId,
 };
 use uuid::Uuid;
 
@@ -147,6 +148,19 @@ enum OrphanKey {
     JiraIssue(SourceId, String, String, NaiveDate),
     /// `(source_id, page_id, space_key, date)` — DAY-78.
     ConfluencePage(SourceId, String, String, NaiveDate),
+    /// `(source_id, provider, project_key, number, date)` — DAY-98.
+    ///
+    /// One bucket per `(provider, repo/project, PR/MR number, day)`
+    /// tuple. Every lifecycle event for a single MR lands in the
+    /// same bucket so the synthetic
+    /// [`ArtifactPayload::MergeRequest`] renders as *one* bullet
+    /// under `## Merge requests` instead of one bullet per event
+    /// (which would fragment a routine Open → Review → Merge day
+    /// into three redundant lines). Pre-DAY-98 these events fell
+    /// through the default arm and rolled up into a synthetic
+    /// `CommitSet`, silently producing bullets under `## Commits`
+    /// (the v0.3 dogfood bug CORR-v0.3-01 filed).
+    MergeRequest(SourceId, MergeRequestProvider, String, i64, NaiveDate),
 }
 
 fn orphan_key(event: &ActivityEvent) -> OrphanKey {
@@ -179,11 +193,84 @@ fn orphan_key(event: &ActivityEvent) -> OrphanKey {
                 .unwrap_or_else(|| "UNKNOWN".to_string());
             OrphanKey::ConfluencePage(event.source_id, page_id, gk.value, day)
         }
+        // DAY-98. MR / PR lifecycle events bucket by
+        // `(provider, project, number, day)` so every event on a
+        // single MR renders as *one* bullet under `## Merge
+        // requests` rather than fragmenting into a per-event pile
+        // under `## Commits`. If the shape parse fails (missing
+        // entity, un-parseable number), the event degrades to the
+        // default `CommitSet` arm below — a loud mis-parse would
+        // panic on the pure-function contract the engine leans on.
+        MrOpened | MrMerged | MrClosed | MrReviewComment | MrApproved => {
+            if let Some((project_key, number)) = gitlab_mr_identity(event) {
+                return OrphanKey::MergeRequest(
+                    event.source_id,
+                    MergeRequestProvider::GitLab,
+                    project_key,
+                    number,
+                    day,
+                );
+            }
+            let repo_path = PathBuf::from(group_key_from_event(event).value);
+            OrphanKey::CommitSet(event.source_id, repo_path, day)
+        }
+        GitHubPullRequestOpened
+        | GitHubPullRequestMerged
+        | GitHubPullRequestClosed
+        | GitHubPullRequestReviewed
+        | GitHubPullRequestCommented => {
+            if let Some((project_key, number)) = github_pr_identity(event) {
+                return OrphanKey::MergeRequest(
+                    event.source_id,
+                    MergeRequestProvider::GitHub,
+                    project_key,
+                    number,
+                    day,
+                );
+            }
+            let repo_path = PathBuf::from(group_key_from_event(event).value);
+            OrphanKey::CommitSet(event.source_id, repo_path, day)
+        }
         _ => {
             let repo_path = PathBuf::from(group_key_from_event(event).value);
             OrphanKey::CommitSet(event.source_id, repo_path, day)
         }
     }
+}
+
+/// Parse the `(project_key, number)` pair off a GitLab MR event.
+///
+/// GitLab's `target_iid` round-trips on the event as
+/// `external_id = "!<iid>"`. The project path comes from the
+/// `EntityKind::Repo` entity the connector attached. Returns
+/// `None` if either is missing — the caller degrades to
+/// `CommitSet` so the event still renders somewhere visible.
+fn gitlab_mr_identity(event: &ActivityEvent) -> Option<(String, i64)> {
+    let project_key = event
+        .entities
+        .iter()
+        .find(|e| e.kind == EntityKind::Repo)
+        .map(|e| e.external_id.clone())
+        .filter(|s| !s.is_empty() && s != "/")?;
+    let iid = event.external_id.strip_prefix('!')?;
+    let number: i64 = iid.parse().ok()?;
+    Some((project_key, number))
+}
+
+/// Parse the `(project_key, number)` pair off a GitHub PR event.
+///
+/// The GitHub walker writes `external_id = "<owner>/<repo>#<number>"`
+/// (`connector-github::normalise::normalise_pull_request`, DAY-95).
+/// The split is the `#` — owner/repo may itself contain multiple
+/// `/` segments in a future enterprise host, so we split on the
+/// first `#` and treat everything before as the project key.
+fn github_pr_identity(event: &ActivityEvent) -> Option<(String, i64)> {
+    let (project_key, number_str) = event.external_id.split_once('#')?;
+    if project_key.is_empty() {
+        return None;
+    }
+    let number: i64 = number_str.parse().ok()?;
+    Some((project_key.to_string(), number))
 }
 
 fn synthesize_artifact(
@@ -255,7 +342,94 @@ fn synthesize_artifact(
                 created_at,
             }
         }
+        OrphanKey::MergeRequest(source_id, provider, project_key, number, day) => {
+            // Separator sigil (`!` for GitLab, `#` for GitHub) is
+            // borrowed from each forge's own display convention.
+            // Mixing it into `external_id` keeps a GitLab MR and a
+            // GitHub PR with the same `(project, number)` from
+            // collapsing onto one deterministic id — unlikely in
+            // practice, but a $0 insurance policy against a cross-
+            // provider hash collision.
+            let sigil = match provider {
+                MergeRequestProvider::GitLab => '!',
+                MergeRequestProvider::GitHub => '#',
+            };
+            let external_id = format!("{project_key}{sigil}{number}::{day}");
+            // DAY-93 reserved `ArtifactKind::GitHubPullRequest` for
+            // both providers; the kind column is semantically loose
+            // (GitLab MRs get stored as `GitHubPullRequest`) but
+            // the payload's `provider` is the source of truth for
+            // the renderer. Revisit once a `MergeRequest` variant
+            // lands in the enum.
+            let id =
+                ArtifactId::deterministic(source_id, ArtifactKind::GitHubPullRequest, &external_id);
+            let title = extract_mr_title(events);
+            let url = events
+                .iter()
+                .find_map(|e| e.links.first().map(|l| l.url.clone()))
+                .unwrap_or_default();
+            Artifact {
+                id,
+                source_id: *source_id,
+                kind: ArtifactKind::GitHubPullRequest,
+                external_id,
+                payload: ArtifactPayload::MergeRequest {
+                    provider: *provider,
+                    number: *number,
+                    project_key: project_key.clone(),
+                    title,
+                    url,
+                    date: *day,
+                    event_ids,
+                },
+                created_at,
+            }
+        }
     }
+}
+
+/// Strip lifecycle prefixes (`Opened MR: `, `Merged PR: `, …) from
+/// the first "opened" event's title, or from the first event's title
+/// if no opened event exists.
+///
+/// The rollup picks *one* title to survive into the `MergeRequest`
+/// artifact — if five events all rolled up into the same MR, the
+/// renderer needs a single canonical string rather than
+/// `"Opened PR: Fix bug / Merged PR: Fix bug / …"`. Preferring the
+/// opened event avoids the "Commented on PR:" prefix bleeding
+/// through when the only surviving events are review comments
+/// (common on a PR you reviewed but didn't author).
+fn extract_mr_title(events: &[ActivityEvent]) -> String {
+    let preferred = events.iter().find(|e| {
+        matches!(
+            e.kind,
+            ActivityKind::MrOpened | ActivityKind::GitHubPullRequestOpened
+        )
+    });
+    let chosen = preferred.or_else(|| events.first());
+    let raw = chosen.map(|e| e.title.as_str()).unwrap_or("");
+    strip_mr_prefix(raw).to_string()
+}
+
+fn strip_mr_prefix(title: &str) -> &str {
+    const PREFIXES: &[&str] = &[
+        "Opened MR: ",
+        "Merged MR: ",
+        "Closed MR: ",
+        "Approved MR: ",
+        "Commented on MR: ",
+        "Opened PR: ",
+        "Merged PR: ",
+        "Closed PR: ",
+        "Reviewed PR: ",
+        "Commented on PR: ",
+    ];
+    for p in PREFIXES {
+        if let Some(rest) = title.strip_prefix(p) {
+            return rest;
+        }
+    }
+    title
 }
 
 /// Merge `CommitSet` groups that share a `(repo_path, date)` key.

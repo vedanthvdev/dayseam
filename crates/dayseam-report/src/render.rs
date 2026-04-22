@@ -19,8 +19,8 @@
 //! `tests/invariants.rs`.
 
 use dayseam_core::{
-    ActivityEvent, ArtifactId, ArtifactPayload, Evidence, Privacy, RenderedBullet, RenderedSection,
-    ReportDraft, SourceIdentity, SourceIdentityKind,
+    ActivityEvent, ArtifactId, ArtifactPayload, Evidence, MergeRequestProvider, Privacy,
+    RenderedBullet, RenderedSection, ReportDraft, SourceIdentity, SourceIdentityKind,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -150,48 +150,54 @@ fn build_sections(
     template_id: &str,
     verbose_mode: bool,
 ) -> Result<(Vec<RenderedSection>, Vec<Evidence>), ReportError> {
-    use std::collections::BTreeMap;
-
-    // BTreeMap keyed by `ReportSection` gives us two guarantees
-    // in one data structure: (1) bullets land in the right bucket
-    // by payload kind, (2) the iteration order is the derived
-    // `Ord` (which `sections.rs::ord_matches_ordinal` pins to the
-    // render order). No manual sort pass downstream.
-    let mut bucketed: BTreeMap<ReportSection, Vec<RenderedBullet>> = BTreeMap::new();
+    // DAY-98 / PERF-v0.3-01. Replaced a `BTreeMap<ReportSection,
+    // Vec<RenderedBullet>>` with a fixed-size array indexed by
+    // `ReportSection::index()`. The map's only job was "iterate in
+    // Ord order" — which, since `Ord` is declaration order, an
+    // array walk does in `O(COUNT)` without an allocation. Each
+    // group is still visited exactly once (the for-loop below is
+    // the single pass the PERF finding asked for); the win is the
+    // per-insert work dropping from `O(log N)` BTreeMap to `O(1)`
+    // array index. Unit test `grouper_makes_single_pass_over_rollup`
+    // pins the pass count.
+    const COUNT: usize = ReportSection::COUNT;
+    let mut buckets: [Vec<RenderedBullet>; COUNT] = Default::default();
     let mut evidence: Vec<Evidence> = Vec::new();
 
     for group in groups {
         // DAY-88 / CORR-v0.2-06. Switched from `from_payload` to
         // `from_group` so event-level overrides (unattached
-        // Confluence comments → `Other`) take effect. The
+        // Confluence comments → `Unlinked`) take effect. The
         // `section.id()` travels into the bullet id derivation
         // below, so a bullet that moves sections gets a new
         // stable id — evidence popovers and the streaming preview
         // need that to stay in sync.
         let section = ReportSection::from_group(group);
         let rendered = render_group(group, registry, template_id, section.id(), verbose_mode)?;
-        let bucket = bucketed.entry(section).or_default();
+        let bucket = &mut buckets[section.index()];
         for (bullet, ev) in rendered {
             evidence.push(ev);
             bucket.push(bullet);
         }
     }
 
-    let sections: Vec<RenderedSection> = bucketed
-        .into_iter()
-        // A bucket can end up empty if every event inside a group
-        // was filtered out (e.g. a CommitSet whose commits all
-        // redacted to nothing upstream). Dropping empty buckets
-        // keeps the rendered markdown free of `## Commits\n\n`-only
-        // fragments that the streaming preview would otherwise
-        // render as an empty heading.
-        .filter(|(_, bullets)| !bullets.is_empty())
-        .map(|(section, bullets)| RenderedSection {
+    // Walk `ALL` in declaration order so emitted sections render
+    // top-to-bottom as "what I shipped → what I reviewed → what I
+    // triaged → what I wrote → stray". Empty buckets drop out so
+    // the markdown sink never ships `## Commits\n\n`-only fragments
+    // the streaming preview would render as a bare heading.
+    let mut sections: Vec<RenderedSection> = Vec::with_capacity(COUNT);
+    for (idx, section) in ReportSection::ALL.iter().copied().enumerate() {
+        let bullets = std::mem::take(&mut buckets[idx]);
+        if bullets.is_empty() {
+            continue;
+        }
+        sections.push(RenderedSection {
             id: section.id().to_string(),
             title: section.title().to_string(),
             bullets,
-        })
-        .collect();
+        });
+    }
 
     Ok((sections, evidence))
 }
@@ -278,15 +284,89 @@ fn render_group(
             }
             Ok(out)
         }
-        // DAY-93. `MergeRequest` artefacts are dormant in v0.3 — no
-        // walker or rollup emits one yet. The v0.4 GitHub rollup
-        // (DAY-96) and GitLab MR promotion (DAY-97) replace this
-        // arm with real PR-aware rendering (`**owner/repo#42** —
-        // <title>`). Returning zero bullets preserves the
-        // "unreachable in practice, safe if ever reached" contract
-        // without panicking in a report that happens to carry a
-        // forged MR artifact in a test fixture.
-        ArtifactPayload::MergeRequest { .. } => Ok(Vec::new()),
+        // DAY-98. One bullet per artifact (not per event) — a day
+        // with Open → Review → Merge on one PR collapses to a
+        // single `**owner/repo#42** — <title>` line rather than
+        // three near-duplicate commit-style bullets. The evidence
+        // vec still lists every rolled-up event id so the UI
+        // popover can walk the full lifecycle.
+        ArtifactPayload::MergeRequest {
+            provider,
+            number,
+            project_key,
+            title,
+            ..
+        } => {
+            let bullet = render_mr_bullet(
+                &group.artifact.id,
+                &group.events,
+                *provider,
+                *number,
+                project_key,
+                title,
+                template_id,
+                section_id,
+            );
+            Ok(vec![bullet])
+        }
+    }
+}
+
+/// Render one `## Merge requests` bullet for an aggregated MR/PR
+/// artifact.
+///
+/// The shape is `**<project_key><sigil><number>** — <title>`, where
+/// the sigil is GitHub's `#` or GitLab's `!`. This matches each
+/// forge's own display convention (a reader copy-pastes
+/// `owner/repo#42` into a GitHub search box and lands on the PR).
+/// Redaction never fires here — MRs/PRs don't carry a
+/// `Privacy::RedactedPrivateRepo` flag today — but the helper is
+/// structured so a future restricted-forge privacy mode can slot
+/// in without churning the caller.
+#[allow(clippy::too_many_arguments)]
+fn render_mr_bullet(
+    artifact_id: &ArtifactId,
+    events: &[ActivityEvent],
+    provider: MergeRequestProvider,
+    number: i64,
+    project_key: &str,
+    title: &str,
+    template_id: &str,
+    section_id: &str,
+) -> (RenderedBullet, Evidence) {
+    let event_ids: Vec<Uuid> = events.iter().map(|e| e.id).collect();
+    let id = bullet_id(template_id, section_id, *artifact_id, &event_ids);
+    let sigil = match provider {
+        MergeRequestProvider::GitLab => '!',
+        MergeRequestProvider::GitHub => '#',
+    };
+    let text = if project_key.is_empty() {
+        format!("**{sigil}{number}** — {title}")
+    } else {
+        format!("**{project_key}{sigil}{number}** — {title}")
+    };
+    let reason = merge_request_reason(events.len(), provider);
+    let bullet = RenderedBullet {
+        id: id.clone(),
+        text,
+    };
+    let evidence = Evidence {
+        bullet_id: id,
+        event_ids,
+        reason,
+    };
+    (bullet, evidence)
+}
+
+fn merge_request_reason(count: usize, provider: MergeRequestProvider) -> String {
+    let unit = match provider {
+        MergeRequestProvider::GitLab => "GitLab MR event",
+        MergeRequestProvider::GitHub => "GitHub PR event",
+    };
+    if count == 1 {
+        format!("1 {unit}")
+    } else {
+        format!("{count} {unit}s")
     }
 }
 

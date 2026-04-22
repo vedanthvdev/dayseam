@@ -8,6 +8,41 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **DAY-98: `dayseam-report` — `ArtifactPayload::MergeRequest`
+  promotion, `ReportSection::Unlinked` rename, grouper one-pass
+  rework (PERF-v0.3-01).** GitLab MR and GitHub PR lifecycle events
+  (`MrOpened` / `…Merged` / `…Closed` / `…Approved` /
+  `MrReviewComment` + `GitHubPullRequestOpened` / `…Merged` /
+  `…Closed` / `…Reviewed` / `…Commented`) now roll up into
+  first-class `ArtifactPayload::MergeRequest` artefacts keyed by
+  `(provider, project_key, number, day)` and render as one bullet
+  each under a new `## Merge requests` section — ordered between
+  `## Commits` and `## Jira issues` so the reading flow is "what I
+  shipped → what I reviewed → what I triaged → what I wrote →
+  stray". The new `OrphanKey::MergeRequest` bucket in
+  `rollup::orphan_key` keeps every lifecycle event for a single MR
+  in one bucket, stripping `Opened MR:` / `Merged PR:` / etc.
+  prefixes to surface the canonical title. Commits that rolled
+  into an MR continue to render once under `## Commits` with the
+  verbose `(rolled into !N)` suffix — the MR's own bullet is a
+  peer, not a duplicate. `ReportSection::Other` is renamed to
+  `ReportSection::Unlinked` (id `unlinked`, title
+  `Unlinked activity`, CORR-v0.3-01) to read as a user-facing hint
+  instead of a grab-bag label; unattached Confluence comments
+  still route here. PERF-v0.3-01 replaces the
+  `BTreeMap<ReportSection, _>` bucket in `render::build_sections`
+  with a fixed-size array indexed by `ReportSection::index()` — one
+  walk, O(1) inserts, same render order. `MergeRequestProvider`
+  gains `PartialOrd` / `Ord` so it can key the orphan bucket.
+  Tests: six new invariants in `tests/mr_promotion.rs`
+  (`gitlab_mrs_render_under_merge_requests_section`,
+  `github_prs_render_under_merge_requests_section`,
+  `commits_rolled_into_mr_render_once`,
+  `unlinked_section_renders_confluence_orphan_comments`,
+  `grouper_makes_single_pass_over_rollup`) plus a render-order lock
+  in `sections::ord_matches_render_order` pinning
+  `Commits → MergeRequests → JiraIssues → ConfluencePages → Unlinked`.
+
 - **DAY-97: `dayseam-report` — GitHub PR ↔ Jira enrichment + cross-source
   PR↔MR linking + verbose `(triggered by …)` rendering.**
   `annotate_transition_with_mr` is now provider-agnostic: alongside

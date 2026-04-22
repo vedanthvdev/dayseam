@@ -13,7 +13,7 @@ pub mod types;
 pub use error::DayseamError;
 pub use types::{
     activity::{ActivityEvent, ActivityKind, Actor, EntityKind, EntityRef, Link, Privacy, RawRef},
-    artifact::{Artifact, ArtifactId, ArtifactKind, ArtifactPayload},
+    artifact::{Artifact, ArtifactId, ArtifactKind, ArtifactPayload, MergeRequestProvider},
     events::{
         LogEvent, ProgressEvent, ProgressPhase, ReportCompletedEvent, RunId, ToastEvent,
         ToastSeverity,

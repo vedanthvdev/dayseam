@@ -148,7 +148,7 @@ pub(crate) const fn artifact_kind_token(kind: ArtifactKind) -> &'static str {
 /// v0.4 lands two variants so the fifth connector and the v0.3
 /// GitLab rollup both land under the same `## Merge requests`
 /// section. Added in DAY-93.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub enum MergeRequestProvider {
     /// GitLab merge request. v0.3's GitLab walker previously

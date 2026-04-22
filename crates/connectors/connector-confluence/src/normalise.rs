@@ -351,19 +351,21 @@ fn normalise_comment(
         // page the tenant hides. The normaliser still emits the
         // comment (its body is real work the user did); the rollup
         // layer routes events without a parent page entity into a
-        // `ReportSection::Other` bucket so they render with a sane
-        // "unattached comments" header instead of collapsing into
-        // `UNKNOWN`. The warn surfaces this to the logs panel so an
-        // operator can open the CQL response and decide whether to
-        // file an upstream-shape ticket. Upgrading to `error` would
-        // be wrong: no data loss, no user-visible breakage — just a
+        // `ReportSection::Unlinked` bucket so they render with a
+        // "## Unlinked activity" header instead of collapsing into
+        // `UNKNOWN`. DAY-98 / CORR-v0.3-01 renamed the variant from
+        // `Other` → `Unlinked`; the routing rule is unchanged. The
+        // warn surfaces this to the logs panel so an operator can
+        // open the CQL response and decide whether to file an
+        // upstream-shape ticket. Upgrading to `error` would be
+        // wrong: no data loss, no user-visible breakage — just a
         // rendering quality hit that's worth knowing about.
         tracing::warn!(
             target: "connector_confluence::normalise",
             source_id = %source_id,
             comment_id = %content_id,
             space_key = %space_key,
-            "confluence comment missing both ancestors[] and container; routing to report Other section",
+            "confluence comment missing both ancestors[] and container; routing to report Unlinked section",
         );
     }
 
@@ -1014,7 +1016,7 @@ mod tests {
         // fell back to `"UNKNOWN"` and collapsed every unattached
         // comment on the day into one silent bullet. The fix: emit
         // the comment with `metadata.unattached == true` so the
-        // report layer can route it to the Other section, *and*
+        // report layer can route it to the Unlinked section, *and*
         // `tracing::warn!` so operators notice the upstream-shape
         // anomaly. The event must still be emitted (the body is real
         // user work).
