@@ -32,6 +32,7 @@ export type { SourcePatch } from "./generated/SourcePatch";
 export type { SecretRef } from "./generated/SecretRef";
 export type { GitlabValidationResult } from "./generated/GitlabValidationResult";
 export type { AtlassianValidationResult } from "./generated/AtlassianValidationResult";
+export type { GithubValidationResult } from "./generated/GithubValidationResult";
 export {
   GITLAB_ERROR_CODES,
   type GitlabErrorCode,
@@ -40,6 +41,10 @@ export {
   ATLASSIAN_ERROR_CODES,
   type AtlassianErrorCode,
 } from "./generated/atlassianErrorCodes";
+export {
+  GITHUB_ERROR_CODES,
+  type GithubErrorCode,
+} from "./generated/githubErrorCodes";
 
 export type { Sink } from "./generated/Sink";
 export type { SinkCapabilities } from "./generated/SinkCapabilities";
@@ -121,6 +126,7 @@ import type { WriteReceipt as WriteReceiptT } from "./generated/WriteReceipt";
 import type { ActivityEvent as ActivityEventT } from "./generated/ActivityEvent";
 import type { GitlabValidationResult as GitlabValidationResultT } from "./generated/GitlabValidationResult";
 import type { AtlassianValidationResult as AtlassianValidationResultT } from "./generated/AtlassianValidationResult";
+import type { GithubValidationResult as GithubValidationResultT } from "./generated/GithubValidationResult";
 import type { SecretRef as SecretRefT } from "./generated/SecretRef";
 
 /** Opaque handle used at the TS boundary for Tauri's `Channel<T>`. */
@@ -331,6 +337,49 @@ export interface Commands {
     args: { sourceId: string; apiToken: string };
     result: string[];
   };
+  /** One-shot GitHub credential probe. Calls
+   *  `GET <apiBaseUrl>/user` with the PAT over bearer auth and, on
+   *  success, returns the account triple the add-source dialog
+   *  renders in its "Connected as …" confirmation ribbon. `pat` is
+   *  transported as a raw JSON string and wrapped on the Rust side
+   *  in an `IpcSecretString` that redacts in `Debug` output and
+   *  zeroes its bytes on drop. Introduced in DAY-99. */
+  github_validate_credentials: {
+    args: { apiBaseUrl: string; pat: string };
+    result: GithubValidationResultT;
+  };
+  /** Persist a single GitHub source in one round-trip. `userId` is
+   *  the numeric id `github_validate_credentials` returned; the
+   *  command stamps it onto a fresh `SourceIdentity` under
+   *  `GitHubUserId` so the render-stage self-filter recognises
+   *  events this user authored. `pat` is wrapped on the Rust side
+   *  in an `IpcSecretString` before anything else can observe it.
+   *  Returns the freshly-inserted `Source` row. Introduced in
+   *  DAY-99. */
+  github_sources_add: {
+    args: {
+      apiBaseUrl: string;
+      label: string;
+      pat: string;
+      userId: number;
+    };
+    result: SourceT;
+  };
+  /** Rotate the PAT on an existing GitHub source. Triggered by the
+   *  Reconnect chip on `SourceErrorCard` when a GitHub source's
+   *  last walk failed with `github.auth.invalid_credentials`. The
+   *  backend validates the new token against the source's stored
+   *  `api_base_url`, asserts the `/user` numeric id still matches
+   *  the `GitHubUserId` identity already bound to the source (to
+   *  prevent silent account-rebinding), and overwrites the keychain
+   *  entry at the existing `SecretRef`. Returns the source id whose
+   *  token was refreshed so the caller can fire
+   *  `sources_healthcheck` to clear the red error chip. Introduced
+   *  in DAY-99. */
+  github_sources_reconnect: {
+    args: { sourceId: string; pat: string };
+    result: string;
+  };
   /** Dev-only. Compiled out of release builds via `cfg(feature = "dev-commands")`. */
   dev_emit_toast: {
     args: { event: ToastEvent };
@@ -385,6 +434,9 @@ export const PROD_COMMANDS: readonly CommandName[] = [
   "atlassian_validate_credentials",
   "atlassian_sources_add",
   "atlassian_sources_reconnect",
+  "github_validate_credentials",
+  "github_sources_add",
+  "github_sources_reconnect",
 ] as const;
 
 /** Dev-only command identifiers. Gated behind the Rust

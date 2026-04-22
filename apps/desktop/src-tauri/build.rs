@@ -102,6 +102,9 @@ fn main() {
         "atlassian_validate_credentials",
         "atlassian_sources_add",
         "atlassian_sources_reconnect",
+        "github_validate_credentials",
+        "github_sources_add",
+        "github_sources_reconnect",
     ];
     const DEV_COMMANDS: &[&str] = &[
         "settings_get",
@@ -132,6 +135,9 @@ fn main() {
         "atlassian_validate_credentials",
         "atlassian_sources_add",
         "atlassian_sources_reconnect",
+        "github_validate_credentials",
+        "github_sources_add",
+        "github_sources_reconnect",
         "dev_emit_toast",
         "dev_start_demo_run",
     ];

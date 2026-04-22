@@ -13,9 +13,14 @@
 import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { DayseamError, Source } from "@dayseam/ipc-types";
-import { ATLASSIAN_ERROR_CODES, GITLAB_ERROR_CODES } from "@dayseam/ipc-types";
+import {
+  ATLASSIAN_ERROR_CODES,
+  GITHUB_ERROR_CODES,
+  GITLAB_ERROR_CODES,
+} from "@dayseam/ipc-types";
 import { SourceErrorCard } from "../SourceErrorCard";
 import { atlassianErrorCopy } from "../atlassianErrorCopy";
+import { githubErrorCopy } from "../githubErrorCopy";
 import { gitlabErrorCopy } from "../gitlabErrorCopy";
 
 const GITLAB_SOURCE: Source = {
@@ -112,6 +117,45 @@ describe("SourceErrorCard", () => {
       }
     },
   );
+
+  it.each(GITHUB_ERROR_CODES.map((c) => [c]))(
+    "renders the github copy entry for %s",
+    (code) => {
+      const onReconnect = vi.fn();
+      render(
+        <SourceErrorCard
+          source={GITLAB_SOURCE}
+          error={errorFor(code)}
+          onReconnect={onReconnect}
+        />,
+      );
+      const copy = githubErrorCopy[code];
+      expect(screen.getByText(copy.title)).toBeInTheDocument();
+      expect(screen.getByText(copy.body)).toBeInTheDocument();
+      expect(screen.getByText(code)).toBeInTheDocument();
+
+      const reconnect = screen.queryByRole("button", { name: /reconnect/i });
+      if (copy.action === "reconnect") {
+        expect(reconnect).not.toBeNull();
+      } else {
+        expect(reconnect).toBeNull();
+      }
+    },
+  );
+
+  it("Reconnect fires for github auth codes", () => {
+    const onReconnect = vi.fn();
+    render(
+      <SourceErrorCard
+        source={GITLAB_SOURCE}
+        error={errorFor("github.auth.invalid_credentials")}
+        onReconnect={onReconnect}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: /reconnect/i }));
+    expect(onReconnect).toHaveBeenCalledTimes(1);
+    expect(onReconnect).toHaveBeenCalledWith(GITLAB_SOURCE);
+  });
 
   it("Reconnect fires for atlassian auth codes", () => {
     const onReconnect = vi.fn();

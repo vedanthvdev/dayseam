@@ -58,6 +58,13 @@ export const MOCK_HANDLED_COMMANDS = [
   // a rename on the Rust side into a compile-time failure at the
   // mock boundary, same as the add-flow commands above.
   "atlassian_sources_reconnect",
+  // DAY-99: the GitHub add-source scenarios drive
+  // `AddGithubSourceDialog` → validate → persist through the real
+  // IPC surface. Listing the commands here turns a rename on the
+  // Rust side into a compile-time failure at the mock boundary,
+  // same as the Atlassian commands above.
+  "github_validate_credentials",
+  "github_sources_add",
   "sources_healthcheck",
 ] as const satisfies readonly CommandName[];
 
@@ -145,6 +152,7 @@ export function dayseamTauriMockInit(catalogue: Catalogue): void {
       saveCalls: [],
       atlassianAddCalls: [],
       atlassianReconnectCalls: [],
+      githubAddCalls: [],
     },
     handlers: defaultHandlers(),
   };
@@ -585,6 +593,63 @@ export function dayseamTauriMockInit(catalogue: Catalogue): void {
           }
         }
         return affected;
+      },
+
+      // ── Domain: GitHub add-source (DAY-99) ─────────────────────
+      // Mirrors the Rust-side contract documented in
+      // `apps/desktop/src-tauri/src/ipc/github.rs`:
+      //
+      //   * `github_validate_credentials` returns the
+      //     `GithubValidationResult` triple the dialog pins to the
+      //     "Connected as …" ribbon and, on submit, stamps onto the
+      //     fresh `SourceIdentity` via `github_sources_add`.
+      //   * `github_sources_add` returns the freshly-inserted source
+      //     row and appends it to the closure-local `sources` list
+      //     so the next `sources_list` IPC reflects the connect.
+      //
+      // Every supplied argument is stashed on
+      // `state.captured.githubAddCalls` so a future
+      // `@github-add-ipc-contract` scenario can assert the exact
+      // payload shape without a second round-trip.
+      github_validate_credentials: async () => ({
+        user_id: catalogue.github.userId,
+        login: catalogue.github.login,
+        name: catalogue.github.name,
+      }),
+      github_sources_add: async (args) => {
+        const apiBaseUrl = String(args.apiBaseUrl ?? "");
+        const label = String(args.label ?? "");
+        const pat =
+          typeof args.pat === "string" ? args.pat : "";
+        const userId =
+          typeof args.userId === "number"
+            ? args.userId
+            : Number(args.userId ?? 0);
+
+        state.captured.githubAddCalls.push({
+          apiBaseUrl,
+          label,
+          pat,
+          userId,
+        });
+
+        const row = {
+          id: catalogue.ids.githubSource,
+          kind: "GitHub",
+          label: label || catalogue.github.label,
+          config: {
+            GitHub: { api_base_url: apiBaseUrl },
+          },
+          secret_ref: {
+            keychain_service: catalogue.github.secretRef.keychain_service,
+            keychain_account: catalogue.github.secretRef.keychain_account,
+          },
+          created_at: new Date().toISOString(),
+          last_sync_at: null,
+          last_health: { ok: true, checked_at: null, last_error: null },
+        };
+        sources.push(row);
+        return row;
       },
 
       // Healthcheck is a simple "flip the row to ok, return the

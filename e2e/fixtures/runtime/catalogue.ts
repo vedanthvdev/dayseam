@@ -42,6 +42,11 @@ export const CATALOGUE = {
     // the Jira row at `…5…`" reads better than an anonymous UUID).
     atlassianJiraSource: "55555555-5555-5555-5555-555555555555",
     atlassianConfluenceSource: "66666666-6666-6666-6666-666666666666",
+    // DAY-99 — the GitHub add-source scenarios seed a freshly-
+    // created GitHub source row through `github_sources_add`.
+    // Pinning the id lets the mock handler render a deterministic
+    // UUID and lets future assertions name the row explicitly.
+    githubSource: "77777777-7777-7777-7777-777777777777",
   },
 
   persons: {
@@ -122,6 +127,32 @@ export const CATALOGUE = {
     sharedSecretRef: {
       keychain_service: "dayseam.atlassian",
       keychain_account: "slot:e2e-shared-pat",
+    },
+  },
+
+  // DAY-99 — fixture for the Add-GitHub-source flow. The GitHub
+  // happy-path scenarios drive the real `AddGithubSourceDialog`
+  // (URL → validate → Add source) so these values have to satisfy
+  // the dialog's client-side validation:
+  //   * `apiBaseUrl` normalises to `https://api.github.com/` via
+  //     `normaliseGithubApiBaseUrl` — the default GitHub cloud
+  //     shape is pre-filled so the scenario exercises the common
+  //     user path without retyping.
+  //   * `pat` is a non-empty placeholder (the mock never checks
+  //     the token bytes — it mirrors the happy `GET /user` shape).
+  //   * `userId` / `login` / `name` are the triple the mocked
+  //     `github_validate_credentials` returns; the dialog persists
+  //     them onto the new `SourceIdentity` via `github_sources_add`.
+  github: {
+    apiBaseUrl: "https://api.github.com/",
+    pat: "ghp_e2e_fixture_token",
+    userId: 424242,
+    login: "dayseam-e2e",
+    name: "Dayseam E2E",
+    label: "api.github.com",
+    secretRef: {
+      keychain_service: "dayseam.github",
+      keychain_account: "source:77777777-7777-7777-7777-777777777777",
     },
   },
 } as const;

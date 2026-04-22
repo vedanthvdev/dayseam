@@ -21,11 +21,17 @@
 import type {
   AtlassianErrorCode,
   DayseamError,
+  GithubErrorCode,
   GitlabErrorCode,
   Source,
 } from "@dayseam/ipc-types";
-import { ATLASSIAN_ERROR_CODES, GITLAB_ERROR_CODES } from "@dayseam/ipc-types";
+import {
+  ATLASSIAN_ERROR_CODES,
+  GITHUB_ERROR_CODES,
+  GITLAB_ERROR_CODES,
+} from "@dayseam/ipc-types";
 import { atlassianErrorCopy } from "./atlassianErrorCopy";
+import { githubErrorCopy } from "./githubErrorCopy";
 import { gitlabErrorCopy } from "./gitlabErrorCopy";
 
 interface SourceErrorCardProps {
@@ -39,6 +45,7 @@ const GITLAB_ERROR_CODE_SET: ReadonlySet<string> = new Set(GITLAB_ERROR_CODES);
 const ATLASSIAN_ERROR_CODE_SET: ReadonlySet<string> = new Set(
   ATLASSIAN_ERROR_CODES,
 );
+const GITHUB_ERROR_CODE_SET: ReadonlySet<string> = new Set(GITHUB_ERROR_CODES);
 
 function isGitlabErrorCode(code: string): code is GitlabErrorCode {
   return GITLAB_ERROR_CODE_SET.has(code);
@@ -46,6 +53,10 @@ function isGitlabErrorCode(code: string): code is GitlabErrorCode {
 
 function isAtlassianErrorCode(code: string): code is AtlassianErrorCode {
   return ATLASSIAN_ERROR_CODE_SET.has(code);
+}
+
+function isGithubErrorCode(code: string): code is GithubErrorCode {
+  return GITHUB_ERROR_CODE_SET.has(code);
 }
 
 type CardCopy = {
@@ -57,6 +68,7 @@ type CardCopy = {
 function resolveCopy(code: string): CardCopy | null {
   if (isGitlabErrorCode(code)) return gitlabErrorCopy[code];
   if (isAtlassianErrorCode(code)) return atlassianErrorCopy[code];
+  if (isGithubErrorCode(code)) return githubErrorCopy[code];
   return null;
 }
 

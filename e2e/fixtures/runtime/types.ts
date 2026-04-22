@@ -39,6 +39,18 @@ export type CapturedAtlassianReconnectCall = {
   apiToken: string;
 };
 
+// DAY-99: every `github_sources_add` invoke the renderer makes
+// lands here so a future `@github-add-ipc-contract` scenario can
+// assert the exact payload shape the dialog sent (api base url,
+// label, PAT, numeric user id). Kept symmetrical with the
+// Atlassian captures above.
+export type CapturedGithubAddCall = {
+  apiBaseUrl: string;
+  label: string;
+  pat: string;
+  userId: number;
+};
+
 export type MockState = {
   invocations: Array<{ cmd: string; args: unknown }>;
   captured: {
@@ -57,6 +69,11 @@ export type MockState = {
     // the right source id and a non-empty token without a second
     // round-trip through `invocations`.
     atlassianReconnectCalls: CapturedAtlassianReconnectCall[];
+    // DAY-99: capture every `github_sources_add` payload so the
+    // GitHub add-source scenarios can assert the renderer sent the
+    // normalised URL / label / PAT / numeric user id without a
+    // second round-trip through `invocations`.
+    githubAddCalls: CapturedGithubAddCall[];
   };
   handlers: MockHandlers;
 };

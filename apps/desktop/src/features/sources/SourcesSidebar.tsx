@@ -35,6 +35,7 @@ import { useLocalRepos, useSources } from "../../ipc";
 import { AddLocalGitSourceDialog } from "./AddLocalGitSourceDialog";
 import { AddGitlabSourceDialog } from "./AddGitlabSourceDialog";
 import { AddAtlassianSourceDialog } from "./AddAtlassianSourceDialog";
+import { AddGithubSourceDialog } from "./AddGithubSourceDialog";
 import { ApproveReposDialog } from "./ApproveReposDialog";
 import { SourceErrorCard } from "./SourceErrorCard";
 
@@ -77,6 +78,10 @@ function isAtlassian(source: Source): boolean {
   return "Jira" in source.config || "Confluence" in source.config;
 }
 
+function isGithub(source: Source): boolean {
+  return "GitHub" in source.config;
+}
+
 
 export function SourcesSidebar() {
   const { sources, loading, error, refresh, healthcheck, remove } = useSources();
@@ -90,6 +95,7 @@ export function SourcesSidebar() {
   // already has one Atlassian product configured — the dialog
   // detects that state itself and steps into Journey C.
   const [addAtlassianOpen, setAddAtlassianOpen] = useState(false);
+  const [addGithubOpen, setAddGithubOpen] = useState(false);
   // The two-option "Add source" menu. Closed by default; a click on
   // either item opens the relevant dialog and closes the menu.
   const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -117,6 +123,14 @@ export function SourcesSidebar() {
   // copy in reconnect mode is accurate for both entry points.
   const editingAtlassian =
     editing !== null && isAtlassian(editing) ? editing : null;
+  // GitHub "edit" follows the Atlassian pattern: URL and label are
+  // pinned to the bound `SourceIdentity` (rotating the GitHub account
+  // would require re-seeding the identity row, which DAY-99 does not
+  // take on). The same dialog handles both the ✎ chip affordance and
+  // the Reconnect chip; the copy in reconnect mode is accurate for
+  // both entry points.
+  const editingGithub =
+    editing !== null && isGithub(editing) ? editing : null;
 
   const addMenuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -157,6 +171,20 @@ export function SourcesSidebar() {
       for (const id of affectedIds) {
         void healthcheck(id);
       }
+      setEditing(null);
+      void refresh();
+    },
+    [healthcheck, refresh],
+  );
+
+  const handleGithubReconnected = useCallback(
+    (affectedId: string) => {
+      // `github_sources_reconnect` rotates exactly one keychain slot
+      // (GitHub is single-source-per-PAT, no Atlassian-style shared-
+      // token flow), so the single affected id is all we need to
+      // fire healthcheck against to clear the red chip without
+      // waiting for the next poll.
+      void healthcheck(affectedId);
       setEditing(null);
       void refresh();
     },
@@ -273,6 +301,18 @@ export function SourcesSidebar() {
             >
               Add Atlassian source
             </button>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setAddMenuOpen(false);
+                setAddGithubOpen(true);
+              }}
+              data-testid="sources-add-menu-github"
+              className="block w-full px-3 py-1 text-left text-neutral-700 hover:bg-neutral-50 dark:text-neutral-200 dark:hover:bg-neutral-900"
+            >
+              Add GitHub source
+            </button>
           </div>
         ) : null}
       </div>
@@ -350,6 +390,25 @@ export function SourcesSidebar() {
           // Reconnect mode resolves through `onReconnected` instead.
         }}
         onReconnected={handleAtlassianReconnected}
+      />
+
+      <AddGithubSourceDialog
+        open={addGithubOpen}
+        onClose={() => setAddGithubOpen(false)}
+        onAdded={() => {
+          setAddGithubOpen(false);
+          void refresh();
+        }}
+      />
+
+      <AddGithubSourceDialog
+        open={editingGithub !== null}
+        onClose={() => setEditing(null)}
+        reconnect={editingGithub ? { source: editingGithub } : null}
+        onAdded={() => {
+          // Reconnect mode resolves through `onReconnected`.
+        }}
+        onReconnected={handleGithubReconnected}
       />
 
       {approving ? (

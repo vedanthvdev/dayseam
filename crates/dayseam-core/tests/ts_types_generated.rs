@@ -17,13 +17,13 @@ use std::process::Command;
 use dayseam_core::{
     error_codes, ActivityEvent, ActivityKind, Actor, Artifact, ArtifactId, ArtifactKind,
     ArtifactPayload, AtlassianValidationResult, DayseamError, EntityRef, Evidence,
-    GitlabValidationResult, Identity, Link, LocalRepo, LogEntry, LogEvent, LogLevel,
-    PerSourceState, Person, Privacy, ProgressEvent, ProgressPhase, RawRef, RenderedBullet,
-    RenderedSection, ReportCompletedEvent, ReportDraft, RunId, RunStatus, SecretRef, Settings,
-    SettingsPatch, Sink, SinkCapabilities, SinkConfig, SinkKind, Source, SourceConfig,
-    SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind, SourcePatch, SourceRunState,
-    SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger, ThemePreference, ToastEvent,
-    ToastSeverity, WriteReceipt,
+    GithubValidationResult, GitlabValidationResult, Identity, Link, LocalRepo, LogEntry, LogEvent,
+    LogLevel, PerSourceState, Person, Privacy, ProgressEvent, ProgressPhase, RawRef,
+    RenderedBullet, RenderedSection, ReportCompletedEvent, ReportDraft, RunId, RunStatus,
+    SecretRef, Settings, SettingsPatch, Sink, SinkCapabilities, SinkConfig, SinkKind, Source,
+    SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind, SourcePatch,
+    SourceRunState, SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger, ThemePreference,
+    ToastEvent, ToastSeverity, WriteReceipt,
 };
 use ts_rs::{Config, TS};
 
@@ -65,6 +65,7 @@ fn export_all(out_dir: &Path) {
     SecretRef::export_all(&cfg).expect("export SecretRef");
     GitlabValidationResult::export_all(&cfg).expect("export GitlabValidationResult");
     AtlassianValidationResult::export_all(&cfg).expect("export AtlassianValidationResult");
+    GithubValidationResult::export_all(&cfg).expect("export GithubValidationResult");
 
     Sink::export_all(&cfg).expect("export Sink");
     SinkKind::export_all(&cfg).expect("export SinkKind");
@@ -103,6 +104,7 @@ fn export_all(out_dir: &Path) {
 
     export_gitlab_error_codes(out_dir);
     export_atlassian_error_codes(out_dir);
+    export_github_error_codes(out_dir);
 }
 
 /// Regenerate `gitlabErrorCodes.ts` so the frontend parity test always sees
@@ -168,6 +170,35 @@ fn export_atlassian_error_codes(out_dir: &std::path::Path) {
     body.push_str("export type AtlassianErrorCode = (typeof ATLASSIAN_ERROR_CODES)[number];\n");
     std::fs::write(out_dir.join("atlassianErrorCodes.ts"), body)
         .expect("write atlassianErrorCodes.ts");
+}
+
+/// Regenerate `githubErrorCodes.ts` with every `github.*` code from
+/// `error_codes::ALL`. `SourceErrorCard` keys its GitHub copy lookup
+/// off this literal array so that when a new `github.*` code is
+/// introduced in Rust, the frontend parity test (see
+/// `SourceErrorCard.parity.test.tsx`) fails until a matching entry is
+/// added to `githubErrorCopy.ts`.
+fn export_github_error_codes(out_dir: &std::path::Path) {
+    let codes: Vec<&str> = error_codes::ALL
+        .iter()
+        .copied()
+        .filter(|c| c.starts_with("github."))
+        .collect();
+    let mut body = String::new();
+    body.push_str("// AUTO-GENERATED FILE. Do not edit by hand.\n");
+    body.push_str(
+        "// Regenerated from `dayseam_core::error_codes::ALL` by the\n\
+         // `ts_types_generated` test. Add the copy entry in\n\
+         // `src/features/sources/githubErrorCopy.ts` whenever this list\n\
+         // grows, otherwise the frontend parity test fails.\n\n",
+    );
+    body.push_str("export const GITHUB_ERROR_CODES = [\n");
+    for code in &codes {
+        body.push_str(&format!("  \"{code}\",\n"));
+    }
+    body.push_str("] as const;\n\n");
+    body.push_str("export type GithubErrorCode = (typeof GITHUB_ERROR_CODES)[number];\n");
+    std::fs::write(out_dir.join("githubErrorCodes.ts"), body).expect("write githubErrorCodes.ts");
 }
 
 fn repo_root() -> PathBuf {

@@ -382,6 +382,29 @@ pub const IPC_ATLASSIAN_KEYCHAIN_WRITE_FAILED: &str = "ipc.atlassian.keychain_wr
 /// new token" path.
 pub const IPC_ATLASSIAN_REUSE_SECRET_MISSING: &str = "ipc.atlassian.reuse_secret_missing";
 
+/// `github_validate_credentials` / `github_sources_add` /
+/// `github_sources_reconnect` was called with a PAT that is empty
+/// or whitespace-only. Mirrors `IPC_GITLAB_PAT_MISSING`. The
+/// frontend dialog's Validate button also blocks this state (DAY-99
+/// invariant 1); the IPC guard exists so a hand-crafted caller
+/// cannot round-trip an empty-PAT source into the keychain.
+pub const IPC_GITHUB_PAT_MISSING: &str = "ipc.github.pat_missing";
+
+/// The `api_base_url` argument to a GitHub IPC command failed to
+/// parse as an absolute `https://` URL. The dialog normalises the
+/// user's input client-side before firing IPC (DAY-99 invariant 2),
+/// so this code fires only for hand-crafted callers or a stale
+/// in-memory value; either way the request is rejected before any
+/// network call.
+pub const IPC_GITHUB_INVALID_API_BASE_URL: &str = "ipc.github.invalid_api_base_url";
+
+/// Writing the GitHub PAT to the OS keychain failed. Same
+/// rollback-and-retry semantics as
+/// [`IPC_GITLAB_KEYCHAIN_WRITE_FAILED`]: `github_sources_add` and
+/// `github_sources_reconnect` do not persist a partial source row
+/// when this fires.
+pub const IPC_GITHUB_KEYCHAIN_WRITE_FAILED: &str = "ipc.github.keychain_write_failed";
+
 /// `sinks_add` was called with a `config` whose body fails the IPC
 /// layer's structural check (e.g. a `MarkdownFile` sink with an
 /// empty `dest_dirs` list, a non-absolute path, or a path with `..`

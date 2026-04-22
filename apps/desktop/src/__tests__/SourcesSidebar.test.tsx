@@ -126,6 +126,21 @@ describe("SourcesSidebar", () => {
     ).toBeInTheDocument();
   });
 
+  it("opens the GitHub add dialog from the add-source menu", async () => {
+    registerInvokeHandler("sources_list", async () => []);
+    render(<SourcesSidebar />);
+    await waitFor(() =>
+      expect(screen.getByText(/no sources connected/i)).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^add source$/i }));
+    fireEvent.click(
+      screen.getByRole("menuitem", { name: /add github source/i }),
+    );
+    expect(
+      screen.getByRole("dialog", { name: /add github source/i }),
+    ).toBeInTheDocument();
+  });
+
   it("renders a SourceErrorCard for a GitLab source with an auth error", async () => {
     const BROKEN_GITLAB: Source = {
       id: "gl-1",
@@ -287,6 +302,69 @@ describe("SourcesSidebar", () => {
     // that opened the dialog also has "Reconnect" in its label, so
     // we scope the lookup to the dialog's own region.
     const dialog = screen.getByRole("dialog", { name: /reconnect jira/i });
+    const { getByRole: getByRoleInDialog } = within(dialog);
+    expect(
+      getByRoleInDialog("button", { name: /^reconnect$/i }),
+    ).toBeInTheDocument();
+  });
+
+  // DAY-99: Reconnect chip on a GitHub source re-opens the
+  // `AddGithubSourceDialog` in reconnect mode. The dialog mounts
+  // with the API base URL pre-filled and read-only, the PAT field
+  // empty, and submit routes through `github_sources_reconnect`
+  // (covered by the dialog's own RTL suite; here we only assert the
+  // wiring.)
+  it("GitHub reconnect chip mounts AddGithubSourceDialog in reconnect mode", async () => {
+    const BROKEN_GITHUB: Source = {
+      id: "gh-1",
+      kind: "GitHub",
+      label: "ved @ api.github.com",
+      config: {
+        GitHub: {
+          api_base_url: "https://api.github.com/",
+        },
+      },
+      secret_ref: {
+        keychain_service: "dayseam.github",
+        keychain_account: "source:gh-1",
+      },
+      created_at: "2026-04-20T12:00:00Z",
+      last_sync_at: null,
+      last_health: {
+        ok: false,
+        checked_at: "2026-04-20T12:00:00Z",
+        last_error: {
+          variant: "Auth",
+          data: {
+            code: "github.auth.invalid_credentials",
+            message: "401",
+            retryable: false,
+            action_hint: "reconnect",
+          },
+        },
+      },
+    };
+    registerInvokeHandler("sources_list", async () => [BROKEN_GITHUB]);
+
+    render(<SourcesSidebar />);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("source-error-card-gh-1"),
+      ).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByTestId("source-error-card-reconnect-gh-1"));
+
+    await waitFor(() =>
+      expect(
+        screen.getByRole("dialog", { name: /reconnect github/i }),
+      ).toBeInTheDocument(),
+    );
+
+    expect(
+      screen.getByTestId("add-github-api-base-url"),
+    ).toHaveValue("https://api.github.com/");
+
+    const dialog = screen.getByRole("dialog", { name: /reconnect github/i });
     const { getByRole: getByRoleInDialog } = within(dialog);
     expect(
       getByRoleInDialog("button", { name: /^reconnect$/i }),

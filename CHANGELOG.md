@@ -8,6 +8,62 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **DAY-99: desktop — `AddGithubSourceDialog` + GitHub IPC surface
+  (`github_validate_credentials`, `github_sources_add`,
+  `github_sources_reconnect`).** The sidebar `+ Add source` menu
+  gains a "Add GitHub source" entry that mounts the new
+  `AddGithubSourceDialog`; the same component handles the reconnect
+  flow driven from `SourceErrorCard` when a GitHub source's last
+  walk failed with `github.auth.invalid_credentials`. The dialog's
+  API-base-URL field normalises client-side via
+  `normaliseGithubApiBaseUrl` (HTTPS enforcement, trailing-slash
+  preservation, query/fragment rejection; shared rules with the
+  Rust-side `parse_api_base_url` helper) and defaults to
+  `https://api.github.com/` for the common cloud case. The PAT
+  field gates a Validate button that fires
+  `github_validate_credentials` (a `GET <api_base_url>/user` probe
+  wrapping the token in `IpcSecretString`) and renders the returned
+  `GithubValidationResult` triple (`user_id` / `login` / `name`) in
+  a "✓ Connected as …" ribbon; the Add-source button is disabled
+  until a fresh validate passes, and any edit to the URL or the PAT
+  after a successful probe invalidates the cached status so the
+  user cannot silently bind the source to a different GitHub
+  account (mirrors the DAY-90 Atlassian fix). `github_sources_add`
+  persists the source row and stamps the numeric `user_id` onto a
+  fresh `SourceIdentity` under `GitHubUserId` in one round-trip;
+  `github_sources_reconnect` validates the new token against the
+  source's stored `api_base_url`, asserts the `/user` numeric id
+  still matches the bound `GitHubUserId` (account-rebinding guard),
+  and rotates the keychain entry at the existing `SecretRef`
+  (`dayseam.github::source:<source_id>`). Three new internal IPC
+  error codes — `IPC_GITHUB_PAT_MISSING`,
+  `IPC_GITHUB_INVALID_API_BASE_URL`,
+  `IPC_GITHUB_KEYCHAIN_WRITE_FAILED` — mirror the GitLab/Atlassian
+  IPC-layer shape; user-facing `github.*` codes render through a
+  new `githubErrorCopy.ts` whose `GITHUB_ERROR_CODES` tuple is
+  generated from `dayseam_core::error_codes::ALL` by the
+  `ts_types_generated` test so a new Rust-side code surfaces as a
+  TS parity failure until the copy entry lands. Tests: unit suite
+  in `apps/desktop/src-tauri/src/ipc/github.rs` (URL parsing,
+  empty-PAT guard, keychain keying, reconnect account-guard); RTL
+  suites `AddGithubSourceDialog.test.tsx` (add + reconnect happy
+  paths, label default, HTTPS enforcement),
+  `AddGithubSourceDialog.validate-edit.test.tsx` (cached-ok drop
+  on URL / PAT edit), `github-api-base-url.test.ts`
+  (normalisation parity with the Rust helper),
+  `githubErrorCopy.test.ts` (copy ↔ `GITHUB_ERROR_CODES` parity),
+  and extensions to `SourceErrorCard.test.tsx` +
+  `SourcesSidebar.test.tsx` for the menu wiring and the
+  reconnect-chip → dialog path. BDD coverage in
+  `e2e/features/github/add-source.feature` and
+  `e2e/features/github/validate-edit.feature` drives the real
+  dialog against the mocked IPC surface and pins the captured
+  `github_sources_add` payload so regressions in the URL / label
+  / user-id plumbing surface as scenario failures. Plan doc:
+  `docs/plan/2026-04-22-v0.4-github-connector.md` Task 8 boxes
+  ticked; `semver:none` — the whole v0.4 ships as `semver:minor`
+  on the DAY-101 capstone.
+
 - **DAY-98: `dayseam-report` — `ArtifactPayload::MergeRequest`
   promotion, `ReportSection::Unlinked` rename, grouper one-pass
   rework (PERF-v0.3-01).** GitLab MR and GitHub PR lifecycle events

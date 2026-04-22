@@ -78,6 +78,9 @@ const commandSurface: Record<keyof Commands, true> = {
   atlassian_validate_credentials: true,
   atlassian_sources_add: true,
   atlassian_sources_reconnect: true,
+  github_validate_credentials: true,
+  github_sources_add: true,
+  github_sources_reconnect: true,
   dev_emit_toast: true,
   dev_start_demo_run: true,
 };

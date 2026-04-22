@@ -33,6 +33,9 @@
     "allow-atlassian-validate-credentials",
     "allow-atlassian-sources-add",
     "allow-atlassian-sources-reconnect",
+    "allow-github-validate-credentials",
+    "allow-github-sources-add",
+    "allow-github-sources-reconnect",
     "dialog:allow-open"
   ]
 }

@@ -1,7 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use dayseam_db::LogRepo;
-use dayseam_desktop::ipc::{atlassian, broadcast_forwarder, commands};
+use dayseam_desktop::ipc::{atlassian, broadcast_forwarder, commands, github};
 use dayseam_desktop::startup;
 use tauri::Manager;
 
@@ -72,6 +72,9 @@ fn main() {
         atlassian::atlassian_validate_credentials,
         atlassian::atlassian_sources_add,
         atlassian::atlassian_sources_reconnect,
+        github::github_validate_credentials,
+        github::github_sources_add,
+        github::github_sources_reconnect,
         commands::dev_emit_toast,
         commands::dev_start_demo_run,
     ]);
@@ -106,6 +109,9 @@ fn main() {
         atlassian::atlassian_validate_credentials,
         atlassian::atlassian_sources_add,
         atlassian::atlassian_sources_reconnect,
+        github::github_validate_credentials,
+        github::github_sources_add,
+        github::github_sources_reconnect,
     ]);
 
     builder
