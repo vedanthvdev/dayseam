@@ -6,6 +6,174 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-22
+
+### Changed
+
+- **v0.3 capstone — report polish + deferred-findings hardening (DAY-85..DAY-91).**
+  v0.3 is a polish + hardening phase, not a feature phase: no new
+  connectors, no new event kinds, no new IPC surface beyond the one
+  Reconnect-prefill helper. The headline user-visible changes are
+  **per-kind report sections** (DAY-86 — events now group under
+  `Commits` / `Jira issues` / `Confluence pages` headings instead
+  of a single `COMMITS` catchall that previously labelled Jira
+  transitions as "Commits") and the **Atlassian Reconnect chip**
+  (DAY-87 — the previously dead chip now opens the Add-Source
+  dialog pre-filled with workspace URL + email, mirroring the
+  GitLab Reconnect flow that shipped in v0.1). Behind the UX, the
+  v0.2 capstone's 22 deferred Medium findings (umbrella issues
+  [#83](https://github.com/vedanthvdev/dayseam/issues/83)–[#87](https://github.com/vedanthvdev/dayseam/issues/87))
+  are resolved: silent-failure sweep across the Confluence
+  normaliser + Jira walker + orchestrator temporal ordering
+  (DAY-88); `EntityRef.kind` promoted to a proper `EntityKind`
+  enum with lossless custom serde, 5xx / 410 classification
+  symmetry across every connector, and migration `0005_secret_ref_index.sql`
+  indexing the shared-secret column (DAY-89); count-aware E2E
+  assertions, a real-Rust orchestrator-level Atlassian integration
+  test backed by wiremock, and the new `SerdeDefaultAudit`
+  proc-macro derive that makes any future `#[serde(default)]`
+  field on a persisted type fail to compile unless it names a
+  paired repair or carries an explicit waiver (DAY-90). Each of
+  DAY-85..DAY-90 carried `semver:none` so intermediate merges did
+  not auto-release; this capstone is the only v0.3 PR with
+  `semver:minor` and is the one that triggers the `v0.3.0` tag —
+  the release-workflow policy correction the v0.2 review called
+  for. Full lens-by-lens writeup in
+  [`docs/review/v0.3-review.md`](docs/review/v0.3-review.md); the
+  3-day dogfood sweep is scaffolded in
+  [`docs/dogfood/v0.3-dogfood-notes.md`](docs/dogfood/v0.3-dogfood-notes.md)
+  and runs against the published `v0.3.0` DMG. The capstone review
+  surfaced four deferred items (2 × Medium + 2 × Low) across the
+  test-quality, efficiency, cross-source, and correctness lenses;
+  all four are small enough to thread directly into the v0.4 plan
+  doc rather than carry through v0.4 as standalone umbrella
+  issues. **DAY-86 per-kind report sections.** `dayseam-report`
+  gains a new `sections` module whose `ReportSection` enum is the
+  single source of truth for "which heading does this payload
+  render under" via an exhaustive `match` on `ArtifactPayload`.
+  The match is deliberately exhaustive so any future
+  `ArtifactPayload` variant fails to compile until its author
+  picks a section, which is the compile-time nudge that prevents
+  a silent fall-through to `Commits` from ever recurring (that
+  fall-through is exactly what produced the v0.2 "Jira transition
+  labelled as a Commit" bug). Section ordering is the derived
+  `Ord` on the enum's declaration order — `Commits`, `JiraIssues`,
+  `ConfluencePages`, `Other` — not alphabetical, because the
+  intended reading order is "what I shipped → what I triaged →
+  what I wrote". Empty sections are omitted; the empty-*day*
+  fallback still renders a single `## Commits` "No tracked
+  activity" bullet so the desktop streaming preview's existing
+  contract doesn't break. Golden snapshots under
+  `crates/dayseam-report/src/templates/` pin the rendered output
+  for a mixed Jira + Confluence + GitLab + local-git day — the
+  "mixed-day section heading test" issue [#85](https://github.com/vedanthvdev/dayseam/issues/85)
+  called out. **DAY-87 Atlassian Reconnect dialog parity.** The
+  Reconnect chip on an Atlassian source with a rejected token now
+  opens `AddAtlassianSourceDialog` pre-filled with the source's
+  workspace URL + email, routed through a new IPC command
+  `atlassian_sources_prefill_for_reconnect` (added to the Tauri
+  capability whitelist and typed in `@dayseam/ipc-types`). The
+  pre-fill read path reuses the row the Reconnect chip already
+  has in the sidebar store — no extra `sources_list` round-trip —
+  and collapses to the Journey A (shared-PAT) invariant when the
+  source's `secret_ref` points at a keychain slot another
+  Atlassian source also references. Validate-edit semantics: if
+  the user edits the email between pressing Validate and Submit,
+  the dialog forces a fresh Validate click before accepting
+  Submit — the second Validate must not reuse the first's cached
+  result. A new RTL test (`AddAtlassianSourceDialog.validate-edit.test.tsx`)
+  and an E2E BDD scenario (`atlassian-reconnect-validate-edit.feature`)
+  guard this contract. **DAY-88 silent-failure sweep.** Nine
+  findings (`CORR-v0.2-02..10`) inlined from the v0.2 deferred
+  umbrella. Confluence normaliser hardening: `version.number`
+  defaults are gone (missing version now returns a shape error),
+  ADF parser errors surface via `Result` rather than being
+  swallowed into an empty preview, unparseable `createdDate`
+  values fail loudly instead of defaulting to the walk's target
+  date. Jira empty-transition render path no longer emits a blank
+  bullet when the issue has no name text. Orchestrator temporal
+  ordering for MR↔transition enrichment now requires the MR to
+  *precede* the transition by at most 24h before surfacing the
+  `(triggered by !<iid>)` annotation — previously it could
+  annotate a transition that happened hours before the MR even
+  existed. Rollback warning surface: the keychain error path in
+  `atlassian_sources_add_impl` now surfaces every upstream error
+  via `tracing::warn!` rather than silencing any of them. The
+  `SerdeDefaultRepair` trait that DAY-90's macro builds on is
+  introduced here — every `#[serde(default)]` field on a
+  persisted type now has a documented named repair or a reasoned
+  waiver, starting with `confluence_email` (the repair helper the
+  v0.2.1 hotfix shipped). Shared-secret refcount race is resolved
+  by holding the transactions lock across the delete-count +
+  delete-keychain compound action; dropped error-body previews
+  are now included in the `tracing::warn!` message chain. **DAY-89
+  cross-source consistency.** `EntityRef.kind` promoted from
+  free-form `String` to `EntityKind` enum with custom
+  `Serialize` / `Deserialize` that preserves the exact snake_case
+  string wire shape every v0.2.1 connector emitted — meaning
+  v0.2.1 `activity_events` rows round-trip byte-stable on the
+  v0.3.0 upgrade with no migration. Unknown kinds deserialise as
+  `EntityKind::Other(String)` carrying the original string, so a
+  future connector's new kind doesn't break a rollback. The
+  `ActivityKind` enum gains a doc-comment recording its naming
+  convention (noun-past-participle pairs per source, e.g.
+  `JiraIssueTransitioned`, `ConfluencePageCreated`) so the next
+  connector's author picks a name consistent with the existing
+  seven. 5xx / 410 classification symmetry: every connector's
+  `map_status` function now routes `5xx` to `DayseamError::Network`
+  (was `UpstreamChanged` for Atlassian, `Network` for GitLab —
+  the asymmetry the v0.2 review flagged), and `410 Gone` routes
+  to a new `{service}.resource_gone` error code (`jira.resource_gone`,
+  `confluence.resource_gone`, `gitlab.resource_gone` — three
+  symmetric codes registered in the `dayseam-core::error_codes::ALL`
+  snapshot so accidental drops fail the test). Migration
+  `0005_secret_ref_index.sql` creates a partial index
+  `idx_sources_secret_ref ON sources(secret_ref) WHERE secret_ref IS NOT NULL`
+  — zero-downtime for upgraders (the `IF NOT EXISTS` clause
+  handles the repeated-boot case), useful the moment the shared-
+  secret repair pipeline DAY-90 builds on has to look up repair
+  candidates by `secret_ref`. The `workspace` entity variant the
+  v0.2 review called for is **deferred to v0.4** — the plan's
+  explicit scope decision, recorded in the v0.3 plan's "Risks /
+  out-of-scope" list — because no call-site currently needs it
+  and adding it would widen the `EntityKind` enum without a
+  corresponding value delivery. **DAY-90 test-quality floor.**
+  Count-aware E2E assertions: `StreamingPreview.tsx` now stamps
+  `data-section={section.id}` on each rendered section and
+  `data-bullet={bullet.id}` on each bullet, giving Playwright
+  stable DOM hooks. The page object gains
+  `expectSectionBulletCount(sectionId, n)` and
+  `expectSectionContainsBullet(sectionId, text)`, and all four
+  existing happy-path scenarios migrate onto them — the presence-
+  not-count assertions the v0.2 review flagged as inadequate are
+  gone. Real-Rust orchestrator-level Atlassian integration test:
+  new `crates/dayseam-orchestrator/tests/atlassian_integration.rs`
+  exercises the full `GenerateRequest → orchestrator → JiraMux
+  + ConfluenceMux → normaliser → persist → ReportDraft` stack
+  against `wiremock` backends in three scenarios (Jira-only,
+  Confluence-only, both-at-once with independent mock servers) —
+  the orchestrator-level test [#85](https://github.com/vedanthvdev/dayseam/issues/85)
+  called out as the absent-from-v0.2 coverage. Registry
+  round-trip invariant: `registry_kind_round_trips_for_every_registered_connector`
+  in `registries.rs` exhaustively iterates `SourceKind` (so
+  adding a new kind fails to compile until it's either registered
+  or explicitly excluded) and asserts every registered
+  connector's `kind()` matches its registration key. Validate-
+  edit dialog RTL test (see DAY-87 entry). New `dayseam-macros`
+  proc-macro crate with the `SerdeDefaultAudit` derive: every
+  `#[serde(default)]` field on a type carrying the derive must
+  carry a paired `#[serde_default_audit(repair = "NAME")]` (naming
+  a registered `SerdeDefaultRepair`) or an explicit
+  `#[serde_default_audit(no_repair = "reason")]` waiver — failing
+  either shape produces a compile error whose message names the
+  offending field and cites the DOG-v0.2-04 background. A
+  `trybuild` suite (4 compile-pass + 3 compile-fail fixtures)
+  pins the derive's behaviour; the derive is applied to
+  `SourceConfig` (the v0.2.1 `#[serde(default)]` Confluence email
+  field now carries the `confluence_email` repair annotation) and
+  `EntityRef` (no `#[serde(default)]` fields today — the derive
+  is a zero-cost future-proofing nudge).
+
 ## [0.2.1] - 2026-04-21
 
 ### Fixed
