@@ -73,6 +73,10 @@ function isLocalGit(source: Source): boolean {
   return "LocalGit" in source.config;
 }
 
+function isAtlassian(source: Source): boolean {
+  return "Jira" in source.config || "Confluence" in source.config;
+}
+
 
 export function SourcesSidebar() {
   const { sources, loading, error, refresh, healthcheck, remove } = useSources();
@@ -105,6 +109,14 @@ export function SourcesSidebar() {
 
   const editingLocalGit = editing !== null && isLocalGit(editing) ? editing : null;
   const editingGitlab = editing !== null && isGitlab(editing) ? editing : null;
+  // Atlassian "edit" currently only means token rotation — URL and
+  // account email are pinned to the bound `SourceIdentity` and a
+  // change there would require re-seeding the identity row, which
+  // DAY-87 deliberately does not take on. Reuse the same dialog
+  // for both the ✎ chip affordance and the Reconnect chip; the
+  // copy in reconnect mode is accurate for both entry points.
+  const editingAtlassian =
+    editing !== null && isAtlassian(editing) ? editing : null;
 
   const addMenuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -128,9 +140,28 @@ export function SourcesSidebar() {
   const handleReconnect = useCallback((source: Source) => {
     // Reconnect is semantically an edit on the existing row, so we
     // reuse the edit path — `AddGitlabSourceDialog` handles the
-    // reconnect copy internally when it detects `editing != null`.
+    // reconnect copy internally when it detects `editing != null`,
+    // and `AddAtlassianSourceDialog`'s DAY-87 reconnect mode
+    // activates when we pass the source via its `reconnect` prop
+    // (wired below alongside the other edit dialogs).
     setEditing(source);
   }, []);
+
+  const handleAtlassianReconnected = useCallback(
+    (affectedIds: string[]) => {
+      // `atlassian_sources_reconnect` returns every source id whose
+      // keychain slot was rotated (two for shared-PAT sources). Fire
+      // `sources_healthcheck` for each so the red chips clear
+      // immediately instead of waiting for the next poll; `refresh`
+      // on its own would re-read the stale `last_health` snapshot.
+      for (const id of affectedIds) {
+        void healthcheck(id);
+      }
+      setEditing(null);
+      void refresh();
+    },
+    [healthcheck, refresh],
+  );
 
   const handleConfirmDelete = useCallback(async () => {
     if (!deleting) return;
@@ -304,6 +335,21 @@ export function SourcesSidebar() {
           setAddAtlassianOpen(false);
           void refresh();
         }}
+      />
+
+      <AddAtlassianSourceDialog
+        open={editingAtlassian !== null}
+        onClose={() => setEditing(null)}
+        // In reconnect mode the dialog ignores `existingSources` and
+        // `onAdded`; both props are still required by the current
+        // type, so we pass the same values as the add-flow instance
+        // (the empty callback never fires in reconnect mode).
+        existingSources={sources}
+        reconnect={editingAtlassian ? { source: editingAtlassian } : null}
+        onAdded={() => {
+          // Reconnect mode resolves through `onReconnected` instead.
+        }}
+        onReconnected={handleAtlassianReconnected}
       />
 
       {approving ? (

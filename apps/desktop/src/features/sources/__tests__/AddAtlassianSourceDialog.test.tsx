@@ -369,4 +369,120 @@ describe("AddAtlassianSourceDialog", () => {
       await Promise.resolve();
     });
   });
+
+  // ── DAY-87: reconnect mode ─────────────────────────────────────
+  // The "Reconnect" chip on `SourceErrorCard` hands the dialog a
+  // `reconnect: { source }` prop. The dialog then:
+  //   * prefills URL + email from the source, read-only;
+  //   * empties the API token so the user can't submit the old one
+  //     by accident;
+  //   * hides the product checkboxes and the reuse/paste picker
+  //     (neither is meaningful when rotating one source's token);
+  //   * swaps the submit path from `atlassian_sources_add` to the
+  //     new `atlassian_sources_reconnect` IPC and calls
+  //     `onReconnected` with the list of source ids the backend
+  //     rotated (one, or two for shared-PAT sources).
+
+  it("reconnect mode: prefills URL/email as read-only and clears the token", () => {
+    render(
+      <AddAtlassianSourceDialog
+        open
+        onClose={() => {}}
+        onAdded={() => {}}
+        existingSources={[EXISTING_JIRA]}
+        reconnect={{ source: EXISTING_JIRA }}
+      />,
+    );
+
+    const urlField = screen.getByTestId(
+      "add-atlassian-workspace-url",
+    ) as HTMLInputElement;
+    const emailField = screen.getByTestId(
+      "add-atlassian-email",
+    ) as HTMLInputElement;
+    const tokenField = screen.getByTestId(
+      "add-atlassian-api-token",
+    ) as HTMLInputElement;
+
+    expect(urlField.value).toBe("https://modulrfinance.atlassian.net");
+    expect(urlField).toHaveAttribute("readonly");
+    expect(emailField.value).toBe("ved@example.com");
+    expect(emailField).toHaveAttribute("readonly");
+    expect(tokenField.value).toBe("");
+
+    // Product checkboxes are not rendered in reconnect mode — the
+    // source's kind is fixed and switching it would require a
+    // delete-and-re-add. The reuse/paste picker is likewise absent.
+    expect(
+      screen.queryByTestId("add-atlassian-enable-jira"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("add-atlassian-enable-confluence"),
+    ).not.toBeInTheDocument();
+    expect(
+      screen.queryByTestId("add-atlassian-token-mode-reuse"),
+    ).not.toBeInTheDocument();
+
+    // Primary button copy changes to Reconnect / Reconnecting…; the
+    // Add copy would be confusing on a row that's already present.
+    expect(
+      screen.getByRole("button", { name: /^reconnect$/i }),
+    ).toBeInTheDocument();
+    // Validate button is compiled out — the backend runs the probe
+    // as part of the reconnect submit path.
+    expect(
+      screen.queryByTestId("add-atlassian-validate"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("reconnect mode: submit calls atlassian_sources_reconnect and onReconnected with affected ids", async () => {
+    registerInvokeHandler("atlassian_sources_reconnect", async () => [
+      EXISTING_JIRA.id,
+    ]);
+    const onReconnected = vi.fn();
+
+    render(
+      <AddAtlassianSourceDialog
+        open
+        onClose={() => {}}
+        onAdded={() => {}}
+        existingSources={[EXISTING_JIRA]}
+        reconnect={{ source: EXISTING_JIRA }}
+        onReconnected={onReconnected}
+      />,
+    );
+
+    // Reconnect stays disabled until the user pastes a token —
+    // the empty-string rejection is the one client-side guard the
+    // dialog enforces before the backend probe runs.
+    const submit = screen.getByRole("button", { name: /^reconnect$/i });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId("add-atlassian-api-token"), {
+      target: { value: "ATATT-rotated" },
+    });
+    expect(submit).not.toBeDisabled();
+
+    fireEvent.click(submit);
+
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "atlassian_sources_reconnect",
+        expect.objectContaining({
+          sourceId: EXISTING_JIRA.id,
+          apiToken: "ATATT-rotated",
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(onReconnected).toHaveBeenCalledWith([EXISTING_JIRA.id]),
+    );
+    // The add path must not run: a stray `atlassian_sources_add`
+    // invocation in reconnect mode would mean we accidentally
+    // duplicated the source row.
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "atlassian_sources_add",
+      expect.anything(),
+    );
+  });
 });

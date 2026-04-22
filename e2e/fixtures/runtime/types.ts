@@ -30,6 +30,15 @@ export type CapturedAtlassianAddCall = {
     | null;
 };
 
+// DAY-87: every `atlassian_sources_reconnect` invoke the renderer
+// makes lands here so an `@atlassian-reconnect-ipc-contract`
+// scenario can assert the exact payload shape the dialog sent
+// (source id + fresh token). Symmetrical with `atlassianAddCalls`.
+export type CapturedAtlassianReconnectCall = {
+  sourceId: string;
+  apiToken: string;
+};
+
 export type MockState = {
   invocations: Array<{ cmd: string; args: unknown }>;
   captured: {
@@ -43,6 +52,11 @@ export type MockState = {
     // exact renderer-side IPC shape (journey A / B / C mode 1 /
     // C mode 2). Kept symmetrical with `saveCalls` above.
     atlassianAddCalls: CapturedAtlassianAddCall[];
+    // DAY-87: capture every `atlassian_sources_reconnect` payload
+    // so the reconnect-flow scenarios can assert the dialog sent
+    // the right source id and a non-empty token without a second
+    // round-trip through `invocations`.
+    atlassianReconnectCalls: CapturedAtlassianReconnectCall[];
   };
   handlers: MockHandlers;
 };

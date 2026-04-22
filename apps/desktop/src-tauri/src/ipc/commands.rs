@@ -90,6 +90,7 @@ pub const PROD_COMMANDS: &[&str] = &[
     "gitlab_validate_pat",
     "atlassian_validate_credentials",
     "atlassian_sources_add",
+    "atlassian_sources_reconnect",
 ];
 
 /// Dev-only Tauri command identifiers. Compiled in only when the

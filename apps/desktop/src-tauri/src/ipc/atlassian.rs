@@ -50,7 +50,7 @@ use connector_atlassian_common::{
 use connectors_sdk::{BasicAuth, HttpClient};
 use dayseam_core::{
     error_codes, AtlassianValidationResult, DayseamError, SecretRef, Source, SourceConfig,
-    SourceHealth, SourceId, SourceKind,
+    SourceHealth, SourceId, SourceIdentityKind, SourceKind,
 };
 use dayseam_db::{PersonRepo, SourceIdentityRepo, SourceRepo};
 use dayseam_secrets::Secret;
@@ -576,6 +576,231 @@ pub async fn atlassian_sources_add_impl(
     Ok(rows)
 }
 
+/// Rotate the API token on an existing Atlassian source (DAY-87).
+///
+/// The Reconnect chip on `SourceErrorCard` fires this command when a
+/// Jira or Confluence source's last walk failed with
+/// `atlassian.auth.invalid_credentials` (or any other code the chip's
+/// copy table maps to the `reconnect` action). The flow is:
+///
+///   1. Load the source by id. Must exist and be Atlassian-kind.
+///   2. Extract its `(workspace_url, email)` from `SourceConfig` —
+///      the reconnect dialog renders these as read-only context, so
+///      the tokens we validate against here are always the ones
+///      already bound to the source's identity.
+///   3. Validate the new token against that `(workspace_url, email)`
+///      via the same `discover_cloud` probe `atlassian_validate_
+///      credentials` uses. A `401` comes back as
+///      `atlassian.auth.invalid_credentials`, which the dialog
+///      surfaces inline instead of persisting anything.
+///   4. Assert the validated `account_id` still matches the source's
+///      existing `AtlassianAccountId` `SourceIdentity`. A token that
+///      happens to be valid for a *different* Atlassian account must
+///      not silently rebind the source — that would make every event
+///      emitted afterwards a cross-actor rollup bug. Mismatch returns
+///      `atlassian.auth.invalid_credentials` with an explicit
+///      "wrong account" message so the Reconnect copy can explain
+///      why the token was rejected despite being otherwise valid.
+///   5. Overwrite the keychain entry at the existing `SecretRef`.
+///      Because shared-PAT sources (Journey A from `atlassian_
+///      sources_add`) point two rows at the same `SecretRef`, a
+///      single rotation here fixes both siblings atomically — that
+///      is, precisely the desired UX for a shared-token reconnect.
+///
+/// Returns the ids of every `Source` whose token was rotated by this
+/// call: `[self]` for single-product sources, `[self, sibling]` for
+/// shared-PAT pairs. The frontend uses this list to fire
+/// `sources_healthcheck` on each so the red error chips clear
+/// immediately rather than waiting for the next scheduled walk.
+///
+/// **Not changed** by this command: `workspace_url`, `email`, and
+/// the source's `SourceIdentity` rows. A user who needs to change
+/// those should delete + re-add — the identity binding is part of
+/// the source's contract, not a rotation concern.
+#[tauri::command]
+pub async fn atlassian_sources_reconnect(
+    source_id: SourceId,
+    api_token: IpcSecretString,
+    state: State<'_, AppState>,
+) -> Result<Vec<SourceId>, DayseamError> {
+    atlassian_sources_reconnect_impl(&state, source_id, api_token).await
+}
+
+/// Test-visible implementation of [`atlassian_sources_reconnect`].
+/// Same shape minus the Tauri [`State`] wrapper, which cannot be
+/// constructed outside the Tauri runtime.
+pub async fn atlassian_sources_reconnect_impl(
+    state: &AppState,
+    source_id: SourceId,
+    api_token: IpcSecretString,
+) -> Result<Vec<SourceId>, DayseamError> {
+    require_nonempty_token(api_token.expose())?;
+
+    let source_repo = SourceRepo::new(state.pool.clone());
+    let identity_repo = SourceIdentityRepo::new(state.pool.clone());
+    let person_repo = PersonRepo::new(state.pool.clone());
+
+    // ---- 1. Load + kind-check -------------------------------------
+    let source = source_repo
+        .get(&source_id)
+        .await
+        .map_err(|e| DayseamError::Internal {
+            code: "ipc.sources.get".to_string(),
+            message: e.to_string(),
+        })?
+        .ok_or_else(|| {
+            invalid_config_public(
+                error_codes::IPC_SOURCE_NOT_FOUND,
+                format!("source {source_id} does not exist"),
+            )
+        })?;
+
+    let (workspace_url, email) = match &source.config {
+        SourceConfig::Jira {
+            workspace_url,
+            email,
+        } => (workspace_url.clone(), email.clone()),
+        SourceConfig::Confluence {
+            workspace_url,
+            email,
+        } => (workspace_url.clone(), email.clone()),
+        // `LocalGit` / `GitLab` / anything-else has its own reconnect
+        // path — routing one of those here is a frontend bug, so
+        // fail loud with the shared kind-mismatch code rather than
+        // silently falling back to a healthcheck.
+        _ => {
+            return Err(invalid_config_public(
+                error_codes::IPC_SOURCE_CONFIG_KIND_MISMATCH,
+                format!(
+                    "source {source_id} is {:?}; atlassian_sources_reconnect is Jira/Confluence only",
+                    source.kind
+                ),
+            ));
+        }
+    };
+
+    // A secret_ref-less Atlassian source is an upgrade-path artifact
+    // (pre-DAY-81 rows, or rows whose keychain was wiped out from
+    // under the app). The reconnect flow cannot rotate a token that
+    // has nowhere to land, so route the user to delete-and-re-add
+    // instead of writing a brand-new `SecretRef` here and silently
+    // forking the "add" codepath.
+    let secret_ref = source.secret_ref.clone().ok_or_else(|| {
+        invalid_config_public(
+            error_codes::IPC_ATLASSIAN_REUSE_SECRET_MISSING,
+            format!(
+                "source {source_id} has no secret_ref on file; delete the source and add it again rather than reconnecting"
+            ),
+        )
+    })?;
+
+    if email.trim().is_empty() {
+        // The v0.2 `#[serde(default)]` backfill (see DOG-v0.2-04)
+        // could leave a Confluence row with an empty email when no
+        // Jira sibling existed to backfill from. Reconnect cannot
+        // /myself against an empty email, so surface the missing
+        // piece explicitly rather than letting the upstream 400
+        // bubble up as a shape-changed error.
+        return Err(invalid_config_public(
+            error_codes::IPC_ATLASSIAN_CREDENTIALS_MISSING,
+            format!(
+                "source {source_id} has no email on file; delete the source and add it again so the dialog can capture one"
+            ),
+        ));
+    }
+
+    // ---- 2. Validate new token against the bound account ----------
+    let parsed_url = parse_workspace_url(&workspace_url)?;
+    let http = HttpClient::new()?;
+    let auth = BasicAuth::atlassian(
+        email.as_str(),
+        api_token.expose(),
+        ATLASSIAN_KEYCHAIN_SERVICE,
+        "probe",
+    );
+    let cloud = discover_cloud(&http, &auth, &parsed_url, &CancellationToken::new(), None).await?;
+    let new_account_id = cloud.account.account_id;
+
+    // ---- 3. Identity-binding invariant ----------------------------
+    // The source row's bound AtlassianAccountId identity is written
+    // by `atlassian_sources_add` and must not be silently rebound by
+    // a reconnect. If the user pastes a token that is valid for a
+    // *different* account (common: they copied their personal token
+    // instead of their work token), fail rather than rotate — the
+    // next report would cross-contaminate the self-filter and
+    // attribute the new actor's commits to the old one.
+    // The reconnect flow only cares about identities bound to the
+    // *self* person — that's the set `atlassian_sources_add` seeded
+    // on initial connect. `list_for_source` requires a `person_id`,
+    // so resolve it via `bootstrap_self` the same way `sources_add`
+    // does; this is idempotent and matches the row we wrote earlier.
+    let self_person = person_repo
+        .bootstrap_self(SELF_DEFAULT_DISPLAY_NAME)
+        .await
+        .map_err(|e| DayseamError::Internal {
+            code: "ipc.persons.bootstrap_self".to_string(),
+            message: e.to_string(),
+        })?;
+    let identities = identity_repo
+        .list_for_source(self_person.id, &source_id)
+        .await
+        .map_err(|e| DayseamError::Internal {
+            code: "ipc.source_identities.list_for_source".to_string(),
+            message: e.to_string(),
+        })?;
+    let bound_account_id = identities
+        .iter()
+        .find(|id| matches!(id.kind, SourceIdentityKind::AtlassianAccountId))
+        .map(|id| id.external_actor_id.clone());
+    if let Some(existing) = bound_account_id {
+        if existing != new_account_id {
+            return Err(DayseamError::Auth {
+                code: error_codes::ATLASSIAN_AUTH_INVALID_CREDENTIALS.to_string(),
+                message: format!(
+                    "token is valid but for account `{new_account_id}`; this source is bound to `{existing}`. Paste a token for the original account, or delete this source and add a new one."
+                ),
+                retryable: false,
+                action_hint: Some("reconnect".to_string()),
+            });
+        }
+    }
+    // Zero-identity-rows case: the source pre-dates DAY-82's identity
+    // seeding. Treat reconnect as a self-healing path — rotate the
+    // token and let the existing sync pipeline seed the identity on
+    // its next run. No mismatch check fires because there's nothing
+    // to mismatch against.
+
+    // ---- 4. Rotate the keychain slot ------------------------------
+    let key = secret_store_key(&secret_ref);
+    state
+        .secrets
+        .put(&key, Secret::new(api_token.expose().to_string()))
+        .map_err(|e| DayseamError::Internal {
+            code: error_codes::IPC_ATLASSIAN_KEYCHAIN_WRITE_FAILED.to_string(),
+            message: format!("keychain write for {key} failed: {e}"),
+        })?;
+
+    // ---- 5. Enumerate siblings sharing the rotated `SecretRef` ----
+    // Two Atlassian rows can point at the same keychain slot in
+    // Journey A (shared-PAT). The reconnect UI wants to clear both
+    // chips' red state on success, so return both ids; the frontend
+    // fires `sources_healthcheck` for each.
+    let all = source_repo
+        .list()
+        .await
+        .map_err(|e| DayseamError::Internal {
+            code: "ipc.sources.list".to_string(),
+            message: e.to_string(),
+        })?;
+    let affected: Vec<SourceId> = all
+        .into_iter()
+        .filter(|s| s.secret_ref.as_ref() == Some(&secret_ref))
+        .map(|s| s.id)
+        .collect();
+
+    Ok(affected)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -988,6 +1213,149 @@ mod tests {
         )
         .await
         .expect_err("empty account_id must be rejected");
+        assert_eq!(err.code(), error_codes::IPC_ATLASSIAN_CREDENTIALS_MISSING);
+    }
+
+    // -------------------------------------------------------------------
+    // `atlassian_sources_reconnect_impl` IPC integration tests (DAY-87)
+    //
+    // The happy path routes through `discover_cloud`, which makes a
+    // live HTTPS request and cannot be exercised from a pure unit
+    // test without a recorded fixture harness we don't have here (the
+    // sibling `atlassian_validate_credentials` ships with the same
+    // constraint and is covered at the E2E layer instead). These
+    // tests pin the pre-network branches: kind checks, missing-row
+    // rejection, the v0.2 upgrade-row email-missing case, and the
+    // secret-ref presence guard. Post-network invariants (identity
+    // binding, keychain rotation, sibling enumeration) are pinned by
+    // `e2e/features/happy-path/atlassian-reconnect.feature`.
+    // -------------------------------------------------------------------
+
+    async fn seed_jira_source(state: &AppState) -> Source {
+        atlassian_sources_add_impl(
+            state,
+            "https://acme.atlassian.net".into(),
+            "user@acme.com".into(),
+            Some(token()),
+            "acc-1".into(),
+            true,
+            false,
+            None,
+        )
+        .await
+        .expect("seed jira source")
+        .into_iter()
+        .next()
+        .expect("one row")
+    }
+
+    #[tokio::test]
+    async fn reconnect_rejects_empty_token() {
+        let (state, _dir) = make_state().await;
+        let source = seed_jira_source(&state).await;
+        let err = atlassian_sources_reconnect_impl(&state, source.id, IpcSecretString::new("   "))
+            .await
+            .expect_err("whitespace-only token must fail before any network call");
+        assert_eq!(err.code(), error_codes::IPC_ATLASSIAN_CREDENTIALS_MISSING);
+    }
+
+    #[tokio::test]
+    async fn reconnect_rejects_missing_source() {
+        let (state, _dir) = make_state().await;
+        let err = atlassian_sources_reconnect_impl(&state, Uuid::new_v4(), token())
+            .await
+            .expect_err("unknown source_id must be rejected");
+        assert_eq!(err.code(), error_codes::IPC_SOURCE_NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn reconnect_rejects_non_atlassian_source() {
+        // Seed a LocalGit source directly through the repo — the IPC
+        // `sources_add` path has its own surface and we only need
+        // "an existing row whose kind is not Jira or Confluence".
+        let (state, _dir) = make_state().await;
+        let repo = SourceRepo::new(state.pool.clone());
+        let local = Source {
+            id: Uuid::new_v4(),
+            kind: SourceKind::LocalGit,
+            label: "Local".into(),
+            config: SourceConfig::LocalGit { scan_roots: vec![] },
+            secret_ref: None,
+            created_at: Utc::now(),
+            last_sync_at: None,
+            last_health: SourceHealth::unchecked(),
+        };
+        repo.insert(&local).await.expect("insert local");
+
+        let err = atlassian_sources_reconnect_impl(&state, local.id, token())
+            .await
+            .expect_err("LocalGit source must not be reconnectable via the atlassian IPC");
+        assert_eq!(err.code(), error_codes::IPC_SOURCE_CONFIG_KIND_MISMATCH);
+    }
+
+    #[tokio::test]
+    async fn reconnect_rejects_source_without_secret_ref() {
+        // A Jira row whose `secret_ref` is null is a pre-DAY-81 or
+        // keychain-wiped artefact. Reconnect cannot rotate a token
+        // that has no slot to land in; the user is steered toward
+        // delete + re-add instead of forking the add codepath here.
+        let (state, _dir) = make_state().await;
+        let repo = SourceRepo::new(state.pool.clone());
+        let ghost = Source {
+            id: Uuid::new_v4(),
+            kind: SourceKind::Jira,
+            label: "Jira — ghost".into(),
+            config: SourceConfig::Jira {
+                workspace_url: "https://acme.atlassian.net".into(),
+                email: "user@acme.com".into(),
+            },
+            secret_ref: None,
+            created_at: Utc::now(),
+            last_sync_at: None,
+            last_health: SourceHealth::unchecked(),
+        };
+        repo.insert(&ghost).await.expect("insert ghost");
+
+        let err = atlassian_sources_reconnect_impl(&state, ghost.id, token())
+            .await
+            .expect_err("secret_ref-less jira row must not accept reconnect");
+        assert_eq!(err.code(), error_codes::IPC_ATLASSIAN_REUSE_SECRET_MISSING);
+    }
+
+    #[tokio::test]
+    async fn reconnect_rejects_source_with_empty_email() {
+        // DOG-v0.2-04 upgrade artefact: a Confluence row whose email
+        // defaulted to empty because no Jira sibling existed at
+        // backfill time. `discover_cloud` would reject this with a
+        // 400 shape-change error downstream; surface the structural
+        // problem locally instead so the error reads "add a fresh
+        // source" rather than "atlassian shape changed".
+        let (state, _dir) = make_state().await;
+        let repo = SourceRepo::new(state.pool.clone());
+        let sr = new_atlassian_secret_ref();
+        let key = secret_store_key(&sr);
+        state
+            .secrets
+            .put(&key, Secret::new("ignored".to_string()))
+            .expect("seed keychain");
+        let row = Source {
+            id: Uuid::new_v4(),
+            kind: SourceKind::Confluence,
+            label: "Confluence — backfill".into(),
+            config: SourceConfig::Confluence {
+                workspace_url: "https://acme.atlassian.net".into(),
+                email: "".into(),
+            },
+            secret_ref: Some(sr),
+            created_at: Utc::now(),
+            last_sync_at: None,
+            last_health: SourceHealth::unchecked(),
+        };
+        repo.insert(&row).await.expect("insert row");
+
+        let err = atlassian_sources_reconnect_impl(&state, row.id, token())
+            .await
+            .expect_err("empty-email row must surface credentials_missing");
         assert_eq!(err.code(), error_codes::IPC_ATLASSIAN_CREDENTIALS_MISSING);
     }
 }
