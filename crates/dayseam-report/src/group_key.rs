@@ -14,6 +14,13 @@
 //!
 //! * Repo-shaped kinds (commits, GitLab MRs, GitLab issues) → `repo`
 //!   entity → [`GroupKind::Repo`].
+//! * GitHub kinds (PRs + issues) → `github_repo` entity →
+//!   [`GroupKind::Repo`]. DAY-97 added this branch so GitHub events
+//!   render under the real `owner/repo` header they came from
+//!   instead of colliding in the generic `/` bucket the default
+//!   arm would otherwise force them into (the GitHub walker emits
+//!   `github_repo` entities, not `repo` entities, so the
+//!   pre-DAY-97 default arm never found a match).
 //! * Jira kinds → `jira_project` entity → [`GroupKind::Project`].
 //! * Confluence kinds → `confluence_space` entity →
 //!   [`GroupKind::Space`].
@@ -89,6 +96,25 @@ pub(crate) fn group_key_from_event(event: &ActivityEvent) -> GroupKey {
         | ActivityKind::ConfluencePageEdited
         | ActivityKind::ConfluenceComment => {
             entity_group(event, EntityKind::ConfluenceSpace, GroupKind::Space)
+        }
+        // GitHub PR / issue events: the connector tags them with
+        // a `github_repo` entity whose `external_id` is the
+        // canonical `owner/repo` slug. We reuse [`GroupKind::Repo`]
+        // because the section ID + rendering rules are the same
+        // shape as a GitLab / local-git repo; the distinguishing
+        // dimension at render time is the bullet text, not the
+        // section kind. A future "GitHub-only" section header
+        // can be added here without touching the `Repo` bucket.
+        ActivityKind::GitHubPullRequestOpened
+        | ActivityKind::GitHubPullRequestMerged
+        | ActivityKind::GitHubPullRequestClosed
+        | ActivityKind::GitHubPullRequestReviewed
+        | ActivityKind::GitHubPullRequestCommented
+        | ActivityKind::GitHubIssueOpened
+        | ActivityKind::GitHubIssueClosed
+        | ActivityKind::GitHubIssueCommented
+        | ActivityKind::GitHubIssueAssigned => {
+            entity_group(event, EntityKind::GitHubRepo, GroupKind::Repo)
         }
         // Commits, GitLab MRs / issues, anything else repo-shaped.
         // Matches v0.1's `repo_path_from_event` behaviour.
@@ -204,6 +230,36 @@ mod tests {
         assert_eq!(gk.kind, GroupKind::Repo);
         assert_eq!(gk.value, "/");
         assert_eq!(gk.label, None);
+    }
+
+    /// DAY-97: a GitHub PR event tagged with a `github_repo`
+    /// entity groups by the `owner/repo` slug, not by `/`.
+    /// Without this branch the PR landed in the orphan bucket
+    /// with every other source-less event, collapsing the whole
+    /// day's GitHub activity into one anonymous section.
+    #[test]
+    fn github_pr_groups_by_github_repo_entity() {
+        let e = event_with(
+            ActivityKind::GitHubPullRequestOpened,
+            vec![ent("github_repo", "vedanthvdev/dayseam", None)],
+        );
+        let gk = group_key_from_event(&e);
+        assert_eq!(gk.kind, GroupKind::Repo);
+        assert_eq!(gk.value, "vedanthvdev/dayseam");
+    }
+
+    /// A GitHub PR that somehow reached the render stage without
+    /// a `github_repo` entity — a connector shape bug — still
+    /// renders, landing in the `/` orphan bucket the same way a
+    /// malformed local-git commit would. Preserves the
+    /// "never-panic" contract the render stage inherits from
+    /// DAY-71.
+    #[test]
+    fn github_pr_without_entity_degrades_to_slash() {
+        let e = event_with(ActivityKind::GitHubPullRequestOpened, vec![]);
+        let gk = group_key_from_event(&e);
+        assert_eq!(gk.kind, GroupKind::Repo);
+        assert_eq!(gk.value, "/");
     }
 
     #[test]

@@ -31,7 +31,7 @@ mod templates;
 
 pub use dayseam_core::{Evidence, RenderedBullet, RenderedSection, ReportDraft};
 pub use dedup::dedup_commit_authored;
-pub use enrich::{annotate_transition_with_mr, extract_ticket_keys};
+pub use enrich::{annotate_transition_with_mr, extract_github_pr_urls, extract_ticket_keys};
 pub use error::ReportError;
 pub use input::ReportInput;
 pub use pipeline::pipeline;
