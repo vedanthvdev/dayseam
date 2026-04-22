@@ -109,22 +109,23 @@ async fn github_mux_sync_on_unregistered_source_returns_source_not_found() {
 }
 
 #[tokio::test]
-async fn sync_day_is_unsupported_until_day96_walker_lands() {
-    // DAY-96 flips this arm onto the events-endpoint + search-driven
-    // walker. Until then a scaffold run must surface `Unsupported`
-    // loudly rather than silently reporting "no events today" — the
-    // DAY-71 silent-failure lesson the whole v0.2 sweep was built
-    // around.
+async fn sync_day_with_no_identity_returns_empty_outcome() {
+    // DAY-96 wired `SyncRequest::Day` onto the events + search walker.
+    // Without a registered `GitHubUserId` identity in the context,
+    // `walk_day` early-bails with an empty outcome rather than
+    // issuing a request that would get filtered to zero anyway.
+    // (The walker logs a `Warn` explaining why — see `self_identity`.)
     let conn = GithubConnector::new(GithubConfig::github_com());
     let ctx = mk_ctx(Uuid::new_v4());
-    let err = conn
+    let result = conn
         .sync(
             &ctx,
             SyncRequest::Day(NaiveDate::from_ymd_opt(2026, 4, 20).unwrap()),
         )
         .await
-        .expect_err("Day is Unsupported in the DAY-95 scaffold");
-    assert_eq!(err.code(), error_codes::CONNECTOR_UNSUPPORTED_SYNC_REQUEST);
+        .expect("Day should succeed with empty outcome when no identity configured");
+    assert!(result.events.is_empty());
+    assert_eq!(result.stats.fetched_count, 0);
 }
 
 #[tokio::test]

@@ -37,12 +37,13 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use chrono::{FixedOffset, Utc};
 use connectors_sdk::{ConnCtx, SourceConnector, SyncRequest, SyncResult, SyncStats};
-use dayseam_core::{error_codes, DayseamError, SourceHealth, SourceId, SourceKind};
+use dayseam_core::{error_codes, DayseamError, ProgressPhase, SourceHealth, SourceId, SourceKind};
 use reqwest::StatusCode;
 use tokio::sync::RwLock;
 
 use crate::config::GithubConfig;
 use crate::errors::map_status;
+use crate::walk::walk_day;
 
 /// One configured GitHub source. Holds only the per-source
 /// configuration that does **not** live in the
@@ -50,14 +51,11 @@ use crate::errors::map_status;
 /// is cheap — `GithubConfig` is a `Clone` of a single parsed URL.
 ///
 /// `local_tz` is the user's configured timezone, threaded through from
-/// [`GithubMux::new`] so DAY-96's walker can compute the correct UTC
-/// window for a local day. Not used in this scaffold PR, but wiring
-/// it in now means DAY-96 is a pure additive diff with no `Mux` API
-/// change.
+/// [`GithubMux::new`] so the walker can compute the correct UTC window
+/// for a local day.
 #[derive(Debug, Clone)]
 pub struct GithubConnector {
     config: GithubConfig,
-    #[allow(dead_code)] // Consumed by DAY-96's walker; stored here so the mux API is stable.
     local_tz: FixedOffset,
 }
 
@@ -154,29 +152,65 @@ impl SourceConnector for GithubConnector {
     async fn sync(&self, ctx: &ConnCtx, request: SyncRequest) -> Result<SyncResult, DayseamError> {
         ctx.bail_if_cancelled()?;
 
-        match request {
-            SyncRequest::Day(_day) => {
-                // DAY-96 flips this arm onto the events-endpoint +
-                // search-driven walker; until then an explicit
-                // `Unsupported` keeps the scaffold honest — an IPC
-                // caller that accidentally dispatches to the GitHub
-                // kind before DAY-96 ships gets a loud, registered
-                // error, not a silent empty report.
-                Err(DayseamError::Unsupported {
+        let day = match request {
+            SyncRequest::Day(d) => d,
+            SyncRequest::Range { .. } | SyncRequest::Since(_) => {
+                return Err(DayseamError::Unsupported {
                     code: error_codes::CONNECTOR_UNSUPPORTED_SYNC_REQUEST.to_string(),
-                    message:
-                        "github connector v0.4 scaffold does not yet service SyncRequest::Day; \
-                             DAY-96 lands the events-endpoint + search-driven walker"
-                            .to_string(),
-                })
+                    message: "github connector v0.4 only services SyncRequest::Day; \
+                             Range + Since land with v0.5's incremental scheduler"
+                        .to_string(),
+                });
             }
-            SyncRequest::Range { .. } | SyncRequest::Since(_) => Err(DayseamError::Unsupported {
-                code: error_codes::CONNECTOR_UNSUPPORTED_SYNC_REQUEST.to_string(),
-                message: "github connector v0.4 only services SyncRequest::Day once DAY-96 \
-                             lands; Range + Since wait on v0.5's incremental scheduler"
-                    .to_string(),
-            }),
-        }
+        };
+
+        ctx.progress.send(
+            Some(ctx.source_id),
+            ProgressPhase::Starting {
+                message: format!("Fetching GitHub activity for {day}"),
+            },
+        );
+
+        let outcome = walk_day(
+            &ctx.http,
+            ctx.auth.clone(),
+            &self.config.api_base_url,
+            ctx.source_id,
+            &ctx.source_identities,
+            day,
+            self.local_tz,
+            &ctx.cancel,
+            Some(&ctx.progress),
+            Some(&ctx.logs),
+        )
+        .await?;
+
+        ctx.progress.send(
+            Some(ctx.source_id),
+            ProgressPhase::Completed {
+                message: format!(
+                    "GitHub fetched {} row(s), emitted {} event(s)",
+                    outcome.fetched_count,
+                    outcome.events.len(),
+                ),
+            },
+        );
+
+        let stats = SyncStats {
+            fetched_count: outcome.fetched_count,
+            filtered_by_identity: outcome.filtered_by_identity,
+            filtered_by_date: outcome.filtered_by_date,
+            http_retries: 0,
+        };
+
+        Ok(SyncResult {
+            events: outcome.events,
+            artifacts: Vec::new(),
+            checkpoint: None,
+            stats,
+            warnings: Vec::new(),
+            raw_refs: Vec::new(),
+        })
     }
 }
 
@@ -284,9 +318,3 @@ impl SourceConnector for GithubMux {
         }
     }
 }
-
-// Silence the "fields used in DAY-96" warning on `stats` — wiring in
-// the import path here keeps the DAY-96 diff narrow. See
-// `connector-jira::connector` for the precedent.
-#[allow(dead_code)]
-fn _sync_stats_type_is_imported(_: SyncStats) {}

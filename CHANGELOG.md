@@ -8,6 +8,56 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **DAY-96: `connector-github::walk` — events walker + normaliser +
+  rapid-review collapse.** `GithubConnector::sync(SyncRequest::Day)`
+  now walks a local-timezone day of GitHub activity end-to-end. Four
+  new modules land: `events.rs` (strict envelope DTOs for
+  `/users/:login/events` + `/search/issues`, with
+  `GithubEventPayload::from_raw` decoding each action lazily so
+  unknown event types are silently routed to an `Unknown { reason }`
+  variant rather than failing the walk); `normalise.rs` (one arm per
+  supported event type — `PullRequestEvent` → opened / closed /
+  merged, `PullRequestReviewEvent` → reviewed with `review_state` in
+  metadata, `PullRequestReviewCommentEvent` / `IssueCommentEvent` on
+  PRs → commented, `IssuesEvent` → opened / closed / assigned-self,
+  `IssueCommentEvent` on issues → commented); `rollup.rs` (rapid-review
+  collapse: N `GitHubPullRequestReviewed` events on the same PR by
+  the same author within `RAPID_REVIEW_WINDOW_SECONDS = 60` fold into
+  one event whose `metadata.review_count == N` and whose
+  `metadata.review_state` is the last review's state — symmetric to
+  Jira's rapid-transition collapse); and `walk.rs` (combines the
+  events stream and `/search/issues?q=involves:<login>+updated:<start>..<end>`
+  with cross-stream dedup on `(ActivityKind, external_id)`; events
+  stream wins on conflict since its payload carries the actor + the
+  actual action). Jira ticket keys in PR / issue titles (e.g.
+  `CAR-5117: Fix …`) are extracted by a hand-rolled parser
+  (deliberately avoids pulling in the `regex` crate — the graph stays
+  lean and no other connector uses it) and added as
+  `EntityKind::JiraIssue` entities, setting up DAY-97's cross-source
+  enrichment. In-page dedup within the events stream keys off the
+  raw GitHub `event.id` so multiple distinct reviews on the same PR
+  survive to reach the rollup. 401 → `github.auth.invalid_credentials`,
+  410 → `github.resource_gone` (GitHub returns 410 for fully deleted
+  user accounts). Identity resolution requires both
+  `SourceIdentityKind::GitHubUserId` (for filtering `event.actor.id`)
+  and `SourceIdentityKind::GitHubLogin` (for composing
+  `/users/:login/events`); missing either early-bails with an empty
+  outcome and a `Warn` log, never a silent zero-event day. Tests:
+  62 in-crate unit tests (per-event-type normalisation, ticket-key
+  extraction edge cases, rollup boundary conditions, self-identity
+  resolution, day-window math, search-hit synthesis) and 8 wiremock
+  integration tests in `crates/connectors/connector-github/tests/walk.rs`
+  pinning the full authn → HTTP → paginate → normalise → rollup
+  round-trip: 401 / 410 surface as the documented `github.*` codes;
+  events from other actors are filtered; events outside the local
+  day's UTC bounds are filtered; a PR that appears in both the
+  events stream and `/search/issues` surfaces exactly once and the
+  dedup counter increments; three rapid reviews collapse into one;
+  the walker early-bails with an empty outcome when no GitHub
+  identity is configured (the wiremock `.expect(0)` verifies no
+  request was issued); and `/search/issues` receives the
+  `involves:<login> updated:<start>..<end>` clause so scope is bounded
+  to the user's activity within the window.
 - **DAY-95: `connector-github` scaffold + `SourceConnector` +
   `validate_auth` + `LinkHeaderPaginator` + `errors::map_status`.**
   New crate `connector-github` lands with the minimal surface needed

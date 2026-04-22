@@ -53,7 +53,11 @@ pub mod auth;
 pub mod config;
 pub mod connector;
 pub mod errors;
+pub mod events;
+pub mod normalise;
 pub mod pagination;
+pub mod rollup;
+pub mod walk;
 
 pub use auth::{list_identities, validate_auth, GithubUserInfo};
 pub use config::{GithubConfig, GITHUB_COM_API_BASE_URL};
@@ -62,4 +66,11 @@ pub use errors::{
     map_status as map_github_status, map_transport_error as map_github_transport_error,
     GithubUpstreamError,
 };
+pub use events::{
+    GithubActor, GithubComment, GithubEvent, GithubEventPayload, GithubIssue, GithubPullRequest,
+    GithubRepo, GithubReview, GithubSearchIssue, GithubSearchPage, GithubUserRef,
+};
+pub use normalise::normalise_event;
 pub use pagination::{next_link, parse_next_from_link_header};
+pub use rollup::{collapse_rapid_reviews, RAPID_REVIEW_WINDOW_SECONDS};
+pub use walk::{walk_day, WalkOutcome};
