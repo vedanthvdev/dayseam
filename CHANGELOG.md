@@ -6,6 +6,51 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-04-20
+
+### Fixed
+
+- **DAY-102: release pipeline — repair mis-stamped Info.plist (DOGFOOD-v0.4-01).**
+  First finding of the v0.4 dogfood sweep, caught on the very first
+  launch of the published `Dayseam-v0.4.0.dmg`: the bundle's
+  `Contents/Info.plist` carried `CFBundleShortVersionString = 0.2.1`
+  even though the DMG filename, git tag, and GitHub Release body
+  all said `v0.4.0`. Same bug mis-stamped the `v0.3.0` DMG. Root
+  cause was in [`scripts/release/bump-version.sh`](scripts/release/bump-version.sh):
+  a script-level idempotency gate (`if [[ "$TARGET" != "$CURRENT" ]]`)
+  wrapped all three file writers, so whenever a capstone PR manually
+  pre-bumped `VERSION` (the authoring pattern both v0.3 and v0.4
+  followed for reviewer visibility), the post-merge release workflow
+  saw `TARGET == $(cat VERSION)` and silently skipped rewriting
+  `Cargo.toml` and `apps/desktop/src-tauri/tauri.conf.json` — which
+  stayed pinned at `0.2.1` from the v0.2.1 release. `tauri build`
+  then embedded that stale `tauri.conf.json` version into
+  `Info.plist`, so the shipped binary reported itself as `0.2.1`
+  to macOS LaunchServices regardless of what the DMG said. Fix
+  aligns the tree (`Cargo.toml [workspace.package].version` and
+  `tauri.conf.json "version"` both `0.4.1`), hardens
+  `bump-version.sh` so each writer runs unconditionally and is
+  individually no-op when its file is already at target (via a new
+  `replace_if_different` helper that compares with `cmp -s` before
+  `mv` — preserves the byte-for-byte idempotency contract the
+  double-invoke test asserts), and adds two new regression tests to
+  [`scripts/release/test-bump-version.sh`](scripts/release/test-bump-version.sh):
+  one that reproduces the exact capstone-PR shape (stale
+  `Cargo.toml` + `tauri.conf.json`, `VERSION` pre-bumped) and
+  asserts all three files end up on target, and one standing
+  three-file-parity cross-check on every invocation. Defence-in-depth
+  gate added to [`.github/workflows/release.yml`](.github/workflows/release.yml):
+  a PlistBuddy step reads `CFBundleShortVersionString` and
+  `CFBundleVersion` from the built `Dayseam.app/Contents/Info.plist`
+  and fails the job if either does not match the release target,
+  sibling to the existing `lipo -archs` universal-binary assertion
+  and the `nm -g` dev-IPC-symbol guard — if this step had existed,
+  both `v0.3.0` and `v0.4.0` would have red-failed in CI before
+  publishing a mis-stamped DMG. Filed as DOGFOOD-v0.4-01 in
+  [`docs/dogfood/v0.4-dogfood-notes.md`](docs/dogfood/v0.4-dogfood-notes.md)
+  with the full investigation trail. `semver:patch` — triggers the
+  `v0.4.1` tag and an actually-stamped `0.4.1` DMG.
+
 ## [0.4.0] - 2026-04-20
 
 ### Added

@@ -230,6 +230,44 @@ jobs:
             exit 1
           fi
 
+      # Info.plist version-parity gate (DAY-102 / DOGFOOD-v0.4-01).
+      # The v0.3.0 and v0.4.0 DMGs shipped with `CFBundleShortVersionString
+      # = 0.2.1` because `bump-version.sh` silently skipped its three
+      # file writers whenever `VERSION` was manually pre-bumped in the
+      # capstone PR (which is exactly what the capstone-PR authoring
+      # pattern does). The script hardening in scripts/release/
+      # prevents that reoccurring going forward; this step is the
+      # belt-and-braces defence-in-depth — a single PlistBuddy read
+      # that fails the workflow if anything (this script, a future
+      # Tauri bundler upgrade, or a hand-edit that bypasses the
+      # script) causes Info.plist to drift from the target version
+      # before we tag and publish. If this gate had existed, v0.3
+      # and v0.4 would both have failed here in red instead of
+      # publishing a mis-stamped DMG.
+      - name: Assert Info.plist version matches target
+        shell: bash
+        env:
+          TARGET: ${{ steps.bump.outputs.version }}
+        run: |
+          target_dir="$(cargo metadata --format-version 1 --no-deps --manifest-path Cargo.toml | jq -r '.target_directory')"
+          plist="${target_dir}/universal-apple-darwin/release/bundle/macos/Dayseam.app/Contents/Info.plist"
+          if [[ ! -f "$plist" ]]; then
+            echo "::error::Info.plist missing at $plist" >&2
+            exit 1
+          fi
+          short="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$plist")"
+          bundle="$(/usr/libexec/PlistBuddy -c 'Print CFBundleVersion' "$plist")"
+          echo "==> CFBundleShortVersionString: $short"
+          echo "==> CFBundleVersion:            $bundle"
+          if [[ "$short" != "$TARGET" ]]; then
+            echo "::error::CFBundleShortVersionString '$short' does not match release target '$TARGET'. The DMG would ship mis-stamped — refusing to tag and publish." >&2
+            exit 1
+          fi
+          if [[ "$bundle" != "$TARGET" ]]; then
+            echo "::error::CFBundleVersion '$bundle' does not match release target '$TARGET'. The DMG would ship mis-stamped — refusing to tag and publish." >&2
+            exit 1
+          fi
+
       # Dev-commands symbol guard: Phase 1 split the dev-only IPC
       # commands (`dev_emit_toast`, `dev_start_demo_run`) behind a
       # cargo feature so release bundles cannot expose them. This

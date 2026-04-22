@@ -28,6 +28,22 @@
 # workflow's `bump-version.sh minor` call sees the tree is already at
 # the target and makes no further changes.
 #
+# DAY-102 (v0.4.1 hotfix for DOGFOOD-v0.4-01): the idempotency check
+# used to live at the *script* level — "if TARGET == VERSION file,
+# skip all three writers." That fired on every capstone PR that
+# pre-bumped only `VERSION` (not `Cargo.toml` / `tauri.conf.json`),
+# which is exactly the capstone-PR authoring pattern the v0.3 and
+# v0.4 releases both followed. Result: the workflow ran, the writer
+# block was skipped, and `tauri build` embedded the stale
+# `tauri.conf.json` version into Info.plist. Both `v0.3.0` and
+# `v0.4.0` DMGs shipped with `CFBundleShortVersionString = 0.2.1`
+# as a consequence. The fix is to always run all three writers and
+# move the idempotency check *inside* each writer (compare file
+# contents before `mv`, skip the rename if the awk pass produced no
+# change). That preserves the "second run is a no-op" contract while
+# making it impossible for a stale Cargo.toml or tauri.conf.json to
+# survive the release workflow.
+#
 # Usage:
 #   bump-version.sh {patch|minor|major|none}
 #
@@ -116,8 +132,28 @@ esac
 # In-place file rewrites use awk with a temp file. awk's range
 # handling is identical on GNU (Linux CI) and BSD (local macOS) awks,
 # and sidesteps the BSD-sed `{...}` block-command dialect quirk.
+#
+# Per-writer idempotency (DAY-102): each writer computes the would-be
+# output into a temp file, then `mv`s only if `cmp -s` says the
+# content differs from the current on-disk file. That preserves the
+# byte-for-byte no-op contract the idempotency test asserts while
+# removing the script-level "skip all writers when TARGET == VERSION"
+# shortcut that caused DOGFOOD-v0.4-01.
+replace_if_different() {
+  local tmp="$1"
+  local dest="$2"
+  if cmp -s "$tmp" "$dest"; then
+    rm -f "$tmp"
+  else
+    mv "$tmp" "$dest"
+  fi
+}
+
 write_version_file() {
-  printf '%s\n' "$TARGET" >"$VERSION_FILE"
+  local tmp
+  tmp="$(mktemp)"
+  printf '%s\n' "$TARGET" >"$tmp"
+  replace_if_different "$tmp" "$VERSION_FILE"
 }
 
 write_cargo_toml() {
@@ -138,7 +174,7 @@ write_cargo_toml() {
     }
     { print }
   ' "$CARGO_TOML" >"$tmp"
-  mv "$tmp" "$CARGO_TOML"
+  replace_if_different "$tmp" "$CARGO_TOML"
 }
 
 write_tauri_conf() {
@@ -153,13 +189,16 @@ write_tauri_conf() {
     }
     { print }
   ' "$TAURI_CONF" >"$tmp"
-  mv "$tmp" "$TAURI_CONF"
+  replace_if_different "$tmp" "$TAURI_CONF"
 }
 
-if [[ "$TARGET" != "$CURRENT" ]]; then
-  write_version_file
-  write_cargo_toml
-  write_tauri_conf
-fi
+# Always run all three writers. Each is internally no-op when the
+# file is already at TARGET, so re-runs remain byte-for-byte
+# idempotent, but a tree where only *some* files are at TARGET (the
+# capstone-PR pattern that caused DOGFOOD-v0.4-01) gets repaired
+# rather than silently skipped.
+write_version_file
+write_cargo_toml
+write_tauri_conf
 
 echo "$TARGET"
