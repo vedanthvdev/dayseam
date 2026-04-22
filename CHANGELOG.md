@@ -8,6 +8,55 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **DAY-100: orchestrator — `connector-github` end-to-end through
+  the generate-report fan-out + `SerdeDefaultAudit` sweep across
+  persisted types + GitHub connect-and-report BDD scenario.**
+  Closes the v0.4 GitHub-connector track (Tasks 2-9 of
+  `docs/plan/2026-04-22-v0.4-github-connector.md`) by pinning the
+  orchestrator-level wiring the per-connector wiremock tests alone
+  don't cover. `crates/dayseam-orchestrator/tests/github_integration.rs`
+  drives two scenarios through the full
+  `GenerateRequest → Orchestrator::generate_report → GithubMux →
+   reqwest → wiremock → walker → dedup → render → persisted draft`
+  path: a GitHub-only day that pins the `SourceKind::GitHub`
+  registry hand-off + the `events + /search/issues` two-endpoint
+  walker composition, and a GitHub + GitLab combined day on
+  independent wiremock servers that pins the per-source attribution
+  (a regression that leaks events across muxes fails the
+  `source_id`-scoped event count, the same class of bug DAY-90's
+  Atlassian integration pinned for Jira + Confluence). The
+  `connector-github` registry wiring itself landed with DAY-95 —
+  `ConnectorRegistry::default_registries` already inserts
+  `GithubMux` under `SourceKind::GitHub` and
+  `registry_kind_round_trips_for_every_registered_connector` is
+  the regression anchor. Pays down TST-v0.3-01 by adding
+  `#[derive(dayseam_macros::SerdeDefaultAudit)]` to the remaining
+  persisted types (`SinkConfig`, `Artifact`, `SourceIdentity`,
+  `ReportDraft`) so the next author who adds a `#[serde(default)]`
+  field to any of them is compile-time-forced to pair it with a
+  `#[serde_default_audit(...)]` annotation; new trybuild fail-
+  fixture `sink_config_serde_default_without_audit.rs` pins the
+  enum-variant arm of the class-detector alongside the existing
+  struct-field one (`missing_audit_annotation.rs`). User-visible
+  surface closes in `e2e/features/github/connect-and-report.feature`,
+  which drives the real `AddGithubSourceDialog` end-to-end
+  (validate → add-source → generate-report) and asserts the
+  deterministic "Opened modulr/foo#42" bullet lands under
+  `## Completed`; the mock IPC's `report_get` now appends a
+  catalogue-seeded GitHub bullet whenever a GitHub source is
+  registered, mirroring the Atlassian bullet-emission arms in
+  `fixtures/runtime/tauri-mock-init.ts`. Hardening battery green
+  (`cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace`, `pnpm typecheck`, `pnpm lint`, `pnpm
+  test`, and `pnpm --filter e2e run e2e` — all 8 Playwright
+  scenarios passing). Touches `crates/dayseam-core/src/types/{sink,
+  artifact,identity,report}.rs`, `crates/dayseam-macros/tests/
+  trybuild/fail/sink_config_serde_default_without_audit.{rs,stderr}`,
+  `crates/dayseam-orchestrator/tests/github_integration.rs`,
+  `e2e/features/github/connect-and-report.feature`, and the
+  generated `packages/ipc-types/src/generated/{Artifact,ReportDraft,
+  SinkConfig,SourceIdentity}.ts` doc-comment bumps. `semver:none`.
+
 - **DAY-99: desktop — `AddGithubSourceDialog` + GitHub IPC surface
   (`github_validate_credentials`, `github_sources_add`,
   `github_sources_reconnect`).** The sidebar `+ Add source` menu

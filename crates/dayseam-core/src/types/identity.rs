@@ -77,7 +77,16 @@ impl Person {
 /// is intentionally **deferred** to v0.2 when real cross-source
 /// ambiguity shows up. v0.1 treats every link as an exact, manually
 /// approved assertion.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+///
+/// DAY-100 TST-v0.3-01: carries `#[derive(SerdeDefaultAudit)]` as a
+/// forward-looking guard. The fuzzy-match fields deferred above are
+/// exactly the class of addition most likely to arrive as
+/// `#[serde(default)]` (so rows written before the field existed still
+/// decode cleanly). The derive forces the next author who adds one
+/// to pair it with a `#[serde_default_audit(...)]` annotation.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, dayseam_macros::SerdeDefaultAudit,
+)]
 #[ts(export)]
 pub struct SourceIdentity {
     /// Unique id for this mapping row. Distinct from the `Person` so

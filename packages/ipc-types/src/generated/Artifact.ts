@@ -7,6 +7,14 @@ import type { ArtifactPayload } from "./ArtifactPayload";
  * The persisted canonical artefact record. Shape mirrors `artifacts`
  * in `0002_artifact_syncrun.sql`: `kind` is a short discriminator token
  * and `payload` is the externally-tagged JSON blob the connector wrote.
+ *
+ * DAY-100 TST-v0.3-01: carries `#[derive(SerdeDefaultAudit)]` as a
+ * forward-looking guard. No field is currently `#[serde(default)]`;
+ * the derive forces the next author who adds one (e.g. a
+ * retroactively-added `rolled_up_count` for back-compat) to pair it
+ * with a `#[serde_default_audit(...)]` annotation, closing the
+ * DOG-v0.2-04 silent-failure avenue on the persisted-artifact layer
+ * the same way it already is on `SourceConfig`.
  */
 export type Artifact = { id: ArtifactId, source_id: string, kind: ArtifactKind, 
 /**

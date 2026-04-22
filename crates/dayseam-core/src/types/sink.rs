@@ -40,7 +40,17 @@ pub enum SinkKind {
 /// Every variant **must** include a matching entry for the
 /// [`SinkConfig::config_version`] accessor below so schema migrations have
 /// a stable hook when fields change.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+///
+/// DAY-100 TST-v0.3-01: carries `#[derive(SerdeDefaultAudit)]` even
+/// though no field is currently `#[serde(default)]`. The derive is a
+/// compile-time nudge — the next person who adds a defaulting field to
+/// one of the `SinkConfig` variants has to pair it with a
+/// `#[serde_default_audit(...)]` annotation, keeping the DOG-v0.2-04
+/// silent-failure guard extended across every persisted type in the
+/// v0.4 surface. `SourceConfig` has the same shape since DAY-88.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, dayseam_macros::SerdeDefaultAudit,
+)]
 #[ts(export)]
 pub enum SinkConfig {
     MarkdownFile {
