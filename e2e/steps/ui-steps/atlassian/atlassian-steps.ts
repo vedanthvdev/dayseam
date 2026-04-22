@@ -7,10 +7,8 @@
 // "what the scenario expects" is a compile-time / fixture-pinned
 // change, not a silently-passing test.
 
-import { expect } from "@playwright/test";
 import { Then, When } from "../../../fixtures/base-fixtures";
 import { CATALOGUE } from "../../../fixtures/runtime/catalogue";
-import { ReportLocators } from "../../../page-objects/report/report-locators";
 
 When("I open the Add Atlassian source dialog", async ({ pages }) => {
   await pages.atlassian.openFromSidebar();
@@ -36,6 +34,17 @@ When("I validate the Atlassian credentials", async ({ pages }) => {
   await pages.atlassian.validateCredentials();
 });
 
+// DAY-90 TST-v0.2-05. Drives the validate-edit-validate regression
+// scenario: after a successful Validate, edit the email and assert
+// the cached `ok` ribbon disappears — which in turn redisables the
+// `Add source` button until the user re-clicks Validate.
+When(
+  "I edit the Atlassian email and expect the validation to clear",
+  async ({ pages }) => {
+    await pages.atlassian.editEmailAndExpectValidationDropped();
+  },
+);
+
 When("I confirm the Add Atlassian dialog", async ({ pages }) => {
   await pages.atlassian.submit();
 });
@@ -47,12 +56,27 @@ Then(
   },
 );
 
+// DAY-90 TST-v0.2-02: every Atlassian-draft assertion is now
+// scoped to the `completed` section and uses either a count-aware
+// `toHaveCount` or a filtered `[data-bullet]` locator, so a drift
+// between "mock seeded N bullets" and "UI rendered N bullets"
+// fails the assertion instead of passing on a coincidental
+// substring match inside a heading or tooltip. The mock's
+// `buildDraft()` (see `tauri-mock-init.ts`) emits:
+//   - 2 LocalGit completed bullets (from catalogue.draft.completedBullets)
+//   - + 1 Jira bullet if a Jira source is registered
+//   - + 1 Confluence bullet if a Confluence source is registered
+// so the expected per-scenario bullet count is 2 + product count.
+const ATLASSIAN_DRAFT_SECTION_ID = "completed";
+const LOCAL_GIT_BASELINE_BULLETS = CATALOGUE.draft.completedBullets.length;
+
 Then("the draft contains the Atlassian Jira bullet", async ({ pages }) => {
-  // Route through `expectDraftContains` (on `ReportPage`) so the
-  // bullet assertion keeps sharing the 30s `toContainText` budget
-  // and targets the same `streaming-preview-draft` surface every
-  // other draft assertion does.
-  await pages.report.expectDraftContains(
+  await pages.report.expectSectionBulletCount(
+    ATLASSIAN_DRAFT_SECTION_ID,
+    LOCAL_GIT_BASELINE_BULLETS + 1,
+  );
+  await pages.report.expectSectionContainsBullet(
+    ATLASSIAN_DRAFT_SECTION_ID,
     CATALOGUE.draft.atlassianJiraBullet,
   );
 });
@@ -60,7 +84,12 @@ Then("the draft contains the Atlassian Jira bullet", async ({ pages }) => {
 Then(
   "the draft contains the Atlassian Confluence bullet",
   async ({ pages }) => {
-    await pages.report.expectDraftContains(
+    await pages.report.expectSectionBulletCount(
+      ATLASSIAN_DRAFT_SECTION_ID,
+      LOCAL_GIT_BASELINE_BULLETS + 1,
+    );
+    await pages.report.expectSectionContainsBullet(
+      ATLASSIAN_DRAFT_SECTION_ID,
       CATALOGUE.draft.atlassianConfluenceBullet,
     );
   },
@@ -68,16 +97,23 @@ Then(
 
 Then(
   "the draft shows a Jira and a Confluence bullet in the Completed section",
-  async ({ page }) => {
-    // Stronger "both present together" assertion the
-    // `@atlassian-both` scenario uses: scope to the draft node and
-    // require both bullet strings inside the same region. Using the
-    // scoped locator (rather than a page-wide substring probe)
-    // guards against a future redesign that splits Jira and
-    // Confluence bullets across unrelated sections.
-    const draft = page.getByTestId(ReportLocators.STREAMING_PREVIEW_DRAFT);
-    await expect(draft).toContainText(CATALOGUE.draft.atlassianJiraBullet);
-    await expect(draft).toContainText(
+  async ({ pages }) => {
+    // Journey A: both Atlassian products present → 2 LocalGit
+    // baseline + 1 Jira + 1 Confluence = 4 bullets. A future
+    // redesign that splits Jira and Confluence into separate
+    // sections fails this count (the `completed` section would
+    // then only hold 3); a regression that drops either Atlassian
+    // bullet also fails the count.
+    await pages.report.expectSectionBulletCount(
+      ATLASSIAN_DRAFT_SECTION_ID,
+      LOCAL_GIT_BASELINE_BULLETS + 2,
+    );
+    await pages.report.expectSectionContainsBullet(
+      ATLASSIAN_DRAFT_SECTION_ID,
+      CATALOGUE.draft.atlassianJiraBullet,
+    );
+    await pages.report.expectSectionContainsBullet(
+      ATLASSIAN_DRAFT_SECTION_ID,
       CATALOGUE.draft.atlassianConfluenceBullet,
     );
   },

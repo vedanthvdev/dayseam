@@ -195,7 +195,9 @@ pub struct Link {
 /// The `(kind, external_id)` pair is the report engine's stable key for
 /// the referenced entity; each connector picks the kind for the objects
 /// it emits.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS, dayseam_macros::SerdeDefaultAudit,
+)]
 #[ts(export)]
 pub struct EntityRef {
     pub kind: EntityKind,

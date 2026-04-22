@@ -1,0 +1,5 @@
+error: `serde_default_audit(no_repair = "…")` requires a non-empty justification. The review-time rationale is the whole point of the waiver — a blank string defeats the audit.
+  --> tests/trybuild/fail/empty_no_repair_reason.rs:12:5
+   |
+12 |     #[serde_default_audit(no_repair = "")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

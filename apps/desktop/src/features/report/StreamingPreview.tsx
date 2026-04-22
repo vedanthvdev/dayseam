@@ -239,8 +239,20 @@ function SectionView({
   onOpenBullet: (id: string) => void;
   onCloseBullet: () => void;
 }) {
+  // DAY-90 TST-v0.2-02. `data-section` and `data-bullet-count`
+  // are stable DOM hooks the E2E suite uses to make count-aware
+  // assertions — `cy.contains("COMMITS")` passes on a heading
+  // that merely exists, not on one that reflects the expected
+  // event count, which is the class of silent failure
+  // DOG-v0.2-04 caught. Values live on the section's outer
+  // element so a Playwright locator can scope a `data-bullet`
+  // count query to exactly one section without walking the tree.
   return (
-    <section className="flex flex-col gap-1">
+    <section
+      className="flex flex-col gap-1"
+      data-section={section.id}
+      data-bullet-count={section.bullets.length}
+    >
       <h3 className="text-sm font-semibold uppercase tracking-wide text-neutral-600 dark:text-neutral-300">
         {section.title}
       </h3>
@@ -283,7 +295,15 @@ function BulletRow({
   const hasEvidence = !!evidence && evidence.event_ids.length > 0;
 
   return (
-    <li className="relative flex items-start gap-2">
+    // DAY-90 TST-v0.2-02. `data-bullet` makes the bullet
+    // individually addressable by a section-scoped count query
+    // (`[data-section='commits'] [data-bullet]`). `data-testid`
+    // stays on the button because that's what BulletRow
+    // interactivity tests and the evidence popover key on.
+    <li
+      className="relative flex items-start gap-2"
+      data-bullet={bullet.id}
+    >
       <span
         aria-hidden="true"
         className="mt-1 h-1.5 w-1.5 shrink-0 rounded-full bg-neutral-400 dark:bg-neutral-500"

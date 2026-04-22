@@ -21,6 +21,12 @@ ts-rs = { version = "12", features = [
     "uuid-impl",
     "serde-json-impl",
 ] }
+# DAY-90 TST-v0.2-06. `SerdeDefaultAudit` is a compile-time lint
+# macro: every type in this crate with a `#[serde(default)]` field
+# must name the paired `SerdeDefaultRepair` or justify the waiver.
+# Declared as a regular dependency (not dev) because the derive is
+# on production types (`SourceConfig`, `EntityRef`), not tests.
+dayseam-macros = { path = "../dayseam-macros" }
 
 [dev-dependencies]
 insta = { version = "1", features = ["yaml"] }

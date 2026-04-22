@@ -1,0 +1,37 @@
+[package]
+name = "dayseam-macros"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+authors.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+description = "Compile-time helpers for Dayseam. Hosts the SerdeDefaultAudit derive, which pins every #[serde(default)] field on a persisted struct to either a registered SerdeDefaultRepair or an explicit waiver."
+
+[lib]
+# Proc-macro crates export a single symbol per helper + derive macro
+# and must set `proc-macro = true`. No other crate in the workspace
+# uses this flag today so we spell it out long-hand.
+proc-macro = true
+
+[dependencies]
+# Keep the macro surface tiny: parse the input TokenStream into a
+# struct AST, emit quoted tokens back. Versions pinned to the latest
+# majors; bumping syn to 3.x lands with its own deliberate PR so the
+# macro's error messages stay stable.
+syn = { version = "2", features = ["full"] }
+quote = "1"
+proc-macro2 = "1"
+
+[dev-dependencies]
+# trybuild drives the compile-pass / compile-fail suite in
+# `tests/serde_default_audit.rs`. The suite is gated behind
+# `TRYBUILD=overwrite` for local authoring; CI runs it in the standard
+# compile-check mode.
+trybuild = "1"
+# The trybuild fixtures decorate fields with `#[serde(default)]` to
+# exercise the audit path. `#[serde(...)]` is a helper attribute that
+# only exists once `#[derive(Serialize)]` / `#[derive(Deserialize)]`
+# from the serde crate is in scope; the fixtures derive both.
+serde = { workspace = true }

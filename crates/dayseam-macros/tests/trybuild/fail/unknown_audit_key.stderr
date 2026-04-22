@@ -1,0 +1,5 @@
+error: unknown `serde_default_audit` key; expected `repair` or `no_repair`
+  --> tests/trybuild/fail/unknown_audit_key.rs:11:27
+   |
+11 |     #[serde_default_audit(repairs = "confluence_email")]
+   |                           ^^^^^^^

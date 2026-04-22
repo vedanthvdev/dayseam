@@ -59,7 +59,9 @@ pub enum SourceKind {
 /// `LocalGit` intentionally only carries `scan_roots` — approved repos are
 /// first-class rows in the `local_repos` table so we never have two
 /// sources of truth for the same list.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, dayseam_macros::SerdeDefaultAudit,
+)]
 #[ts(export)]
 pub enum SourceConfig {
     GitLab {
@@ -115,6 +117,7 @@ pub enum SourceConfig {
     Confluence {
         workspace_url: String,
         #[serde(default)]
+        #[serde_default_audit(repair = "confluence_email")]
         email: String,
     },
 }

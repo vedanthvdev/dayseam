@@ -16,6 +16,7 @@ members = [
     "crates/sinks-sdk",
     "crates/sinks/sink-markdown-file",
     "crates/dayseam-orchestrator",
+    "crates/dayseam-macros",
 ]
 
 [workspace.package]

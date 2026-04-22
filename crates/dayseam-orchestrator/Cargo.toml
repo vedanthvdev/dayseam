@@ -60,3 +60,11 @@ serde_json = { workspace = true }
 # re-exports its own `map_gitlab_status`.
 connector-atlassian-common = { path = "../connectors/connector-atlassian-common" }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+# DAY-90 TST-v0.2-04. `tests/atlassian_integration.rs` drives the full
+# orchestrator → JiraMux / ConfluenceMux → HTTP → walker stack against
+# a wiremock server, so the orchestrator's test target needs
+# `wiremock` and `url` directly (and the per-source config helpers
+# from the real Jira + Confluence crates, which the orchestrator
+# already depends on non-test).
+wiremock = "0.6"
+url = "2"

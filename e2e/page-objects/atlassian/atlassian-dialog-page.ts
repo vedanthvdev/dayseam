@@ -105,6 +105,28 @@ export class AtlassianDialogPage extends BasePage {
   }
 
   /**
+   * DAY-90 TST-v0.2-05. Edit the email field after a successful
+   * validate. The dialog's `useEffect` on `[url, email, token,
+   * tokenMode]` must drop the cached `ok` ribbon, which this
+   * method asserts inline so the feature file reads one step
+   * instead of a step + a separate status check.
+   *
+   * We prefer the email field (not the URL) for the edit variant
+   * because the URL normalises asynchronously and the ribbon flip
+   * is racy against the debounce; email's onChange → setState
+   * path is synchronous and the invalidation fires on the next
+   * render.
+   */
+  async editEmailAndExpectValidationDropped(): Promise<void> {
+    await this.page
+      .getByTestId(AtlassianDialogLocators.EMAIL)
+      .fill(`edited-${CATALOGUE.atlassian.email}`);
+    await expect(
+      this.page.getByTestId(AtlassianDialogLocators.VALIDATION_OK),
+    ).toBeHidden();
+  }
+
+  /**
    * Confirm the dialog. After `atlassian_sources_add` resolves the
    * dialog is torn down by the parent (`SourcesSidebar` sets
    * `addAtlassianOpen = false` on its `onAdded`), so we wait for

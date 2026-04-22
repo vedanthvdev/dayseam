@@ -11,7 +11,8 @@ Feature: Generate a daily report and save it to a markdown sink
   Scenario: Happy path — generate, save, and confirm the receipt
     When I generate a report
     Then the streaming preview shows the completed draft
-    And the draft contains "Wired up the Playwright E2E happy path"
+    And the "completed" section contains 2 bullets
+    And the "completed" section contains the bullet "Wired up the Playwright E2E happy path"
 
     When I save the draft to the configured markdown sink
     Then a save receipt is shown listing "/tmp/dayseam-e2e-sink/daily-note.md"

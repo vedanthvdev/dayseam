@@ -310,4 +310,94 @@ mod tests {
         assert_eq!(confluence.kind(), SourceKind::Confluence);
         assert!(sinks.get(SinkKind::MarkdownFile).is_some());
     }
+
+    /// DAY-90 TST-v0.2-03. The `SourceKind` → connector-implementation
+    /// mapping has to hold two invariants simultaneously and neither is
+    /// guarded by the type system on its own:
+    ///
+    /// 1. **Coverage.** Every `SourceKind` variant that ships in the
+    ///    binary must have an entry in `default_registries`. A new
+    ///    variant added without a matching registration compiles fine
+    ///    — the orchestrator just silently skips fan-out for that kind
+    ///    at runtime (the DOG-v0.2-04-class silent-failure we spent
+    ///    DAY-88 sweeping).
+    /// 2. **Self-consistency.** The connector registered under key `K`
+    ///    must report `K` from its own `.kind()` method. A copy-paste
+    ///    bug that wires a `JiraMux` under `SourceKind::Confluence`
+    ///    type-checks cleanly (both are `Arc<dyn SourceConnector>`)
+    ///    and fails only in production the first time a Confluence
+    ///    source runs.
+    ///
+    /// The exhaustiveness match below turns invariant (1) from a
+    /// runtime test into a compile-time failure: adding `SourceKind::
+    /// Bitbucket` without extending `ALL_KINDS` *and* adding a
+    /// `default_registries` arm for it fails to compile here. The
+    /// per-kind `assert_eq!(conn.kind(), kind)` loop below pins
+    /// invariant (2).
+    #[test]
+    fn registry_kind_round_trips_for_every_registered_connector() {
+        const ALL_KINDS: &[SourceKind] = &[
+            SourceKind::LocalGit,
+            SourceKind::GitLab,
+            SourceKind::Jira,
+            SourceKind::Confluence,
+        ];
+        // Compiler-checked exhaustiveness: if `SourceKind` grows a
+        // variant, this match fails to compile and forces the author
+        // to extend `ALL_KINDS` above — which in turn fails the
+        // coverage assertion below until `default_registries` is
+        // extended too.
+        fn _exhaustive_source_kind_check(k: SourceKind) {
+            match k {
+                SourceKind::LocalGit
+                | SourceKind::GitLab
+                | SourceKind::Jira
+                | SourceKind::Confluence => {}
+            }
+        }
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let cfg = DefaultRegistryConfig {
+            local_git_scan_roots: vec![tmp.path().to_path_buf()],
+            local_git_private_roots: vec![],
+            local_tz: FixedOffset::east_opt(0).expect("UTC offset"),
+            markdown_dest_dirs: vec![tmp.path().to_path_buf()],
+            gitlab_sources: Vec::new(),
+            jira_sources: Vec::new(),
+            confluence_sources: Vec::new(),
+        };
+        let (connectors, _) = default_registries(cfg);
+
+        for &kind in ALL_KINDS {
+            let connector = connectors.get(kind).unwrap_or_else(|| {
+                panic!(
+                    "default_registries must register a connector for every \
+                     SourceKind variant; missing {kind:?}",
+                )
+            });
+            assert_eq!(
+                connector.kind(),
+                kind,
+                "connector registered under {kind:?} self-reports as \
+                 {:?}; a copy-paste bug has wired the wrong mux under this \
+                 key and Dayseam will fan out to the wrong connector at \
+                 runtime",
+                connector.kind(),
+            );
+        }
+
+        // Also assert the registry's own inventory exactly matches
+        // ALL_KINDS — guards against a spurious extra registration
+        // (→ a kind firing without a `DefaultRegistryConfig` field to
+        // plumb its sources in).
+        use std::collections::HashSet;
+        let registered: HashSet<SourceKind> = connectors.kinds().into_iter().collect();
+        let expected: HashSet<SourceKind> = ALL_KINDS.iter().copied().collect();
+        assert_eq!(
+            registered, expected,
+            "default_registries' live inventory must equal the ALL_KINDS \
+             exhaustiveness list exactly — mismatch means a variant was \
+             added in one place but not the other",
+        );
+    }
 }

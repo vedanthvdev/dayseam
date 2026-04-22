@@ -1,0 +1,6 @@
+error: `Row.email` is `#[serde(default)]` but carries no `#[serde_default_audit(...)]` annotation. Add either `#[serde_default_audit(repair = "NAME")]` (naming a registered `SerdeDefaultRepair` impl) or `#[serde_default_audit(no_repair = "reason")]` to document the deliberate waiver. Background: DOG-v0.2-04 / DAY-88 silent-failure sweep.
+  --> tests/trybuild/fail/missing_audit_annotation.rs:11:5
+   |
+11 | /     #[serde(default)]
+12 | |     email: String,
+   | |_________________^
