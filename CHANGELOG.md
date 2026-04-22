@@ -6,6 +6,17 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **DAY-92: v0.4 plan drafted** (`docs/plan/2026-04-22-v0.4-github-connector.md`).
+  Headline track is the fifth connector (`connector-github`) plus the v0.3
+  seam promotions that naturally land alongside it (first-class
+  `ArtifactPayload::MergeRequest`, `EntityKind::Workspace`,
+  `ReportSection::Unlinked` rename). Also absorbs the four v0.3 deferred
+  findings (TST/PERF/CONS/CORR-v0.3-0X). 10 PRs (DAY-92..DAY-101); only
+  DAY-101 carries `semver:minor`, matching the v0.3 release-workflow
+  discipline.
+
 ## [0.3.0] - 2026-04-22
 
 ### Changed
