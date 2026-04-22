@@ -14,8 +14,12 @@ export const ATLASSIAN_ERROR_CODES = [
   "atlassian.adf.unrenderable_node",
   "jira.walk.upstream_shape_changed",
   "jira.walk.rate_limited",
+  "jira.upstream_5xx",
+  "jira.resource_gone",
   "confluence.walk.upstream_shape_changed",
   "confluence.walk.rate_limited",
+  "confluence.upstream_5xx",
+  "confluence.resource_gone",
 ] as const;
 
 export type AtlassianErrorCode = (typeof ATLASSIAN_ERROR_CODES)[number];

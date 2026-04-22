@@ -19,8 +19,8 @@ use std::path::PathBuf;
 use chrono::{DateTime, NaiveDate, TimeZone, Utc};
 use dayseam_core::{
     ActivityEvent, ActivityKind, Actor, Artifact, ArtifactId, ArtifactKind, ArtifactPayload,
-    EntityRef, Person, Privacy, RawRef, RunStatus, SourceId, SourceIdentity, SourceIdentityKind,
-    SourceRunState,
+    EntityKind, EntityRef, Person, Privacy, RawRef, RunStatus, SourceId, SourceIdentity,
+    SourceIdentityKind, SourceRunState,
 };
 use dayseam_report::ReportInput;
 use uuid::Uuid;
@@ -113,7 +113,7 @@ pub fn gitlab_commit_event(
         body: None,
         links: vec![],
         entities: vec![EntityRef {
-            kind: "repo".into(),
+            kind: EntityKind::Repo,
             external_id: repo_path.into(),
             label: None,
         }],
@@ -153,7 +153,7 @@ pub fn commit_event(
         body: None,
         links: vec![],
         entities: vec![EntityRef {
-            kind: "repo".into(),
+            kind: EntityKind::Repo,
             external_id: repo_path.into(),
             label: None,
         }],
@@ -213,12 +213,12 @@ pub fn jira_transition_event(
         links: vec![],
         entities: vec![
             EntityRef {
-                kind: "jira_project".into(),
+                kind: EntityKind::JiraProject,
                 external_id: project_key.into(),
                 label: Some(project_name.into()),
             },
             EntityRef {
-                kind: "jira_issue".into(),
+                kind: EntityKind::JiraIssue,
                 external_id: issue_key.into(),
                 label: None,
             },
@@ -267,12 +267,12 @@ pub fn confluence_page_edited_event(
         links: vec![],
         entities: vec![
             EntityRef {
-                kind: "confluence_space".into(),
+                kind: EntityKind::ConfluenceSpace,
                 external_id: space_key.into(),
                 label: Some(space_name.into()),
             },
             EntityRef {
-                kind: "confluence_page".into(),
+                kind: EntityKind::ConfluencePage,
                 external_id: page_id.into(),
                 label: None,
             },

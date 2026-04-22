@@ -79,4 +79,24 @@ export const atlassianErrorCopy: Record<
     body: "Confluence asked Dayseam to slow down. The next sync will back off automatically — no action needed.",
     action: "none",
   },
+  "jira.upstream_5xx": {
+    title: "Jira is having trouble",
+    body: "Jira returned a server-side error (5xx). This is almost always a transient upstream outage — the next sync will retry automatically.",
+    action: "none",
+  },
+  "jira.resource_gone": {
+    title: "Jira resource permanently gone",
+    body: "An issue or comment Dayseam was reading has been permanently deleted from Jira (410 Gone). It will be skipped on future syncs.",
+    action: "none",
+  },
+  "confluence.upstream_5xx": {
+    title: "Confluence is having trouble",
+    body: "Confluence returned a server-side error (5xx). This is almost always a transient upstream outage — the next sync will retry automatically.",
+    action: "none",
+  },
+  "confluence.resource_gone": {
+    title: "Confluence resource permanently gone",
+    body: "A page, comment, or attachment Dayseam was reading has been permanently deleted from Confluence (410 Gone). It will be skipped on future syncs.",
+    action: "none",
+  },
 };

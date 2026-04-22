@@ -29,7 +29,8 @@
 use chrono::{DateTime, Utc};
 use connector_atlassian_common::{adf_to_plain, AtlassianError, Product};
 use dayseam_core::{
-    ActivityEvent, ActivityKind, Actor, DayseamError, EntityRef, Link, Privacy, RawRef, SourceId,
+    ActivityEvent, ActivityKind, Actor, DayseamError, EntityKind, EntityRef, Link, Privacy, RawRef,
+    SourceId,
 };
 use dayseam_events::LogSender;
 use serde_json::{json, Value};
@@ -482,7 +483,7 @@ fn build_page_event(
 
 fn space_entity(space_key: &str, space_name: Option<&str>) -> EntityRef {
     EntityRef {
-        kind: "confluence_space".to_string(),
+        kind: EntityKind::ConfluenceSpace,
         external_id: space_key.to_string(),
         label: space_name.map(str::to_string),
     }
@@ -490,7 +491,7 @@ fn space_entity(space_key: &str, space_name: Option<&str>) -> EntityRef {
 
 fn page_entity(content_id: &str, title: &str) -> EntityRef {
     EntityRef {
-        kind: "confluence_page".to_string(),
+        kind: EntityKind::ConfluencePage,
         external_id: content_id.to_string(),
         label: if title.is_empty() {
             None
@@ -502,7 +503,7 @@ fn page_entity(content_id: &str, title: &str) -> EntityRef {
 
 fn comment_entity(content_id: &str) -> EntityRef {
     EntityRef {
-        kind: "confluence_comment".to_string(),
+        kind: EntityKind::ConfluenceComment,
         external_id: content_id.to_string(),
         label: None,
     }
@@ -839,7 +840,7 @@ mod tests {
         let page_entity = ev
             .entities
             .iter()
-            .find(|e| e.kind == "confluence_page")
+            .find(|e| e.kind == EntityKind::ConfluencePage)
             .expect(
                 "comment event must carry a confluence_page entity so the rollup can key on it",
             );
@@ -892,7 +893,7 @@ mod tests {
         let page_entity = ev
             .entities
             .iter()
-            .find(|e| e.kind == "confluence_page")
+            .find(|e| e.kind == EntityKind::ConfluencePage)
             .expect("comment must carry parent page entity");
         assert_eq!(page_entity.external_id, "2000");
         assert_eq!(
@@ -1047,7 +1048,9 @@ mod tests {
         assert_eq!(ev.metadata["unattached"], json!(true));
         assert_eq!(ev.metadata["location"], json!("footer"));
         assert!(
-            ev.entities.iter().all(|e| e.kind != "confluence_page"),
+            ev.entities
+                .iter()
+                .all(|e| e.kind != EntityKind::ConfluencePage),
             "unattached comment must not synthesise a confluence_page entity",
         );
         assert!(

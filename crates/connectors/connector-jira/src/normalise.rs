@@ -22,8 +22,8 @@
 use chrono::{DateTime, Utc};
 use connector_atlassian_common::{adf_to_plain, AtlassianError, Product};
 use dayseam_core::{
-    ActivityEvent, ActivityKind, Actor, DayseamError, EntityRef, Link, LogLevel, Privacy, RawRef,
-    SourceId,
+    ActivityEvent, ActivityKind, Actor, DayseamError, EntityKind, EntityRef, Link, LogLevel,
+    Privacy, RawRef, SourceId,
 };
 use dayseam_events::LogSender;
 use serde_json::{json, Value};
@@ -353,7 +353,7 @@ fn issue_browse_link(workspace_url: &Url, key: &str) -> Link {
 
 fn project_entity(project_key: &str, project_name: Option<&str>) -> EntityRef {
     EntityRef {
-        kind: "jira_project".to_string(),
+        kind: EntityKind::JiraProject,
         external_id: project_key.to_string(),
         label: project_name.map(str::to_string),
     }
@@ -361,7 +361,7 @@ fn project_entity(project_key: &str, project_name: Option<&str>) -> EntityRef {
 
 fn issue_entity(issue_key: &str, summary: &str) -> EntityRef {
     EntityRef {
-        kind: "jira_issue".to_string(),
+        kind: EntityKind::JiraIssue,
         external_id: issue_key.to_string(),
         label: if summary.is_empty() {
             None

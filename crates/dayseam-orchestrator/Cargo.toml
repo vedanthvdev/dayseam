@@ -52,3 +52,11 @@ cargo_metadata = "0.19"
 # `commit_shas` metadata array so the orchestrator's rollup pass
 # observes the same shape the future GitLab MR enrichment will emit.
 serde_json = { workspace = true }
+# DAY-89 CONS-v0.2-06. The `server_error_symmetry` test asserts the
+# atlassian + gitlab `map_status` helpers produce symmetric
+# `{service}.upstream_5xx` / `{service}.resource_gone` codes. We need
+# the shared `Product` enum and `map_status` function from
+# connector-atlassian-common directly; the gitlab crate already
+# re-exports its own `map_gitlab_status`.
+connector-atlassian-common = { path = "../connectors/connector-atlassian-common" }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }

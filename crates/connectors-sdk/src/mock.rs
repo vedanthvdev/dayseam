@@ -9,8 +9,8 @@
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dayseam_core::{
-    ActivityEvent, ActivityKind, Actor, DayseamError, EntityRef, Link, Privacy, ProgressPhase,
-    RawRef, SourceHealth, SourceKind,
+    ActivityEvent, ActivityKind, Actor, DayseamError, EntityKind, EntityRef, Link, Privacy,
+    ProgressPhase, RawRef, SourceHealth, SourceKind,
 };
 use uuid::Uuid;
 
@@ -83,7 +83,7 @@ impl MockConnector {
                 label: None,
             }],
             entities: vec![EntityRef {
-                kind: "merge_request".into(),
+                kind: EntityKind::Other("merge_request".into()),
                 external_id: external_id.clone(),
                 label: None,
             }],

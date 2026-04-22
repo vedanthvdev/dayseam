@@ -15,8 +15,8 @@ use chrono::{NaiveDate, TimeZone, Utc};
 use common::{build_orchestrator, fixture_date, seed_source, test_person, test_pool};
 use connectors_sdk::MockConnector;
 use dayseam_core::{
-    ActivityEvent, ActivityKind, Actor, EntityRef, Link, Privacy, RawRef, SourceId, SourceKind,
-    SyncRunStatus,
+    ActivityEvent, ActivityKind, Actor, EntityKind, EntityRef, Link, Privacy, RawRef, SourceId,
+    SourceKind, SyncRunStatus,
 };
 use dayseam_orchestrator::{orchestrator::GenerateRequest, ConnectorRegistry, SinkRegistry};
 use dayseam_report::DEV_EOD_TEMPLATE_ID;
@@ -47,7 +47,7 @@ fn commit_authored(
             label: None,
         }],
         entities: vec![EntityRef {
-            kind: "repo".into(),
+            kind: EntityKind::Repo,
             external_id: "/work/dayseam".into(),
             label: None,
         }],
@@ -83,7 +83,7 @@ fn mr_event(
         body: Some("Review please".into()),
         links: Vec::new(),
         entities: vec![EntityRef {
-            kind: "merge_request".into(),
+            kind: EntityKind::Other("merge_request".into()),
             external_id: iid.into(),
             label: None,
         }],

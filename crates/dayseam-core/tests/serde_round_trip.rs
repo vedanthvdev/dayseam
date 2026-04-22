@@ -11,12 +11,12 @@ use std::path::PathBuf;
 use chrono::{TimeZone, Utc};
 use dayseam_core::{
     error_codes, ActivityEvent, ActivityKind, Actor, Artifact, ArtifactId, ArtifactKind,
-    ArtifactPayload, DayseamError, EntityRef, Evidence, Identity, Link, LocalRepo, LogEntry,
-    LogEvent, LogLevel, PerSourceState, Person, Privacy, ProgressEvent, ProgressPhase, RawRef,
-    RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Sink, SinkConfig,
-    SinkKind, Source, SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind,
-    SourceRunState, SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger, ToastEvent,
-    ToastSeverity, WriteReceipt,
+    ArtifactPayload, DayseamError, EntityKind, EntityRef, Evidence, Identity, Link, LocalRepo,
+    LogEntry, LogEvent, LogLevel, PerSourceState, Person, Privacy, ProgressEvent, ProgressPhase,
+    RawRef, RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Sink,
+    SinkConfig, SinkKind, Source, SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind,
+    SourceKind, SourceRunState, SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger,
+    ToastEvent, ToastSeverity, WriteReceipt,
 };
 use proptest::prelude::*;
 use uuid::Uuid;
@@ -41,7 +41,7 @@ fn sample_event() -> ActivityEvent {
             label: Some("!1234".into()),
         }],
         entities: vec![EntityRef {
-            kind: "merge_request".into(),
+            kind: EntityKind::Other("merge_request".into()),
             external_id: "1234".into(),
             label: None,
         }],

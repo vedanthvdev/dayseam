@@ -73,7 +73,7 @@ pub fn redact_private_event(event: &mut ActivityEvent) {
 mod tests {
     use super::*;
     use chrono::Utc;
-    use dayseam_core::{ActivityKind, Actor, EntityRef, Link};
+    use dayseam_core::{ActivityKind, Actor, EntityKind, EntityRef, Link};
     use tempfile::tempdir;
     use uuid::Uuid;
 
@@ -96,7 +96,7 @@ mod tests {
                 label: Some("repo".into()),
             }],
             entities: vec![EntityRef {
-                kind: "issue".into(),
+                kind: EntityKind::Other("issue".into()),
                 external_id: "PRIVATE-42".into(),
                 label: None,
             }],

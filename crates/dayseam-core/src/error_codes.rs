@@ -28,6 +28,13 @@ pub const GITLAB_UPSTREAM_SHAPE_CHANGED: &str = "gitlab.upstream_shape_changed";
 /// and make the user wait for nothing). Mirrors
 /// [`ATLASSIAN_CLOUD_RESOURCE_NOT_FOUND`] at the taxonomy level.
 pub const GITLAB_RESOURCE_NOT_FOUND: &str = "gitlab.resource_not_found";
+/// DAY-89 CONS-v0.2-06. 410 Gone from any GitLab endpoint — the
+/// project, MR, or issue has been deleted; retries will never
+/// succeed. Surfaced as `DayseamError::Network`; symmetric with
+/// [`JIRA_RESOURCE_GONE`] + [`CONFLUENCE_RESOURCE_GONE`] so the
+/// cross-connector property test in
+/// `crates/connectors/tests/server_error_symmetry.rs` passes.
+pub const GITLAB_RESOURCE_GONE: &str = "gitlab.resource_gone";
 
 // -------- Atlassian (Jira + Confluence) connectors -------------------------
 //
@@ -85,6 +92,21 @@ pub const JIRA_WALK_UPSTREAM_SHAPE_CHANGED: &str = "jira.walk.upstream_shape_cha
 /// this code fires only when the retry budget is exhausted.
 pub const JIRA_WALK_RATE_LIMITED: &str = "jira.walk.rate_limited";
 
+/// 5xx from any Jira endpoint after the SDK's retry budget is
+/// exhausted. Surfaced as `DayseamError::Network` (transient), not
+/// `UpstreamChanged` — a 500 is the upstream service misbehaving, not
+/// Dayseam's walker misreading the response shape. Symmetric with
+/// [`GITLAB_UPSTREAM_5XX`] (DAY-89 CONS-v0.2-06).
+pub const JIRA_UPSTREAM_5XX: &str = "jira.upstream_5xx";
+
+/// 410 Gone from any Jira endpoint — the issue, project, or
+/// attachment has been deleted and the URL will never resolve again.
+/// Distinct from 404 (which can be a transient permissions race) so
+/// the orchestrator can stop retrying immediately. Surfaced as
+/// `DayseamError::Network`. Symmetric with [`GITLAB_RESOURCE_GONE`]
+/// (DAY-89 CONS-v0.2-06).
+pub const JIRA_RESOURCE_GONE: &str = "jira.resource_gone";
+
 /// A CQL search response (`/wiki/rest/api/content/search`) or a v2
 /// content fetch (`/wiki/api/v2/pages/{id}`) returned an unknown
 /// content `type` or `extensions` shape. Same degradation semantics
@@ -94,6 +116,17 @@ pub const CONFLUENCE_WALK_UPSTREAM_SHAPE_CHANGED: &str = "confluence.walk.upstre
 /// 429 from any Confluence walker endpoint, after the SDK's rate-limit
 /// retry budget is exhausted.
 pub const CONFLUENCE_WALK_RATE_LIMITED: &str = "confluence.walk.rate_limited";
+
+/// 5xx from any Confluence endpoint after the SDK's retry budget is
+/// exhausted. Surfaced as `DayseamError::Network`; see
+/// [`JIRA_UPSTREAM_5XX`] for the full rationale. Symmetric across the
+/// three connector families (DAY-89 CONS-v0.2-06).
+pub const CONFLUENCE_UPSTREAM_5XX: &str = "confluence.upstream_5xx";
+
+/// 410 Gone from any Confluence endpoint — the space, page, or
+/// attachment has been deleted. See [`JIRA_RESOURCE_GONE`] for the
+/// full rationale.
+pub const CONFLUENCE_RESOURCE_GONE: &str = "confluence.resource_gone";
 
 // -------- Local-git connector ----------------------------------------------
 
@@ -333,6 +366,7 @@ pub const ALL: &[&str] = &[
     GITLAB_UPSTREAM_5XX,
     GITLAB_UPSTREAM_SHAPE_CHANGED,
     GITLAB_RESOURCE_NOT_FOUND,
+    GITLAB_RESOURCE_GONE,
     ATLASSIAN_AUTH_INVALID_CREDENTIALS,
     ATLASSIAN_AUTH_MISSING_SCOPE,
     ATLASSIAN_CLOUD_RESOURCE_NOT_FOUND,
@@ -340,8 +374,12 @@ pub const ALL: &[&str] = &[
     ATLASSIAN_ADF_UNRENDERABLE_NODE,
     JIRA_WALK_UPSTREAM_SHAPE_CHANGED,
     JIRA_WALK_RATE_LIMITED,
+    JIRA_UPSTREAM_5XX,
+    JIRA_RESOURCE_GONE,
     CONFLUENCE_WALK_UPSTREAM_SHAPE_CHANGED,
     CONFLUENCE_WALK_RATE_LIMITED,
+    CONFLUENCE_UPSTREAM_5XX,
+    CONFLUENCE_RESOURCE_GONE,
     LOCAL_GIT_REPO_LOCKED,
     LOCAL_GIT_REPO_UNREADABLE,
     LOCAL_GIT_REPO_CORRUPT,

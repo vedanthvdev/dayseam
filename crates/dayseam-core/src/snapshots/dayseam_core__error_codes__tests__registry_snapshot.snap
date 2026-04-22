@@ -10,6 +10,7 @@ expression: ALL
 - gitlab.upstream_5xx
 - gitlab.upstream_shape_changed
 - gitlab.resource_not_found
+- gitlab.resource_gone
 - atlassian.auth.invalid_credentials
 - atlassian.auth.missing_scope
 - atlassian.cloud.resource_not_found
@@ -17,8 +18,12 @@ expression: ALL
 - atlassian.adf.unrenderable_node
 - jira.walk.upstream_shape_changed
 - jira.walk.rate_limited
+- jira.upstream_5xx
+- jira.resource_gone
 - confluence.walk.upstream_shape_changed
 - confluence.walk.rate_limited
+- confluence.upstream_5xx
+- confluence.resource_gone
 - local_git.repo_locked
 - local_git.repo_unreadable
 - local_git.repo_corrupt

@@ -45,6 +45,13 @@ pub enum GitlabUpstreamError {
     /// [`error_codes::GITLAB_RESOURCE_NOT_FOUND`] on the
     /// [`DayseamError::Network`] variant.
     ResourceNotFound { message: String },
+    /// DAY-89 CONS-v0.2-06. 410 Gone — the project, MR, or issue has
+    /// been hard-deleted. Distinct from 404 (which can be a permissions
+    /// race) so the orchestrator never retries. Maps to
+    /// [`error_codes::GITLAB_RESOURCE_GONE`] on the
+    /// [`DayseamError::Network`] variant. Symmetric with
+    /// Atlassian's `ResourceGone`.
+    ResourceGone { message: String },
 }
 
 impl From<GitlabUpstreamError> for DayseamError {
@@ -93,6 +100,10 @@ impl From<GitlabUpstreamError> for DayseamError {
                 code: error_codes::GITLAB_RESOURCE_NOT_FOUND.to_string(),
                 message,
             },
+            GitlabUpstreamError::ResourceGone { message } => DayseamError::Network {
+                code: error_codes::GITLAB_RESOURCE_GONE.to_string(),
+                message: format!("GitLab resource returned 410 Gone: {message}"),
+            },
         }
     }
 }
@@ -116,6 +127,7 @@ pub fn map_status(status: StatusCode, message: impl Into<String>) -> GitlabUpstr
         // that hid the real cause (wrong `base_url`, stale project
         // path, or scope-miss on a private group).
         StatusCode::NOT_FOUND => GitlabUpstreamError::ResourceNotFound { message },
+        StatusCode::GONE => GitlabUpstreamError::ResourceGone { message },
         StatusCode::TOO_MANY_REQUESTS => GitlabUpstreamError::RateLimited {
             // The SDK's retry loop already honoured the `Retry-After`
             // header before calling us — when we see 429 here, the
@@ -292,7 +304,25 @@ mod tests {
         }
     }
 
-    /// The eight codes this module maps into must exist in the central
+    /// DAY-89 CONS-v0.2-06. 410 Gone now routes through `ResourceGone`
+    /// (symmetric with Atlassian's `ResourceGone`), not the
+    /// `_ => Upstream5xx` catch-all that would misreport a deleted
+    /// upstream resource as a transient server outage.
+    #[test]
+    fn map_status_routes_410_to_resource_gone() {
+        let e = map_status(StatusCode::GONE, "project deleted");
+        match e {
+            GitlabUpstreamError::ResourceGone { ref message } => {
+                assert!(message.contains("project deleted"));
+            }
+            other => panic!("expected ResourceGone, got {other:?}"),
+        }
+        let err: DayseamError = e.into();
+        assert_eq!(err.code(), error_codes::GITLAB_RESOURCE_GONE);
+        assert_eq!(err.variant(), "Network");
+    }
+
+    /// The codes this module maps into must exist in the central
     /// [`error_codes::ALL`] registry — a rename on either side of the
     /// edge is caught by the `registry_snapshot` test in `dayseam-core`,
     /// but a *silent drop* here (adding a code without mapping it)
@@ -308,6 +338,7 @@ mod tests {
             error_codes::GITLAB_UPSTREAM_5XX,
             error_codes::GITLAB_UPSTREAM_SHAPE_CHANGED,
             error_codes::GITLAB_RESOURCE_NOT_FOUND,
+            error_codes::GITLAB_RESOURCE_GONE,
         ];
         for code in expected {
             assert!(

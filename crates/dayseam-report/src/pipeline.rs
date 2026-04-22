@@ -64,7 +64,9 @@ pub fn pipeline(events: Vec<ActivityEvent>, mrs: &[MergeRequestArtifact]) -> Vec
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use dayseam_core::{ActivityEvent, ActivityKind, Actor, EntityRef, Privacy, RawRef, SourceId};
+    use dayseam_core::{
+        ActivityEvent, ActivityKind, Actor, EntityKind, EntityRef, Privacy, RawRef, SourceId,
+    };
     use uuid::Uuid;
 
     fn src() -> SourceId {
@@ -87,7 +89,7 @@ mod tests {
             body: None,
             links: Vec::new(),
             entities: vec![EntityRef {
-                kind: "repo".into(),
+                kind: EntityKind::Repo,
                 external_id: "/work/dayseam".into(),
                 label: None,
             }],
@@ -144,12 +146,12 @@ mod tests {
             links: Vec::new(),
             entities: vec![
                 EntityRef {
-                    kind: "jira_project".into(),
+                    kind: EntityKind::JiraProject,
                     external_id: "CAR".into(),
                     label: Some("Cardtronics".into()),
                 },
                 EntityRef {
-                    kind: "jira_issue".into(),
+                    kind: EntityKind::JiraIssue,
                     external_id: issue_key.into(),
                     label: None,
                 },
@@ -201,7 +203,8 @@ mod tests {
                 assert!(
                     e.entities
                         .iter()
-                        .any(|ent| ent.kind == "jira_issue" && ent.external_id == "CAR-5117"),
+                        .any(|ent| ent.kind == EntityKind::JiraIssue
+                            && ent.external_id == "CAR-5117"),
                     "extract_ticket_keys missed {:?}",
                     e.kind
                 );

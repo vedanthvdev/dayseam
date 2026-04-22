@@ -25,7 +25,7 @@
 mod common;
 
 use common::*;
-use dayseam_core::{ActivityEvent, ActivityKind, EntityRef, Privacy};
+use dayseam_core::{ActivityEvent, ActivityKind, EntityKind, EntityRef, Privacy};
 use dayseam_report::{
     annotate_transition_with_mr, dedup_commit_authored, extract_ticket_keys, pipeline,
     MergeRequestArtifact,
@@ -203,7 +203,7 @@ fn commit_titled_with_ticket_gains_jira_target_entity() {
     let targets: Vec<&EntityRef> = events[0]
         .entities
         .iter()
-        .filter(|e| e.kind == "jira_issue")
+        .filter(|e| e.kind == EntityKind::JiraIssue)
         .collect();
     assert_eq!(targets.len(), 1, "exactly one jira_issue target attached");
     assert_eq!(targets[0].external_id, "CAR-5117");
@@ -239,7 +239,7 @@ fn extract_ticket_keys_bails_on_noisy_titles() {
     let jira_targets = events[0]
         .entities
         .iter()
-        .filter(|e| e.kind == "jira_issue")
+        .filter(|e| e.kind == EntityKind::JiraIssue)
         .count();
     assert_eq!(
         jira_targets, 0,
@@ -259,7 +259,7 @@ fn jira_transition_annotated_with_mr_that_triggered_it() {
     let mut mr = mk_mr(src, "!321", "CAR-5117: Rename commands");
     // Simulate the earlier extract_ticket_keys pass.
     mr.entities.push(EntityRef {
-        kind: "jira_issue".into(),
+        kind: EntityKind::JiraIssue,
         external_id: "CAR-5117".into(),
         label: None,
     });
@@ -289,7 +289,7 @@ fn annotate_transition_is_idempotent() {
     let src = source_id(26);
     let mut mr = mk_mr(src, "!321", "CAR-5117: Rename commands");
     mr.entities.push(EntityRef {
-        kind: "jira_issue".into(),
+        kind: EntityKind::JiraIssue,
         external_id: "CAR-5117".into(),
         label: None,
     });
@@ -371,7 +371,7 @@ fn pipeline_runs_dedup_enrich_rollup_in_order() {
             assert!(
                 e.entities
                     .iter()
-                    .any(|ent| ent.kind == "jira_issue" && ent.external_id == "CAR-5117"),
+                    .any(|ent| ent.kind == EntityKind::JiraIssue && ent.external_id == "CAR-5117"),
                 "extract_ticket_keys missed {:?}",
                 e.kind
             );
@@ -407,13 +407,13 @@ fn pipeline_runs_cleanly_without_mr_or_jira_input() {
     let piped_targets = piped[0]
         .entities
         .iter()
-        .filter(|e| e.kind == "jira_issue")
+        .filter(|e| e.kind == EntityKind::JiraIssue)
         .count();
     assert_eq!(piped_targets, 1);
     let dedup_targets = deduped_only[0]
         .entities
         .iter()
-        .filter(|e| e.kind == "jira_issue")
+        .filter(|e| e.kind == EntityKind::JiraIssue)
         .count();
     assert_eq!(dedup_targets, 0);
 }

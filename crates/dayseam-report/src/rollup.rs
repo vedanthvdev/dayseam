@@ -42,7 +42,9 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use chrono::NaiveDate;
-use dayseam_core::{ActivityEvent, Artifact, ArtifactId, ArtifactKind, ArtifactPayload, SourceId};
+use dayseam_core::{
+    ActivityEvent, Artifact, ArtifactId, ArtifactKind, ArtifactPayload, EntityKind, SourceId,
+};
 use uuid::Uuid;
 
 use crate::group_key::{group_key_from_event, GroupKind};
@@ -161,7 +163,7 @@ fn orphan_key(event: &ActivityEvent) -> OrphanKey {
             let issue_key = event
                 .entities
                 .iter()
-                .find(|e| e.kind == "jira_issue")
+                .find(|e| e.kind == EntityKind::JiraIssue)
                 .map(|e| e.external_id.clone())
                 .unwrap_or_else(|| "UNKNOWN".to_string());
             OrphanKey::JiraIssue(event.source_id, issue_key, gk.value, day)
@@ -171,7 +173,7 @@ fn orphan_key(event: &ActivityEvent) -> OrphanKey {
             let page_id = event
                 .entities
                 .iter()
-                .find(|e| e.kind == "confluence_page")
+                .find(|e| e.kind == EntityKind::ConfluencePage)
                 .map(|e| e.external_id.clone())
                 .unwrap_or_else(|| "UNKNOWN".to_string());
             OrphanKey::ConfluencePage(event.source_id, page_id, gk.value, day)
@@ -374,7 +376,8 @@ mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
     use dayseam_core::{
-        ActivityKind, Actor, ArtifactKind, ArtifactPayload, EntityRef, Privacy, RawRef, SourceId,
+        ActivityKind, Actor, ArtifactKind, ArtifactPayload, EntityKind, EntityRef, Privacy, RawRef,
+        SourceId,
     };
 
     fn event(id: u128, source: SourceId, occurred_at_hour: u32, repo: &str) -> ActivityEvent {
@@ -395,7 +398,7 @@ mod tests {
             body: None,
             links: Vec::new(),
             entities: vec![EntityRef {
-                kind: "repo".into(),
+                kind: EntityKind::Repo,
                 external_id: repo.into(),
                 label: None,
             }],
@@ -430,12 +433,12 @@ mod tests {
             links: Vec::new(),
             entities: vec![
                 EntityRef {
-                    kind: "jira_project".into(),
+                    kind: EntityKind::JiraProject,
                     external_id: project_key.into(),
                     label: Some(format!("{project_key} Project")),
                 },
                 EntityRef {
-                    kind: "jira_issue".into(),
+                    kind: EntityKind::JiraIssue,
                     external_id: issue_key.into(),
                     label: None,
                 },

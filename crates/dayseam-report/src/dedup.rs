@@ -198,7 +198,7 @@ const fn louder_privacy(a: Privacy, b: Privacy) -> Privacy {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use dayseam_core::{Actor, RawRef};
+    use dayseam_core::{Actor, EntityKind, RawRef};
     use proptest::prelude::*;
     use std::collections::BTreeSet;
     use uuid::Uuid;
@@ -354,7 +354,7 @@ mod tests {
             label: Some("local".into()),
         }];
         e_a.entities = vec![EntityRef {
-            kind: "repo".into(),
+            kind: EntityKind::Repo,
             external_id: "/work/foo".into(),
             label: None,
         }];
@@ -365,7 +365,7 @@ mod tests {
             label: Some("gitlab".into()),
         }];
         e_b.entities = vec![EntityRef {
-            kind: "project".into(),
+            kind: EntityKind::Project,
             external_id: "42".into(),
             label: Some("payments".into()),
         }];

@@ -8,10 +8,10 @@ use std::path::PathBuf;
 use chrono::{DateTime, Duration, NaiveDate, TimeZone, Utc};
 use dayseam_core::{
     ActivityEvent, ActivityKind, Actor, Artifact, ArtifactId, ArtifactKind, ArtifactPayload,
-    EntityRef, Evidence, Identity, Link, LocalRepo, LogLevel, PerSourceState, Person, Privacy,
-    RawRef, RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef, Source,
-    SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind, SourceRunState,
-    SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger,
+    EntityKind, EntityRef, Evidence, Identity, Link, LocalRepo, LogLevel, PerSourceState, Person,
+    Privacy, RawRef, RenderedBullet, RenderedSection, ReportDraft, RunId, RunStatus, SecretRef,
+    Source, SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind,
+    SourceRunState, SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger,
 };
 use dayseam_db::{
     open, ActivityRepo, ArtifactRepo, DbError, DraftRepo, IdentityRepo, LocalRepoRepo, LogRepo,
@@ -89,7 +89,7 @@ fn fixture_event_for(src: &Source) -> ActivityEvent {
             label: Some("!123".into()),
         }],
         entities: vec![EntityRef {
-            kind: "mr".into(),
+            kind: EntityKind::Other("mr".into()),
             external_id: "123".into(),
             label: Some("!123".into()),
         }],
@@ -552,7 +552,7 @@ async fn activity_events_upsert_refreshes_payload_on_conflict() {
     let mut refreshed = first.clone();
     refreshed.title = "refreshed title".to_string();
     refreshed.entities = vec![EntityRef {
-        kind: "repo".into(),
+        kind: EntityKind::Repo,
         external_id: "modulr/modulo-local-infra".into(),
         label: Some("modulo-local-infra".into()),
     }];
@@ -575,7 +575,7 @@ async fn activity_events_upsert_refreshes_payload_on_conflict() {
     let repo_entity = row
         .entities
         .iter()
-        .find(|e| e.kind == "repo")
+        .find(|e| e.kind == EntityKind::Repo)
         .expect("repo entity must land on the row after upsert");
     assert_eq!(repo_entity.external_id, "modulr/modulo-local-infra");
 }
@@ -1215,4 +1215,63 @@ async fn source_identities_ensure_is_idempotent_on_natural_key() {
     assert!(wrote_other, "distinct natural key must insert a fresh row");
     let listed = identities.list_for_source(me.id, &src.id).await.unwrap();
     assert_eq!(listed.len(), 2);
+}
+
+/// DAY-89 PERF-v0.2-01. Migration `0005_secret_ref_index.sql` is
+/// forward-compatibility insurance for the repair-pipeline lookups
+/// DAY-90 introduces and the multi-account-per-product expansion
+/// queued for v0.4. The immediate contract it must satisfy is that
+/// opening a pool — fresh or upgrading — always leaves the partial
+/// index present with the exact predicate the planner can actually
+/// use (`WHERE secret_ref IS NOT NULL`). This test is the canonical
+/// regression for that contract: if a future migration drops the
+/// index or rewrites the predicate in a way the planner won't hit,
+/// this check fails loudly at `cargo test` time rather than
+/// silently at production query time.
+#[tokio::test]
+async fn opening_pool_creates_secret_ref_partial_index() {
+    let (pool, _dir) = test_pool().await;
+
+    // `sqlite_master` is SQLite's catalog table. For `CREATE INDEX`
+    // it stores the exact CREATE statement we ran, so we can both
+    // confirm the index exists *and* verify the partial predicate
+    // survived the migration runner.
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "SELECT name, sql FROM sqlite_master
+         WHERE type = 'index' AND name = 'idx_sources_secret_ref'",
+    )
+    .fetch_optional(&pool)
+    .await
+    .expect("query sqlite_master");
+
+    let (name, sql) = row.expect(
+        "idx_sources_secret_ref must exist after migrations run — \
+         did 0005_secret_ref_index.sql get removed or renamed?",
+    );
+    assert_eq!(name, "idx_sources_secret_ref");
+
+    // The partial predicate is load-bearing: without it the index
+    // carries a NULL-keyed entry for every local-git source (which
+    // has `secret_ref = NULL`) and wastes space without helping any
+    // real query. Assert the predicate text on the stored SQL so a
+    // well-meaning future edit that turns the partial index into a
+    // full index fails here first.
+    let sql = sql.expect("CREATE INDEX statement must be stored in sqlite_master");
+    assert!(
+        sql.contains("WHERE secret_ref IS NOT NULL"),
+        "idx_sources_secret_ref must be a PARTIAL index with \
+         `WHERE secret_ref IS NOT NULL` (got: {sql})"
+    );
+
+    // Re-opening the pool against the same file must be idempotent.
+    // `CREATE INDEX IF NOT EXISTS` is the guard; if a future edit
+    // drops the guard the second migration pass will fail here.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("state.db");
+    let first = open(&path).await.expect("first open");
+    drop(first);
+    let _second = open(&path).await.expect(
+        "second open on the same file must be idempotent — did the \
+         migration lose its `IF NOT EXISTS` guard?",
+    );
 }

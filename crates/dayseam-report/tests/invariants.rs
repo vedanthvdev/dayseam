@@ -10,8 +10,8 @@ use std::path::PathBuf;
 use chrono::Utc;
 use common::*;
 use dayseam_core::{
-    ActivityEvent, Artifact, ArtifactId, ArtifactKind, ArtifactPayload, Privacy, RenderedBullet,
-    ReportDraft,
+    ActivityEvent, Artifact, ArtifactId, ArtifactKind, ArtifactPayload, EntityKind, Privacy,
+    RenderedBullet, ReportDraft,
 };
 use proptest::prelude::*;
 // ---- Invariant #1: purity -----------------------------------------------
@@ -468,7 +468,7 @@ fn materialise(
         let repo = e
             .entities
             .iter()
-            .find(|ent| ent.kind == "repo")
+            .find(|ent| ent.kind == EntityKind::Repo)
             .map(|ent| ent.external_id.clone())
             .unwrap_or_else(|| "/".to_string());
         by_repo.entry(repo).or_default().push(e);

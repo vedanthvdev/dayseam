@@ -12,7 +12,7 @@ mod common;
 use chrono::{TimeZone, Utc};
 use common::{commit_event, fixture_date, source_id};
 use dayseam_core::{
-    ActivityEvent, ActivityKind, Actor, EntityRef, Link, Privacy, RawRef, SourceId,
+    ActivityEvent, ActivityKind, Actor, EntityKind, EntityRef, Link, Privacy, RawRef, SourceId,
 };
 use dayseam_report::dedup_commit_authored;
 use uuid::Uuid;
@@ -130,7 +130,7 @@ fn dedup_unions_links_and_entities() {
         label: Some("local-git".into()),
     }];
     e_a.entities = vec![EntityRef {
-        kind: "repo".into(),
+        kind: EntityKind::Repo,
         external_id: "/work/foo".into(),
         label: None,
     }];
@@ -140,7 +140,7 @@ fn dedup_unions_links_and_entities() {
         label: Some("gitlab".into()),
     }];
     e_b.entities = vec![EntityRef {
-        kind: "project".into(),
+        kind: EntityKind::Project,
         external_id: "42".into(),
         label: Some("payments".into()),
     }];

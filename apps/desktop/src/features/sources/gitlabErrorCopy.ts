@@ -65,4 +65,9 @@ export const gitlabErrorCopy: Record<GitlabErrorCode, GitlabErrorCopy> = {
     body: "GitLab returned 404 for a resource Dayseam expected to exist. The project, user, or event may have been deleted or moved — verify the source configuration and retry.",
     action: "retry",
   },
+  "gitlab.resource_gone": {
+    title: "GitLab resource permanently gone",
+    body: "GitLab returned 410 for a resource that was permanently deleted. It will be skipped on future syncs.",
+    action: "none",
+  },
 };

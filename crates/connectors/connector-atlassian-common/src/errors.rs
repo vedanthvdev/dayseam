@@ -17,8 +17,20 @@
 //! | `atlassian.adf.unrenderable_node` | `UpstreamChanged` |
 //! | `jira.walk.upstream_shape_changed` | `UpstreamChanged` |
 //! | `jira.walk.rate_limited` | `RateLimited` |
+//! | `jira.upstream_5xx` | `Network` |
+//! | `jira.resource_gone` | `Network` |
 //! | `confluence.walk.upstream_shape_changed` | `UpstreamChanged` |
 //! | `confluence.walk.rate_limited` | `RateLimited` |
+//! | `confluence.upstream_5xx` | `Network` |
+//! | `confluence.resource_gone` | `Network` |
+//!
+//! DAY-89 CONS-v0.2-06 introduced `{jira,confluence}.upstream_5xx` and
+//! `{jira,confluence}.resource_gone` so Atlassian's 5xx + 410 mapping
+//! reaches the same `Network` category GitLab's `gitlab.upstream_5xx` /
+//! `gitlab.resource_gone` already use. Without the new codes, an
+//! Atlassian 500 would still surface as `UpstreamChanged`, which the
+//! orchestrator treats as a walker shape bug rather than a transient
+//! server outage.
 //!
 //! [`map_status`] itself is scope-agnostic — it takes a
 //! [`Product`] hint so the 429 buckets route to `jira.walk.*` vs
@@ -61,6 +73,23 @@ pub enum AtlassianError {
     /// required field. Maps to `DayseamError::UpstreamChanged` with
     /// `{jira,confluence}.walk.upstream_shape_changed`.
     WalkShapeChanged { product: Product, message: String },
+    /// 5xx after the SDK's retry budget is exhausted — the upstream
+    /// service is down, degraded, or mid-deploy. Maps to
+    /// `DayseamError::Network` with `{jira,confluence}.upstream_5xx`,
+    /// symmetric with GitLab's `gitlab.upstream_5xx`. Kept separate
+    /// from `WalkShapeChanged` so the orchestrator can treat 500s as
+    /// transient (retry the next run) without masking genuine walker
+    /// shape drift.
+    Server5xx {
+        product: Product,
+        status: StatusCode,
+        message: String,
+    },
+    /// 410 Gone — the upstream resource was deleted and the URL will
+    /// never resolve again. Distinct from 404 so retries never fire.
+    /// Maps to `DayseamError::Network` with `{jira,confluence}.resource_gone`,
+    /// symmetric with GitLab's `gitlab.resource_gone`.
+    ResourceGone { product: Product, message: String },
     /// 429 after the SDK's retry budget is exhausted. Maps to
     /// `DayseamError::RateLimited` with `{jira,confluence}.walk.rate_limited`.
     RateLimited {
@@ -121,6 +150,27 @@ impl From<AtlassianError> for DayseamError {
                     message,
                 }
             }
+            AtlassianError::Server5xx {
+                product,
+                status,
+                message,
+            } => DayseamError::Network {
+                code: match product {
+                    Product::Jira => error_codes::JIRA_UPSTREAM_5XX.to_string(),
+                    Product::Confluence => error_codes::CONFLUENCE_UPSTREAM_5XX.to_string(),
+                },
+                message: format!("{} returned {status}: {message}", product_label(product)),
+            },
+            AtlassianError::ResourceGone { product, message } => DayseamError::Network {
+                code: match product {
+                    Product::Jira => error_codes::JIRA_RESOURCE_GONE.to_string(),
+                    Product::Confluence => error_codes::CONFLUENCE_RESOURCE_GONE.to_string(),
+                },
+                message: format!(
+                    "{} resource returned 410 Gone: {message}",
+                    product_label(product)
+                ),
+            },
             AtlassianError::RateLimited {
                 product,
                 retry_after_secs,
@@ -176,6 +226,7 @@ pub fn map_status(
         StatusCode::UNAUTHORIZED => AtlassianError::AuthInvalidCredentials,
         StatusCode::FORBIDDEN => AtlassianError::AuthMissingScope { product },
         StatusCode::NOT_FOUND => AtlassianError::CloudResourceNotFound { message },
+        StatusCode::GONE => AtlassianError::ResourceGone { product, message },
         StatusCode::TOO_MANY_REQUESTS => AtlassianError::RateLimited {
             product,
             // The SDK's retry loop already honoured the `Retry-After`
@@ -186,9 +237,10 @@ pub fn map_status(
             // value can override by constructing `RateLimited` directly.
             retry_after_secs: 0,
         },
-        s if s.is_server_error() => AtlassianError::WalkShapeChanged {
+        s if s.is_server_error() => AtlassianError::Server5xx {
             product,
-            message: format!("upstream {s}: {message}"),
+            status: s,
+            message,
         },
         _ => AtlassianError::WalkShapeChanged {
             product,
@@ -363,20 +415,114 @@ mod tests {
         );
     }
 
+    /// DAY-89 CONS-v0.2-06. Atlassian 5xx now routes to the typed
+    /// `Server5xx` variant, not `WalkShapeChanged`. This is a behaviour
+    /// change from v0.2.1 where 500s surfaced as
+    /// `jira.walk.upstream_shape_changed` (a walker-bug code); they now
+    /// surface as `jira.upstream_5xx` (a transient-network code),
+    /// symmetric with GitLab.
     #[test]
-    fn map_status_routes_5xx_to_walk_shape_changed() {
+    fn map_status_routes_5xx_to_server_5xx_with_status_preserved() {
         let e = map_status(
             Product::Confluence,
             StatusCode::INTERNAL_SERVER_ERROR,
             "down",
         );
         match e {
-            AtlassianError::WalkShapeChanged {
+            AtlassianError::Server5xx {
                 product: Product::Confluence,
+                status: StatusCode::INTERNAL_SERVER_ERROR,
                 ..
             } => {}
-            other => panic!("expected Confluence WalkShapeChanged, got {other:?}"),
+            other => panic!("expected Confluence Server5xx@500, got {other:?}"),
         }
+
+        // 502 / 503 / 504 all hit the same arm; the status code is
+        // preserved so the rendered error carries the exact upstream
+        // reply.
+        for s in [
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+            StatusCode::GATEWAY_TIMEOUT,
+        ] {
+            let e = map_status(Product::Jira, s, "maintenance");
+            match e {
+                AtlassianError::Server5xx {
+                    product: Product::Jira,
+                    status,
+                    ..
+                } => assert_eq!(status, s),
+                other => panic!("expected Jira Server5xx@{s}, got {other:?}"),
+            }
+        }
+    }
+
+    /// DAY-89 CONS-v0.2-06. 5xx now carries a `Network`-category
+    /// `DayseamError` with `{product}.upstream_5xx`, symmetric with
+    /// `gitlab.upstream_5xx`. The message includes the upstream status
+    /// so log parsers can tell 500/502/503/504 apart.
+    #[test]
+    fn server_5xx_maps_to_network_variant_with_product_code() {
+        let jira: DayseamError = AtlassianError::Server5xx {
+            product: Product::Jira,
+            status: StatusCode::BAD_GATEWAY,
+            message: "bad gateway".into(),
+        }
+        .into();
+        assert_eq!(jira.code(), error_codes::JIRA_UPSTREAM_5XX);
+        assert_eq!(jira.variant(), "Network");
+        let DayseamError::Network { message, .. } = jira else {
+            panic!("expected Network variant");
+        };
+        assert!(message.contains("502"), "message must carry status");
+
+        let confluence: DayseamError = AtlassianError::Server5xx {
+            product: Product::Confluence,
+            status: StatusCode::SERVICE_UNAVAILABLE,
+            message: "down for maintenance".into(),
+        }
+        .into();
+        assert_eq!(confluence.code(), error_codes::CONFLUENCE_UPSTREAM_5XX);
+        assert_eq!(confluence.variant(), "Network");
+    }
+
+    /// DAY-89 CONS-v0.2-06. 410 now routes through `ResourceGone`, not
+    /// the `_ => WalkShapeChanged` catch-all. This matters because 410
+    /// is a *terminal* status — retries never succeed — and letting
+    /// the orchestrator treat 410 as "walker is confused" hid genuine
+    /// deleted-upstream resources under noise.
+    #[test]
+    fn map_status_routes_410_to_resource_gone() {
+        let e = map_status(Product::Jira, StatusCode::GONE, "issue CAR-1 removed");
+        match e {
+            AtlassianError::ResourceGone {
+                product: Product::Jira,
+                ..
+            } => {}
+            other => panic!("expected Jira ResourceGone, got {other:?}"),
+        }
+    }
+
+    /// DAY-89 CONS-v0.2-06. `ResourceGone` carries
+    /// `{product}.resource_gone` on the `Network` variant, symmetric
+    /// with `gitlab.resource_gone`.
+    #[test]
+    fn resource_gone_maps_to_network_variant_with_product_code() {
+        let jira: DayseamError = AtlassianError::ResourceGone {
+            product: Product::Jira,
+            message: "issue CAR-1 deleted".into(),
+        }
+        .into();
+        assert_eq!(jira.code(), error_codes::JIRA_RESOURCE_GONE);
+        assert_eq!(jira.variant(), "Network");
+
+        let confluence: DayseamError = AtlassianError::ResourceGone {
+            product: Product::Confluence,
+            message: "space ENG deleted".into(),
+        }
+        .into();
+        assert_eq!(confluence.code(), error_codes::CONFLUENCE_RESOURCE_GONE);
+        assert_eq!(confluence.variant(), "Network");
     }
 
     #[test]

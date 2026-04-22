@@ -1,9 +1,36 @@
 //! Activity events — the normalised, source-agnostic record produced by
 //! every connector. One row here is one thing the user did or had done to
 //! them on a given date.
+//!
+//! **Naming convention for [`ActivityKind`] variants (DAY-89 CONS-v0.2-05).**
+//! Each connector gets its own verb family that matches how the upstream
+//! product *describes* the action; renaming across connectors to a single
+//! shared verb would flatten real semantic difference (a GitLab commit is
+//! `Authored`; a Jira issue is `Created`; a Confluence page is `Created`
+//! and later `Edited`). The pattern below is the contract — new variants
+//! must either fit an existing family or extend one documented here:
+//!
+//! - **Local-git / GitLab commit**: `{Source}CommitAuthored` — git's own
+//!   object-graph vernacular.
+//! - **GitLab merge request**: `MrOpened` / `MrMerged` / `MrClosed` /
+//!   `MrReviewComment` / `MrUnassigned` — lifecycle verbs match the
+//!   review UI.
+//! - **GitLab issue**: `IssueOpened` / `IssueClosed` / `IssueComment` —
+//!   same.
+//! - **Jira issue**: `JiraIssueCreated` / `JiraIssueTransitioned` /
+//!   `JiraIssueAssigned` / `JiraIssueUnassigned` / `JiraIssueComment` —
+//!   Jira's own CRUD + workflow verbs.
+//! - **Confluence**: `ConfluencePageCreated` / `ConfluencePageEdited` /
+//!   `ConfluenceComment` — Confluence's own page-lifecycle verbs.
+//!
+//! A new variant that breaks the pattern (e.g. `ConfluencePageAuthored`)
+//! should be rejected at review; the connector-specific verb family is
+//! the load-bearing convention for cross-source reporting.
 
 use chrono::{DateTime, Utc};
-use serde::{Deserialize, Serialize};
+use serde::de::{self, Deserializer, Visitor};
+use serde::{Deserialize, Serialize, Serializer};
+use std::fmt;
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -165,14 +192,148 @@ pub struct Link {
 }
 
 /// A reference to another upstream object (repo, MR, issue, project, ...).
-/// The `kind` is free-form because each connector names its own entity
-/// taxonomy; the report engine only compares `(kind, external_id)` pairs.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+/// The `(kind, external_id)` pair is the report engine's stable key for
+/// the referenced entity; each connector picks the kind for the objects
+/// it emits.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct EntityRef {
-    pub kind: String,
+    pub kind: EntityKind,
     pub external_id: String,
     pub label: Option<String>,
+}
+
+/// Discriminant for the upstream object an [`EntityRef`] points at.
+///
+/// **Why an enum, not a `String` (DAY-89 CONS-v0.2-03).** Until v0.2.1 the
+/// `kind` was a free-form `String` and every call site re-encoded the
+/// convention (`"jira_issue"`, `"confluence_page"`, `"repo"`, …) as a
+/// literal. That allowed three bug classes the review doc called out:
+/// typos that silently mis-routed events (`"jira-issue"` vs
+/// `"jira_issue"`), drift between emit-site and query-site, and no
+/// exhaustive-match guarantee in the report engine. Making `kind` an enum
+/// turns each of those into a compile-time error.
+///
+/// **Serialised form is lossless with v0.2.1 rows.** Variants serialise
+/// as their documented `snake_case` strings (`JiraIssue` → `"jira_issue"`,
+/// etc.) — identical to the strings every connector already wrote. A
+/// kind the current binary doesn't recognise (either a v0.2.1 `"mr"`
+/// that never reached production or a future connector's new kind)
+/// deserialises as [`EntityKind::Other`] carrying the original string,
+/// so round-trips are byte-stable and we need no boot-time repair to
+/// read old `activity_events` rows.
+///
+/// The custom [`Serialize`] / [`Deserialize`] impls below enforce the
+/// string shape; `#[derive(Serialize, Deserialize)]` would have produced
+/// a tagged object which the v0.2.1 upgrade path would not tolerate.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, TS)]
+#[ts(export, type = "string")]
+pub enum EntityKind {
+    /// A git repository — the unit local-git and GitLab both bucket
+    /// commits by.
+    Repo,
+    /// A GitLab project (distinct from `Repo`: GitLab projects carry
+    /// MRs/issues, the repo is their git storage).
+    Project,
+    /// The target of a GitLab merge-request / issue event — an MR or
+    /// an issue referenced by `iid` within a project.
+    Target,
+    /// A Jira project (`PROJ` key).
+    JiraProject,
+    /// A Jira issue (`PROJ-123` key).
+    JiraIssue,
+    /// A Confluence space.
+    ConfluenceSpace,
+    /// A Confluence page.
+    ConfluencePage,
+    /// A Confluence comment on a page.
+    ConfluenceComment,
+    /// A kind string this binary doesn't enumerate — either a row
+    /// written by a newer Dayseam version or a legacy convention a
+    /// past connector emitted. Preserved verbatim so re-serialising
+    /// the row produces byte-identical JSON.
+    Other(String),
+}
+
+impl EntityKind {
+    /// The stable serialised form — what a v0.2.1 row stored in the
+    /// `activity_events.entities` JSON column and what every connector
+    /// still writes. Keep in sync with [`Serialize`] /
+    /// [`Deserialize`]; the pair are symmetric by construction.
+    pub fn as_str(&self) -> &str {
+        match self {
+            EntityKind::Repo => "repo",
+            EntityKind::Project => "project",
+            EntityKind::Target => "target",
+            EntityKind::JiraProject => "jira_project",
+            EntityKind::JiraIssue => "jira_issue",
+            EntityKind::ConfluenceSpace => "confluence_space",
+            EntityKind::ConfluencePage => "confluence_page",
+            EntityKind::ConfluenceComment => "confluence_comment",
+            EntityKind::Other(s) => s.as_str(),
+        }
+    }
+
+    /// Parse from the stable serialised form. Unknown strings land in
+    /// [`EntityKind::Other`] — we never lose data at the deserialise
+    /// boundary.
+    ///
+    /// This is an inherent method rather than an `std::str::FromStr`
+    /// impl because the parse is infallible: there is no error
+    /// condition to plumb through a `Result`. Clippy would prefer
+    /// `FromStr`; we disagree — forcing every caller to write
+    /// `"..".parse::<EntityKind>().unwrap()` for a parse that can't
+    /// fail is worse ergonomics than a plainly-named method.
+    #[allow(clippy::should_implement_trait)]
+    pub fn from_str(s: &str) -> Self {
+        match s {
+            "repo" => EntityKind::Repo,
+            "project" => EntityKind::Project,
+            "target" => EntityKind::Target,
+            "jira_project" => EntityKind::JiraProject,
+            "jira_issue" => EntityKind::JiraIssue,
+            "confluence_space" => EntityKind::ConfluenceSpace,
+            "confluence_page" => EntityKind::ConfluencePage,
+            "confluence_comment" => EntityKind::ConfluenceComment,
+            other => EntityKind::Other(other.to_string()),
+        }
+    }
+}
+
+impl fmt::Display for EntityKind {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl Serialize for EntityKind {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+impl<'de> Deserialize<'de> for EntityKind {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct EntityKindVisitor;
+
+        impl Visitor<'_> for EntityKindVisitor {
+            type Value = EntityKind;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a snake_case entity-kind string")
+            }
+
+            fn visit_str<E: de::Error>(self, value: &str) -> Result<EntityKind, E> {
+                Ok(EntityKind::from_str(value))
+            }
+
+            fn visit_string<E: de::Error>(self, value: String) -> Result<EntityKind, E> {
+                Ok(EntityKind::from_str(&value))
+            }
+        }
+
+        deserializer.deserialize_str(EntityKindVisitor)
+    }
 }
 
 /// Pointer to the raw upstream payload we kept for replay/debugging. The
@@ -254,5 +415,72 @@ mod tests {
                 "duplicate variant in ActivityKind::all(): {k:?}"
             );
         }
+    }
+
+    /// CONS-v0.2-03. Every enumerated [`EntityKind`] variant round-trips
+    /// through the serde impl as the exact string the connectors have
+    /// been writing since v0.1. Breaks in CI if anyone renames a
+    /// variant string or changes the serialised shape; a single rename
+    /// would silently bucket v0.2.1 rows under [`EntityKind::Other`].
+    #[test]
+    fn entity_kind_serialised_form_is_stable_for_every_enumerated_variant() {
+        let cases = [
+            (EntityKind::Repo, "repo"),
+            (EntityKind::Project, "project"),
+            (EntityKind::Target, "target"),
+            (EntityKind::JiraProject, "jira_project"),
+            (EntityKind::JiraIssue, "jira_issue"),
+            (EntityKind::ConfluenceSpace, "confluence_space"),
+            (EntityKind::ConfluencePage, "confluence_page"),
+            (EntityKind::ConfluenceComment, "confluence_comment"),
+        ];
+        for (variant, expected) in cases {
+            let json = serde_json::to_string(&variant).expect("serialize");
+            assert_eq!(
+                json,
+                format!("\"{expected}\""),
+                "variant {variant:?} must serialise as \"{expected}\""
+            );
+            let round: EntityKind = serde_json::from_str(&json).expect("deserialize");
+            assert_eq!(
+                round, variant,
+                "variant {variant:?} must round-trip via serde"
+            );
+        }
+    }
+
+    /// CONS-v0.2-03. A kind string this binary doesn't enumerate —
+    /// either a future connector's new kind or a legacy string from a
+    /// pre-v0.3 row — survives round-trip as [`EntityKind::Other`] with
+    /// the original value preserved verbatim. This is the v0.2.1 -> v0.3
+    /// upgrade-path invariant: no serde-side repair is needed because
+    /// the deserialiser never loses data.
+    #[test]
+    fn entity_kind_unknown_variant_round_trips_as_other_verbatim() {
+        let input = "\"hypothetical_future_kind\"";
+        let parsed: EntityKind = serde_json::from_str(input).expect("deserialize");
+        assert_eq!(parsed, EntityKind::Other("hypothetical_future_kind".into()));
+        let re_serialised = serde_json::to_string(&parsed).expect("serialize");
+        assert_eq!(
+            re_serialised, input,
+            "unknown kinds must re-serialise byte-identically"
+        );
+    }
+
+    /// CONS-v0.2-03. Full `EntityRef` JSON shape matches v0.2.1 so a
+    /// `activity_events.entities` column written by v0.2.1 deserialises
+    /// into v0.3 without a migration.
+    #[test]
+    fn entity_ref_json_shape_matches_v0_2_1_layout() {
+        let v0_2_1_blob = r#"{"kind":"jira_issue","external_id":"CAR-5117","label":"Do a thing"}"#;
+        let parsed: EntityRef = serde_json::from_str(v0_2_1_blob).expect("deserialize");
+        assert_eq!(parsed.kind, EntityKind::JiraIssue);
+        assert_eq!(parsed.external_id, "CAR-5117");
+        assert_eq!(parsed.label.as_deref(), Some("Do a thing"));
+        let re_serialised = serde_json::to_string(&parsed).expect("serialize");
+        assert_eq!(
+            re_serialised, v0_2_1_blob,
+            "EntityRef JSON shape must be byte-stable across v0.2.1 -> v0.3"
+        );
     }
 }

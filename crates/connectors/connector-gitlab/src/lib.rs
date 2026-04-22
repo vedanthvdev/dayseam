@@ -55,4 +55,4 @@ pub mod walk;
 
 pub use auth::{validate_pat, GitlabUserInfo};
 pub use connector::{GitlabConnector, GitlabMux, GitlabSourceCfg};
-pub use errors::GitlabUpstreamError;
+pub use errors::{map_status as map_gitlab_status, GitlabUpstreamError};

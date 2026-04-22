@@ -30,8 +30,8 @@ use chrono::{DateTime, Duration as ChronoDuration, FixedOffset, NaiveDate, TimeZ
 use connector_atlassian_common::{map_status, CursorPaginator, Product, V2CursorPaginator};
 use connectors_sdk::{AuthStrategy, HttpClient};
 use dayseam_core::{
-    error_codes, ActivityEvent, ActivityKind, DayseamError, LogLevel, SourceId, SourceIdentity,
-    SourceIdentityKind,
+    error_codes, ActivityEvent, ActivityKind, DayseamError, EntityKind, LogLevel, SourceId,
+    SourceIdentity, SourceIdentityKind,
 };
 use dayseam_events::{LogSender, ProgressSender};
 use serde_json::{json, Value};
@@ -441,7 +441,7 @@ fn synthesize_collapsed_edit(
     let base_title = template
         .entities
         .iter()
-        .find(|e| e.kind == "confluence_page")
+        .find(|e| e.kind == EntityKind::ConfluencePage)
         .and_then(|e| e.label.as_deref())
         .unwrap_or("page")
         .to_string();

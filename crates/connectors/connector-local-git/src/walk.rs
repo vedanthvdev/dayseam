@@ -29,7 +29,7 @@ use std::path::{Path, PathBuf};
 use chrono::{DateTime, FixedOffset, NaiveDate, TimeZone, Utc};
 use dayseam_core::{
     error_codes, ActivityEvent, ActivityKind, Actor, Artifact, ArtifactId, ArtifactKind,
-    ArtifactPayload, DayseamError, EntityRef, Link, Privacy, RawRef, SourceId,
+    ArtifactPayload, DayseamError, EntityKind, EntityRef, Link, Privacy, RawRef, SourceId,
 };
 use git2::{Repository, Sort};
 
@@ -314,7 +314,7 @@ fn build_commit_event(
             label: Some(repo_label.clone()),
         }],
         entities: vec![EntityRef {
-            kind: "repo".to_string(),
+            kind: EntityKind::Repo,
             external_id: repo_root.display().to_string(),
             label: Some(repo_label),
         }],

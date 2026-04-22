@@ -13,6 +13,7 @@ export const GITLAB_ERROR_CODES = [
   "gitlab.upstream_5xx",
   "gitlab.upstream_shape_changed",
   "gitlab.resource_not_found",
+  "gitlab.resource_gone",
 ] as const;
 
 export type GitlabErrorCode = (typeof GITLAB_ERROR_CODES)[number];

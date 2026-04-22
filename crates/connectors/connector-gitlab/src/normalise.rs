@@ -16,7 +16,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use dayseam_core::{
-    ActivityEvent, ActivityKind, Actor, EntityRef, Link, Privacy, RawRef, SourceId,
+    ActivityEvent, ActivityKind, Actor, EntityKind, EntityRef, Link, Privacy, RawRef, SourceId,
 };
 
 use crate::events::{GitlabAction, GitlabAuthor, GitlabEvent, GitlabTargetType};
@@ -354,7 +354,7 @@ fn compose_entities(
     let mut entities = Vec::new();
     if let Some(pid) = event.project_id {
         entities.push(EntityRef {
-            kind: "project".to_string(),
+            kind: EntityKind::Project,
             external_id: pid.to_string(),
             label: None,
         });
@@ -373,7 +373,7 @@ fn compose_entities(
         };
         let label = repo_external_id.rsplit('/').next().map(|s| s.to_string());
         entities.push(EntityRef {
-            kind: "repo".to_string(),
+            kind: EntityKind::Repo,
             external_id: repo_external_id,
             label,
         });
@@ -385,7 +385,7 @@ fn compose_entities(
             _ => None,
         };
         entities.push(EntityRef {
-            kind: "target".to_string(),
+            kind: EntityKind::Target,
             external_id: iid.to_string(),
             label,
         });
@@ -618,7 +618,7 @@ mod tests {
         let repo_entity = e
             .entities
             .iter()
-            .find(|r| r.kind == "repo")
+            .find(|r| r.kind == EntityKind::Repo)
             .expect("normalised event must carry a repo entity when the lookup succeeded");
         assert_eq!(repo_entity.external_id, "modulr/modulo-local-infra");
         assert_eq!(repo_entity.label.as_deref(), Some("modulo-local-infra"));
@@ -638,7 +638,7 @@ mod tests {
         let repo_entity = e
             .entities
             .iter()
-            .find(|r| r.kind == "repo")
+            .find(|r| r.kind == EntityKind::Repo)
             .expect("repo entity must always be present when project_id is known");
         assert_eq!(repo_entity.external_id, "project-42");
     }

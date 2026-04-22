@@ -169,7 +169,8 @@ mod tests {
     use super::*;
     use chrono::{NaiveDate, TimeZone, Utc};
     use dayseam_core::{
-        ActivityEvent, Actor, Artifact, ArtifactId, ArtifactKind, EntityRef, Privacy, RawRef,
+        ActivityEvent, Actor, Artifact, ArtifactId, ArtifactKind, EntityKind, EntityRef, Privacy,
+        RawRef,
     };
     use uuid::Uuid;
 
@@ -221,7 +222,7 @@ mod tests {
             body: None,
             links: vec![],
             entities: vec![EntityRef {
-                kind: "confluence_space".into(),
+                kind: EntityKind::ConfluenceSpace,
                 external_id: "ST".into(),
                 label: None,
             }],

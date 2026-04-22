@@ -1,0 +1,42 @@
+-- DAY-89 PERF-v0.2-01. Partial index on `sources.secret_ref` to cover
+-- the `WHERE secret_ref = ?` lookup that `sources_delete_cascading`
+-- does on every source removal (see `src/repos/sources.rs` line ~189)
+-- and that the DAY-88 Confluence-email repair helper does on every
+-- boot.
+--
+-- Why "forward-compatibility insurance" rather than a measured win:
+--   * Current row counts are small (~5–20 sources on a developer
+--     laptop, bounded by the number of tokens a human is willing to
+--     paste into the setup sidebar).
+--   * SQLite's planner chooses a full table scan below the "B-tree
+--     wins over linear" threshold; at 5–20 rows the scan is already
+--     a single page read, so no observable latency delta today.
+--   * The next phase (DAY-90's generalised `#[serde(default)]`
+--     repair pipeline) runs a `WHERE secret_ref = ?` lookup for
+--     **every** repair candidate, and DAY-91's planned "multiple
+--     accounts per product" work (tracked under the v0.4 umbrella)
+--     scales the row count by an order of magnitude. Landing the
+--     index now means the planner already prefers it the day those
+--     call sites arrive, no second migration needed.
+--
+-- Why `WHERE secret_ref IS NOT NULL`:
+--   * Local-git sources have `secret_ref = NULL`. Without the
+--     partial predicate they'd occupy one row each in the index for
+--     no reason — SQLite would have to fan them out under a single
+--     `NULL` key. The predicate skips them entirely, so the index
+--     only tracks rows the query actually cares about.
+--
+-- Why `IF NOT EXISTS`:
+--   * Upgraders from v0.2.1 → v0.3.0 run the migration once; fresh
+--     installs run it against an empty `sources` table. Making the
+--     creation idempotent means re-running `sqlx::migrate!` is safe
+--     even if a future migration dirties the same index (should
+--     never happen, but this is a zero-cost guard).
+--
+-- Upgrade path verification: `crates/dayseam-db/tests/repos.rs`'s
+-- `opening_pool_against_an_existing_db_creates_secret_ref_index` test
+-- pokes `sqlite_master` to confirm the index is present after
+-- migrations run, and is the canonical regression for this file.
+CREATE INDEX IF NOT EXISTS idx_sources_secret_ref
+    ON sources(secret_ref)
+    WHERE secret_ref IS NOT NULL;

@@ -41,7 +41,7 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
-use dayseam_core::{ActivityEvent, ActivityKind, EntityRef};
+use dayseam_core::{ActivityEvent, ActivityKind, EntityKind, EntityRef};
 use uuid::Uuid;
 
 /// Bail threshold for [`extract_ticket_keys`]. See the module docs.
@@ -75,10 +75,10 @@ pub fn extract_ticket_keys(events: &mut [ActivityEvent]) {
             let already = event
                 .entities
                 .iter()
-                .any(|e| e.kind == "jira_issue" && e.external_id == key);
+                .any(|e| e.kind == EntityKind::JiraIssue && e.external_id == key);
             if !already {
                 event.entities.push(EntityRef {
-                    kind: "jira_issue".into(),
+                    kind: EntityKind::JiraIssue,
                     external_id: key,
                     label: None,
                 });
@@ -131,7 +131,7 @@ pub fn annotate_transition_with_mr(events: &mut [ActivityEvent]) {
         let Some(issue_key) = event
             .entities
             .iter()
-            .find(|e| e.kind == "jira_issue")
+            .find(|e| e.kind == EntityKind::JiraIssue)
             .map(|e| e.external_id.clone())
         else {
             continue;
@@ -166,7 +166,7 @@ fn build_issue_to_mr_index(events: &[ActivityEvent]) -> HashMap<String, String> 
             continue;
         }
         for ent in &event.entities {
-            if ent.kind != "jira_issue" {
+            if ent.kind != EntityKind::JiraIssue {
                 continue;
             }
             let incoming = (event.occurred_at, event.id, event.external_id.clone());
@@ -253,7 +253,7 @@ const fn is_ascii_alnum(b: u8) -> bool {
 mod tests {
     use super::*;
     use chrono::{TimeZone, Utc};
-    use dayseam_core::{Actor, EntityRef, Privacy, RawRef, SourceId};
+    use dayseam_core::{Actor, EntityKind, EntityRef, Privacy, RawRef, SourceId};
     use uuid::Uuid;
 
     fn src() -> SourceId {
@@ -293,7 +293,7 @@ mod tests {
             &format!("{issue_key}: In Progress → Done"),
         );
         e.entities.push(EntityRef {
-            kind: "jira_issue".into(),
+            kind: EntityKind::JiraIssue,
             external_id: issue_key.into(),
             label: None,
         });
@@ -353,7 +353,7 @@ mod tests {
         let targets: Vec<&EntityRef> = events[0]
             .entities
             .iter()
-            .filter(|e| e.kind == "jira_issue")
+            .filter(|e| e.kind == EntityKind::JiraIssue)
             .collect();
         assert_eq!(targets.len(), 1);
         assert_eq!(targets[0].external_id, "CAR-5117");
@@ -385,7 +385,7 @@ mod tests {
         let targets: Vec<&EntityRef> = events[0]
             .entities
             .iter()
-            .filter(|e| e.kind == "jira_issue")
+            .filter(|e| e.kind == EntityKind::JiraIssue)
             .collect();
         assert!(
             targets.is_empty(),
@@ -401,7 +401,7 @@ mod tests {
             "CAR-5117: Fix review findings",
         );
         e.entities.push(EntityRef {
-            kind: "jira_issue".into(),
+            kind: EntityKind::JiraIssue,
             external_id: "CAR-5117".into(),
             label: Some("Pre-existing".into()),
         });
@@ -410,7 +410,7 @@ mod tests {
         let targets: Vec<&EntityRef> = events[0]
             .entities
             .iter()
-            .filter(|e| e.kind == "jira_issue")
+            .filter(|e| e.kind == EntityKind::JiraIssue)
             .collect();
         assert_eq!(targets.len(), 1, "existing jira_issue target wins");
         assert_eq!(targets[0].label.as_deref(), Some("Pre-existing"));
@@ -425,7 +425,7 @@ mod tests {
         assert!(events[0]
             .entities
             .iter()
-            .any(|ent| ent.kind == "jira_issue" && ent.external_id == "CAR-5117"));
+            .any(|ent| ent.kind == EntityKind::JiraIssue && ent.external_id == "CAR-5117"));
     }
 
     #[test]
@@ -435,7 +435,7 @@ mod tests {
             let mut e = event(ActivityKind::MrOpened, "!321", "CAR-5117: Rename commands");
             // Simulate what `extract_ticket_keys` already attached.
             e.entities.push(EntityRef {
-                kind: "jira_issue".into(),
+                kind: EntityKind::JiraIssue,
                 external_id: "CAR-5117".into(),
                 label: None,
             });
@@ -456,7 +456,7 @@ mod tests {
         let mr = {
             let mut e = event(ActivityKind::MrOpened, "!321", "CAR-5117: Rename commands");
             e.entities.push(EntityRef {
-                kind: "jira_issue".into(),
+                kind: EntityKind::JiraIssue,
                 external_id: "CAR-5117".into(),
                 label: None,
             });
@@ -491,7 +491,7 @@ mod tests {
             let mut e = event(ActivityKind::MrOpened, "!100", "CAR-5117: later-in-time");
             e.occurred_at = Utc.with_ymd_and_hms(2026, 4, 20, 14, 0, 0).unwrap();
             e.entities.push(EntityRef {
-                kind: "jira_issue".into(),
+                kind: EntityKind::JiraIssue,
                 external_id: "CAR-5117".into(),
                 label: None,
             });
@@ -501,7 +501,7 @@ mod tests {
             let mut e = event(ActivityKind::MrMerged, "!200", "CAR-5117: earlier-in-time");
             e.occurred_at = Utc.with_ymd_and_hms(2026, 4, 20, 9, 0, 0).unwrap();
             e.entities.push(EntityRef {
-                kind: "jira_issue".into(),
+                kind: EntityKind::JiraIssue,
                 external_id: "CAR-5117".into(),
                 label: None,
             });
@@ -536,7 +536,7 @@ mod tests {
             let mut e = event(ActivityKind::MrOpened, "!100", "CAR-5117: a");
             e.occurred_at = shared_time;
             e.entities.push(EntityRef {
-                kind: "jira_issue".into(),
+                kind: EntityKind::JiraIssue,
                 external_id: "CAR-5117".into(),
                 label: None,
             });
@@ -546,7 +546,7 @@ mod tests {
             let mut e = event(ActivityKind::MrOpened, "!200", "CAR-5117: b");
             e.occurred_at = shared_time;
             e.entities.push(EntityRef {
-                kind: "jira_issue".into(),
+                kind: EntityKind::JiraIssue,
                 external_id: "CAR-5117".into(),
                 label: None,
             });

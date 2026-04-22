@@ -34,7 +34,7 @@
 //! a label churn (Jira admin renames a project mid-day) never
 //! splits an issue's day into two sections.
 
-use dayseam_core::{ActivityEvent, ActivityKind};
+use dayseam_core::{ActivityEvent, ActivityKind, EntityKind};
 
 /// Which kind of section this event renders under.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -82,19 +82,21 @@ pub(crate) fn group_key_from_event(event: &ActivityEvent) -> GroupKey {
         | ActivityKind::JiraIssueCommented
         | ActivityKind::JiraIssueAssigned
         | ActivityKind::JiraIssueUnassigned
-        | ActivityKind::JiraIssueCreated => entity_group(event, "jira_project", GroupKind::Project),
+        | ActivityKind::JiraIssueCreated => {
+            entity_group(event, EntityKind::JiraProject, GroupKind::Project)
+        }
         ActivityKind::ConfluencePageCreated
         | ActivityKind::ConfluencePageEdited
         | ActivityKind::ConfluenceComment => {
-            entity_group(event, "confluence_space", GroupKind::Space)
+            entity_group(event, EntityKind::ConfluenceSpace, GroupKind::Space)
         }
         // Commits, GitLab MRs / issues, anything else repo-shaped.
         // Matches v0.1's `repo_path_from_event` behaviour.
-        _ => entity_group(event, "repo", GroupKind::Repo),
+        _ => entity_group(event, EntityKind::Repo, GroupKind::Repo),
     }
 }
 
-fn entity_group(event: &ActivityEvent, entity_kind: &str, group_kind: GroupKind) -> GroupKey {
+fn entity_group(event: &ActivityEvent, entity_kind: EntityKind, group_kind: GroupKind) -> GroupKey {
     event
         .entities
         .iter()
@@ -150,7 +152,7 @@ mod tests {
 
     fn ent(kind: &str, external_id: &str, label: Option<&str>) -> EntityRef {
         EntityRef {
-            kind: kind.into(),
+            kind: EntityKind::from_str(kind),
             external_id: external_id.into(),
             label: label.map(str::to_string),
         }
