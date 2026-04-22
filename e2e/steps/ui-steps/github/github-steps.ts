@@ -12,6 +12,14 @@ import { Then, When } from "../../../fixtures/base-fixtures";
 import { CATALOGUE } from "../../../fixtures/runtime/catalogue";
 import type { MockState } from "../../../fixtures/runtime/types";
 
+// DAY-100. The GitHub connect-and-report scenario asserts against
+// the same `completed` draft section the Atlassian flows pin. The
+// mock appends one GitHub bullet per GitHub source on top of the
+// 2 LocalGit baseline bullets seeded by `CATALOGUE.draft.completedBullets`,
+// so the scenario-expected count is baseline + 1.
+const GITHUB_DRAFT_SECTION_ID = "completed";
+const LOCAL_GIT_BASELINE_BULLETS = CATALOGUE.draft.completedBullets.length;
+
 When("I open the Add GitHub source dialog", async ({ pages }) => {
   await pages.github.openFromSidebar();
 });
@@ -73,3 +81,19 @@ Then(
     expect(call.label.length).toBeGreaterThan(0);
   },
 );
+
+// DAY-100. Mirrors the `draft contains the Atlassian Jira bullet`
+// step: scopes the assertion to the `completed` section, pins the
+// bullet count so a regression that double-emits (or drops) the
+// GitHub bullet fails the count, and then matches the exact
+// catalogue-seeded bullet string.
+Then("the draft contains the GitHub pull request bullet", async ({ pages }) => {
+  await pages.report.expectSectionBulletCount(
+    GITHUB_DRAFT_SECTION_ID,
+    LOCAL_GIT_BASELINE_BULLETS + 1,
+  );
+  await pages.report.expectSectionContainsBullet(
+    GITHUB_DRAFT_SECTION_ID,
+    CATALOGUE.draft.githubPullRequestBullet,
+  );
+});

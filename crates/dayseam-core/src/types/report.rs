@@ -15,7 +15,18 @@ use crate::error::DayseamError;
 use super::source::SourceId;
 
 /// One rendered report for a specific date.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+///
+/// DAY-100 TST-v0.3-01: carries `#[derive(SerdeDefaultAudit)]` so the
+/// next author to add a `#[serde(default)]` field (e.g. a
+/// `draft_version: u32` with a back-compat default for drafts written
+/// before the field existed) is forced to pair it with a
+/// `#[serde_default_audit(...)]` annotation. Closes the DOG-v0.2-04
+/// silent-failure avenue on the draft-deserialisation layer — where
+/// a defaulted field would be especially painful because drafts
+/// survive across Dayseam upgrades.
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, TS, dayseam_macros::SerdeDefaultAudit,
+)]
 #[ts(export)]
 pub struct ReportDraft {
     pub id: Uuid,

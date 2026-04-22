@@ -274,6 +274,7 @@ export function dayseamTauriMockInit(catalogue: Catalogue): void {
       });
       const hasJira = sources.some((s) => s.kind === "Jira");
       const hasConfluence = sources.some((s) => s.kind === "Confluence");
+      const hasGithub = sources.some((s) => s.kind === "GitHub");
       if (hasJira) {
         bullets.push({
           id: "completed.atlassian.jira",
@@ -284,6 +285,19 @@ export function dayseamTauriMockInit(catalogue: Catalogue): void {
         bullets.push({
           id: "completed.atlassian.confluence",
           text: catalogue.draft.atlassianConfluenceBullet,
+        });
+      }
+      // DAY-100 — the GitHub happy-path scenario drives the real
+      // `AddGithubSourceDialog` → validate → persist path, so once
+      // the scenario clicks "Add source" the new row lands in
+      // `sources` and the next `report_get` call surfaces a
+      // deterministic PR bullet under `## Completed`. Kept
+      // symmetrical with the Atlassian arms above so a regression
+      // in the bullet-emission ordering fails here too.
+      if (hasGithub) {
+        bullets.push({
+          id: "completed.github.pull_request",
+          text: catalogue.draft.githubPullRequestBullet,
         });
       }
 

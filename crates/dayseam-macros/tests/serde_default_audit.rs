@@ -33,4 +33,10 @@ fn serde_default_audit_trybuild() {
     t.compile_fail("tests/trybuild/fail/missing_audit_annotation.rs");
     t.compile_fail("tests/trybuild/fail/empty_no_repair_reason.rs");
     t.compile_fail("tests/trybuild/fail/unknown_audit_key.rs");
+    // DAY-100 TST-v0.3-01 — the class-detector also fires on
+    // enum-variant fields, not just plain structs. A `SinkConfig`
+    // variant that grows a `#[serde(default)]` field without a paired
+    // audit annotation must fail to compile with the same error shape
+    // as `missing_audit_annotation.rs` above.
+    t.compile_fail("tests/trybuild/fail/sink_config_serde_default_without_audit.rs");
 }

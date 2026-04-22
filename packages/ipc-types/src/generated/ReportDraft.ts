@@ -5,5 +5,14 @@ import type { SourceRunState } from "./SourceRunState";
 
 /**
  * One rendered report for a specific date.
+ *
+ * DAY-100 TST-v0.3-01: carries `#[derive(SerdeDefaultAudit)]` so the
+ * next author to add a `#[serde(default)]` field (e.g. a
+ * `draft_version: u32` with a back-compat default for drafts written
+ * before the field existed) is forced to pair it with a
+ * `#[serde_default_audit(...)]` annotation. Closes the DOG-v0.2-04
+ * silent-failure avenue on the draft-deserialisation layer — where
+ * a defaulted field would be especially painful because drafts
+ * survive across Dayseam upgrades.
  */
 export type ReportDraft = { id: string, date: string, template_id: string, template_version: string, sections: Array<RenderedSection>, evidence: Array<Evidence>, per_source_state: { [key in string]: SourceRunState }, verbose_mode: boolean, generated_at: string, };

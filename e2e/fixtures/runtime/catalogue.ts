@@ -96,6 +96,15 @@ export const CATALOGUE = {
     atlassianJiraBullet: "Moved CAR-5117 to Production Verification",
     atlassianConfluenceBullet:
       "Published runbook on /wiki/spaces/ENG/pages/release-process",
+    // DAY-100 — per-product bullet the mock appends to the draft
+    // when a GitHub source is present at report time. Same shape as
+    // the Atlassian bullets above: pinned in the catalogue so the
+    // scenario's "draft contains the GitHub PR bullet" assertion
+    // resolves against the exact string the mock served. A
+    // regression that drops the bullet surfaces as a failing count;
+    // a regression that drifts the copy fails the substring
+    // assertion.
+    githubPullRequestBullet: "Opened modulr/foo#42 — Orchestrator-level GitHub PR",
   },
 
   // DAY-83 — fixture for the Add-Atlassian-source flow. The Atlassian

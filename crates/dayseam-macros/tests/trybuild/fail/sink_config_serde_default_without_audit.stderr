@@ -1,0 +1,6 @@
+error: `SinkConfig::MarkdownFile.frontmatter` is `#[serde(default)]` but carries no `#[serde_default_audit(...)]` annotation. Add either `#[serde_default_audit(repair = "NAME")]` (naming a registered `SerdeDefaultRepair` impl) or `#[serde_default_audit(no_repair = "reason")]` to document the deliberate waiver. Background: DOG-v0.2-04 / DAY-88 silent-failure sweep.
+  --> tests/trybuild/fail/sink_config_serde_default_without_audit.rs:24:9
+   |
+24 | /         #[serde(default)]
+25 | |         frontmatter: bool,
+   | |_________________________^
