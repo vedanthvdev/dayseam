@@ -71,6 +71,7 @@ fn main() {
         commands::gitlab_validate_pat,
         atlassian::atlassian_validate_credentials,
         atlassian::atlassian_sources_add,
+        atlassian::atlassian_sources_reconnect,
         commands::dev_emit_toast,
         commands::dev_start_demo_run,
     ]);
@@ -104,6 +105,7 @@ fn main() {
         commands::gitlab_validate_pat,
         atlassian::atlassian_validate_credentials,
         atlassian::atlassian_sources_add,
+        atlassian::atlassian_sources_reconnect,
     ]);
 
     builder

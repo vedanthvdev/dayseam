@@ -311,6 +311,26 @@ export interface Commands {
     };
     result: SourceT[];
   };
+  /** Rotate the API token on an existing Atlassian source.
+   *
+   *  Triggered by the Reconnect chip on `SourceErrorCard` when a
+   *  Jira or Confluence source's last walk failed with
+   *  `atlassian.auth.invalid_credentials`. The backend validates the
+   *  new token against the source's stored `(workspace_url, email)`,
+   *  asserts the `/rest/api/3/myself` account id still matches the
+   *  `AtlassianAccountId` identity already bound to the source (to
+   *  prevent silent account-rebinding), and overwrites the keychain
+   *  entry at the existing `SecretRef`.
+   *
+   *  Shared-PAT sources (Journey A: Jira + Confluence pointing at
+   *  the same `SecretRef`) are rotated atomically; the returned
+   *  array lists every source id whose token was refreshed so the
+   *  caller can fire `sources_healthcheck` for each to clear the
+   *  red error chips. Introduced in DAY-87. */
+  atlassian_sources_reconnect: {
+    args: { sourceId: string; apiToken: string };
+    result: string[];
+  };
   /** Dev-only. Compiled out of release builds via `cfg(feature = "dev-commands")`. */
   dev_emit_toast: {
     args: { event: ToastEvent };
@@ -364,6 +384,7 @@ export const PROD_COMMANDS: readonly CommandName[] = [
   "gitlab_validate_pat",
   "atlassian_validate_credentials",
   "atlassian_sources_add",
+  "atlassian_sources_reconnect",
 ] as const;
 
 /** Dev-only command identifiers. Gated behind the Rust

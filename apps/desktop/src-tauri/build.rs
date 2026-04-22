@@ -101,6 +101,7 @@ fn main() {
         "gitlab_validate_pat",
         "atlassian_validate_credentials",
         "atlassian_sources_add",
+        "atlassian_sources_reconnect",
     ];
     const DEV_COMMANDS: &[&str] = &[
         "settings_get",
@@ -130,6 +131,7 @@ fn main() {
         "gitlab_validate_pat",
         "atlassian_validate_credentials",
         "atlassian_sources_add",
+        "atlassian_sources_reconnect",
         "dev_emit_toast",
         "dev_start_demo_run",
     ];

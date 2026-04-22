@@ -43,13 +43,31 @@ interface AddAtlassianSourceDialogProps {
   open: boolean;
   onClose: () => void;
   /** Fired after `atlassian_sources_add` succeeds. Receives every
-   *  row the IPC created — one in Journey B / C, two in Journey A. */
+   *  row the IPC created — one in Journey B / C, two in Journey A.
+   *  Not called in `reconnect` mode; see `onReconnected` instead. */
   onAdded: (sources: Source[]) => void;
   /** Every source currently known to the frontend. Used to detect
    *  whether an existing Jira or Confluence row is already
    *  configured (→ reuse-PAT affordance) and which product the
    *  user is *not* already running. */
   existingSources: readonly Source[];
+  /** When set, the dialog mounts in "token-only reconnect" mode
+   *  (DAY-87): workspace URL and email are shown read-only from the
+   *  passed source, the product checkboxes are hidden, and submit
+   *  calls `atlassian_sources_reconnect` instead of
+   *  `atlassian_sources_add`. URL/email changes are intentionally
+   *  out of scope for this flow — the scope is narrower than the
+   *  plan's original "edit" framing because rotating the bound
+   *  Atlassian account would require re-seeding `SourceIdentity` to
+   *  keep the render-stage self-filter honest, which is a bigger
+   *  change than DAY-87 takes on. */
+  reconnect?: { source: Source } | null;
+  /** Fired after `atlassian_sources_reconnect` succeeds. Receives
+   *  the ids of every source whose keychain slot was rotated —
+   *  shared-PAT sources hand back two ids. The caller is expected
+   *  to fire `sources_healthcheck` for each so the red chips on the
+   *  sidebar clear without waiting for the next poll. */
+  onReconnected?: (affectedSourceIds: string[]) => void;
 }
 
 type ValidationState =
@@ -103,11 +121,13 @@ function findExistingAtlassian(
         source: hit,
         secretRef: hit.secret_ref!,
         workspaceUrl: hit.config.Confluence.workspace_url,
-        // Confluence rows don't carry `email` on their config — the
-        // shared-PAT flow always has a Jira row alongside that does,
-        // and single-product Confluence rows never need to prompt
-        // again. Fall back to `null` and force a fresh entry.
-        email: null,
+        // Since DAY-84 Confluence rows carry `email` on their config
+        // alongside Jira, so we can prefill it here for Journey C
+        // (reuse-PAT) and for DAY-87 reconnect. Older installs that
+        // missed the backfill surface an empty string; the dialog
+        // still asks the user to retype it (email input is editable
+        // in add mode) so we don't block them on the upgrade artifact.
+        email: hit.config.Confluence.email || null,
         accountId: null,
       };
     }
@@ -120,10 +140,36 @@ export function AddAtlassianSourceDialog({
   onClose,
   onAdded,
   existingSources,
+  reconnect,
+  onReconnected,
 }: AddAtlassianSourceDialogProps) {
+  const isReconnect = reconnect != null;
+  const reconnectSource = reconnect?.source ?? null;
+  const reconnectConfig = useMemo(() => {
+    if (reconnectSource == null) return null;
+    if ("Jira" in reconnectSource.config) {
+      return {
+        kind: "Jira" as const,
+        workspaceUrl: reconnectSource.config.Jira.workspace_url,
+        email: reconnectSource.config.Jira.email,
+      };
+    }
+    if ("Confluence" in reconnectSource.config) {
+      return {
+        kind: "Confluence" as const,
+        workspaceUrl: reconnectSource.config.Confluence.workspace_url,
+        email: reconnectSource.config.Confluence.email,
+      };
+    }
+    return null;
+  }, [reconnectSource]);
+
   const existing = useMemo(
-    () => findExistingAtlassian(existingSources),
-    [existingSources],
+    // In reconnect mode the dialog is operating on one specific
+    // source; the Journey-C "pair me with the other product" logic
+    // is irrelevant and could only confuse the reuse/paste picker.
+    () => (isReconnect ? null : findExistingAtlassian(existingSources)),
+    [existingSources, isReconnect],
   );
   // When an existing Atlassian source is present, the *other*
   // product is the one the user is about to add. In the greenfield
@@ -146,6 +192,22 @@ export function AddAtlassianSourceDialog({
   // added yet, which is the common Journey-C shape.
   useEffect(() => {
     if (!open) return;
+    if (isReconnect && reconnectConfig != null) {
+      // DAY-87 reconnect: URL + email come from the source row and
+      // are displayed read-only. The token is always empty so we
+      // never show the user a masked-but-present field that hides
+      // the fact we wiped the old one.
+      setWorkspaceUrlRaw(reconnectConfig.workspaceUrl);
+      setEmail(reconnectConfig.email);
+      setApiToken("");
+      setEnableJira(reconnectConfig.kind === "Jira");
+      setEnableConfluence(reconnectConfig.kind === "Confluence");
+      setTokenMode("paste");
+      setValidation({ kind: "idle" });
+      setSubmitError(null);
+      setSubmitting(false);
+      return;
+    }
     setWorkspaceUrlRaw(existing?.workspaceUrl ?? "");
     setEmail(existing?.email ?? "");
     setApiToken("");
@@ -163,7 +225,7 @@ export function AddAtlassianSourceDialog({
     setValidation({ kind: "idle" });
     setSubmitError(null);
     setSubmitting(false);
-  }, [open, existing, existingKind]);
+  }, [open, existing, existingKind, isReconnect, reconnectConfig]);
 
   const normalisation: WorkspaceUrlNormalisation = useMemo(
     () => normaliseWorkspaceUrl(workspaceUrlRaw),
@@ -180,14 +242,17 @@ export function AddAtlassianSourceDialog({
   }, [normalisedUrl, email, apiToken, tokenMode]);
 
   // Invariant 1: at-least-one-product. Submit stays disabled until
-  // the user ticks at least one of the two product checkboxes.
+  // the user ticks at least one of the two product checkboxes. In
+  // reconnect mode the checkbox state is forced to the source's
+  // kind so this is always satisfied.
   const atLeastOneProduct = enableJira || enableConfluence;
 
   // In reuse mode the email + token fields are inert and validation
   // is a no-op (the existing source already proved the credentials
   // work). The submit path skips the `atlassian_validate_credentials`
-  // round-trip entirely.
-  const isReuseMode = tokenMode === "reuse" && existing != null;
+  // round-trip entirely. Reconnect mode always requires a fresh
+  // token, so it never enters reuse.
+  const isReuseMode = !isReconnect && tokenMode === "reuse" && existing != null;
 
   const canValidate =
     !isReuseMode &&
@@ -196,11 +261,17 @@ export function AddAtlassianSourceDialog({
     apiToken.trim().length > 0 &&
     validation.kind !== "checking";
 
-  const canSubmit =
-    atLeastOneProduct &&
-    normalisation.kind === "ok" &&
-    !submitting &&
-    (isReuseMode || validation.kind === "ok");
+  const canSubmit = isReconnect
+    ? // Reconnect mode skips the explicit "Validate" button — the
+      // submit handler runs the probe server-side as part of the
+      // `atlassian_sources_reconnect` IPC, so we only need enough
+      // state to fire that call. An empty token is the one thing we
+      // can reject client-side without a round-trip.
+      apiToken.trim().length > 0 && !submitting
+    : atLeastOneProduct &&
+      normalisation.kind === "ok" &&
+      !submitting &&
+      (isReuseMode || validation.kind === "ok");
 
   const handleValidate = useCallback(async () => {
     if (!canValidate || normalisedUrl == null) return;
@@ -232,10 +303,30 @@ export function AddAtlassianSourceDialog({
   }, []);
 
   const handleSubmit = useCallback(async () => {
-    if (!canSubmit || normalisation.kind !== "ok") return;
+    if (!canSubmit) return;
     setSubmitting(true);
     setSubmitError(null);
     try {
+      if (isReconnect && reconnectSource != null) {
+        // DAY-87: token-only reconnect. The backend re-runs
+        // `/rest/api/3/myself` against the stored workspace URL +
+        // email, refuses if the resolved `account_id` doesn't match
+        // the `SourceIdentity` already bound to this source, and
+        // otherwise rotates the keychain slot atomically. The
+        // returned list is every `source_id` whose secret was
+        // rotated (two ids when the PAT is shared across Jira +
+        // Confluence siblings); we hand it to the caller so the
+        // sidebar can fire `sources_healthcheck` for each and clear
+        // the red chips without waiting for the next poll.
+        const affected = await invoke("atlassian_sources_reconnect", {
+          sourceId: reconnectSource.id,
+          apiToken: apiToken.trim(),
+        });
+        sourcesBus.dispatchEvent(new Event(SOURCES_CHANGED));
+        onReconnected?.(affected);
+        return;
+      }
+      if (normalisation.kind !== "ok") return;
       // Journey C mode 1 (reuse) — clone the existing `SecretRef`
       // and skip the token field entirely. The `account_id` comes
       // from the validation we have to re-run once if the existing
@@ -303,6 +394,9 @@ export function AddAtlassianSourceDialog({
     enableJira,
     enableConfluence,
     onAdded,
+    isReconnect,
+    reconnectSource,
+    onReconnected,
   ]);
 
   const handleClose = useCallback(() => {
@@ -310,12 +404,18 @@ export function AddAtlassianSourceDialog({
     onClose();
   }, [submitting, onClose]);
 
-  const urlHelp = renderUrlHelp(normalisation);
+  const urlHelp = isReconnect ? null : renderUrlHelp(normalisation);
 
-  const title = existing ? `Add ${existingKind === "Jira" ? "Confluence" : "Jira"}` : "Add Atlassian source";
-  const description = existing
-    ? `You already have ${existingKind} connected. Add the other product with the same token — or use a different one.`
-    : "Connect Jira, Confluence, or both with one Atlassian API token. Dayseam only needs read access.";
+  const title = isReconnect
+    ? `Reconnect ${reconnectConfig?.kind ?? "Atlassian"}`
+    : existing
+      ? `Add ${existingKind === "Jira" ? "Confluence" : "Jira"}`
+      : "Add Atlassian source";
+  const description = isReconnect
+    ? "Paste a fresh Atlassian API token to reconnect. The workspace URL and account email are fixed — delete and re-add the source to change either one."
+    : existing
+      ? `You already have ${existingKind} connected. Add the other product with the same token — or use a different one.`
+      : "Connect Jira, Confluence, or both with one Atlassian API token. Dayseam only needs read access.";
 
   return (
     <Dialog
@@ -335,7 +435,13 @@ export function AddAtlassianSourceDialog({
             disabled={!canSubmit}
             onClick={() => void handleSubmit()}
           >
-            {submitting ? "Adding…" : "Add source"}
+            {submitting
+              ? isReconnect
+                ? "Reconnecting…"
+                : "Adding…"
+              : isReconnect
+                ? "Reconnect"
+                : "Add source"}
           </DialogButton>
         </>
       }
@@ -347,38 +453,40 @@ export function AddAtlassianSourceDialog({
           void handleSubmit();
         }}
       >
-        <fieldset className="flex flex-col gap-2">
-          <legend className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-            Products
-          </legend>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={enableJira}
-              onChange={(e) => setEnableJira(e.target.checked)}
-              data-testid="add-atlassian-enable-jira"
-            />
-            <span>Jira</span>
-          </label>
-          <label className="flex items-center gap-2 text-sm">
-            <input
-              type="checkbox"
-              checked={enableConfluence}
-              onChange={(e) => setEnableConfluence(e.target.checked)}
-              data-testid="add-atlassian-enable-confluence"
-            />
-            <span>Confluence</span>
-          </label>
-          {!atLeastOneProduct ? (
-            <span
-              role="alert"
-              data-testid="add-atlassian-product-required"
-              className="text-[11px] text-red-700 dark:text-red-300"
-            >
-              Pick at least one product.
-            </span>
-          ) : null}
-        </fieldset>
+        {!isReconnect ? (
+          <fieldset className="flex flex-col gap-2">
+            <legend className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+              Products
+            </legend>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={enableJira}
+                onChange={(e) => setEnableJira(e.target.checked)}
+                data-testid="add-atlassian-enable-jira"
+              />
+              <span>Jira</span>
+            </label>
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={enableConfluence}
+                onChange={(e) => setEnableConfluence(e.target.checked)}
+                data-testid="add-atlassian-enable-confluence"
+              />
+              <span>Confluence</span>
+            </label>
+            {!atLeastOneProduct ? (
+              <span
+                role="alert"
+                data-testid="add-atlassian-product-required"
+                className="text-[11px] text-red-700 dark:text-red-300"
+              >
+                Pick at least one product.
+              </span>
+            ) : null}
+          </fieldset>
+        ) : null}
 
         <label className="flex flex-col gap-1">
           <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
@@ -388,8 +496,8 @@ export function AddAtlassianSourceDialog({
             type="text"
             value={workspaceUrlRaw}
             onChange={(e) => setWorkspaceUrlRaw(e.target.value)}
-            readOnly={existing != null}
-            autoFocus={existing == null}
+            readOnly={existing != null || isReconnect}
+            autoFocus={existing == null && !isReconnect}
             placeholder="modulrfinance"
             data-testid="add-atlassian-workspace-url"
             spellCheck={false}
@@ -442,12 +550,13 @@ export function AddAtlassianSourceDialog({
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
+                readOnly={isReconnect}
                 placeholder="you@example.com"
                 data-testid="add-atlassian-email"
                 spellCheck={false}
                 autoCapitalize="off"
                 autoComplete="email"
-                className="rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+                className="rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm read-only:cursor-not-allowed read-only:opacity-75 dark:border-neutral-700 dark:bg-neutral-900"
               />
             </label>
 
@@ -481,18 +590,25 @@ export function AddAtlassianSourceDialog({
                 autoComplete="off"
                 className="rounded border border-neutral-300 bg-white px-2 py-1.5 font-mono text-sm dark:border-neutral-700 dark:bg-neutral-900"
               />
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => void handleValidate()}
-                  disabled={!canValidate}
-                  data-testid="add-atlassian-validate"
-                  className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
-                >
-                  {validation.kind === "checking" ? "Validating…" : "Validate"}
-                </button>
-                {renderValidationStatus(validation)}
-              </div>
+              {isReconnect ? (
+                <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                  The new token is validated against the existing
+                  account when you click Reconnect.
+                </span>
+              ) : (
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleValidate()}
+                    disabled={!canValidate}
+                    data-testid="add-atlassian-validate"
+                    className="rounded border border-neutral-300 bg-white px-2 py-1 text-xs font-medium text-neutral-700 hover:bg-neutral-50 disabled:cursor-not-allowed disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200 dark:hover:bg-neutral-800"
+                  >
+                    {validation.kind === "checking" ? "Validating…" : "Validate"}
+                  </button>
+                  {renderValidationStatus(validation)}
+                </div>
+              )}
             </label>
           </>
         ) : null}

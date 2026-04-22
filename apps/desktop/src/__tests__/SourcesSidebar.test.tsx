@@ -1,4 +1,4 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { LocalRepo, Source, SourceHealth } from "@dayseam/ipc-types";
 import { SourcesSidebar } from "../features/sources/SourcesSidebar";
@@ -217,6 +217,80 @@ describe("SourcesSidebar", () => {
         screen.getByRole("dialog", { name: /reconnect.*gitlab/i }),
       ).toBeInTheDocument(),
     );
+  });
+
+  // DAY-87: Reconnect chip on an Atlassian source re-opens the
+  // `AddAtlassianSourceDialog` in reconnect mode instead of the
+  // previous silent no-op. The dialog mounts with URL + email
+  // pre-filled and read-only, the API token cleared, and submit
+  // routes through `atlassian_sources_reconnect` (covered by the
+  // dialog's own RTL suite; here we only assert the wiring).
+  it("Atlassian reconnect chip mounts AddAtlassianSourceDialog in reconnect mode", async () => {
+    const BROKEN_JIRA: Source = {
+      id: "jira-1",
+      kind: "Jira",
+      label: "modulrfinance Jira",
+      config: {
+        Jira: {
+          workspace_url: "https://modulrfinance.atlassian.net",
+          email: "ved@example.com",
+        },
+      },
+      secret_ref: {
+        keychain_service: "dayseam.atlassian",
+        keychain_account: "slot:aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+      },
+      created_at: "2026-04-17T12:00:00Z",
+      last_sync_at: null,
+      last_health: {
+        ok: false,
+        checked_at: "2026-04-17T12:00:00Z",
+        last_error: {
+          variant: "Auth",
+          data: {
+            code: "atlassian.auth.invalid_credentials",
+            message: "401",
+            retryable: false,
+            action_hint: "reconnect",
+          },
+        },
+      },
+    };
+    registerInvokeHandler("sources_list", async () => [BROKEN_JIRA]);
+
+    render(<SourcesSidebar />);
+    await waitFor(() =>
+      expect(
+        screen.getByTestId("source-error-card-jira-1"),
+      ).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByTestId("source-error-card-reconnect-jira-1"));
+
+    // Reconnect copy in the dialog header is the tell that the
+    // reconnect prop made it through — the add-mode header reads
+    // "Add Atlassian source" instead.
+    await waitFor(() =>
+      expect(
+        screen.getByRole("dialog", { name: /reconnect jira/i }),
+      ).toBeInTheDocument(),
+    );
+
+    // URL and email prefill from the source config.
+    expect(
+      screen.getByTestId("add-atlassian-workspace-url"),
+    ).toHaveValue("https://modulrfinance.atlassian.net");
+    expect(screen.getByTestId("add-atlassian-email")).toHaveValue(
+      "ved@example.com",
+    );
+    // Submit copy flips to Reconnect; if we saw "Add source" we'd
+    // know the `reconnect` prop didn't reach the dialog. The chip
+    // that opened the dialog also has "Reconnect" in its label, so
+    // we scope the lookup to the dialog's own region.
+    const dialog = screen.getByRole("dialog", { name: /reconnect jira/i });
+    const { getByRole: getByRoleInDialog } = within(dialog);
+    expect(
+      getByRoleInDialog("button", { name: /^reconnect$/i }),
+    ).toBeInTheDocument();
   });
 
   // Inverse: a LocalGit source with `secret_ref: null` is healthy,

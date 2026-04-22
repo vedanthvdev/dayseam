@@ -51,6 +51,14 @@ export const MOCK_HANDLED_COMMANDS = [
   // Rust side into a compile-time failure at the mock boundary.
   "atlassian_validate_credentials",
   "atlassian_sources_add",
+  // DAY-87: Atlassian reconnect flow. The scenarios drive
+  // `SourceErrorCard` → `AddAtlassianSourceDialog` (reconnect mode)
+  // → `atlassian_sources_reconnect` → `sources_healthcheck`
+  // through the real IPC surface. Listing the command here turns
+  // a rename on the Rust side into a compile-time failure at the
+  // mock boundary, same as the add-flow commands above.
+  "atlassian_sources_reconnect",
+  "sources_healthcheck",
 ] as const satisfies readonly CommandName[];
 
 export type MockedCommand = (typeof MOCK_HANDLED_COMMANDS)[number];
@@ -136,6 +144,7 @@ export function dayseamTauriMockInit(catalogue: Catalogue): void {
     captured: {
       saveCalls: [],
       atlassianAddCalls: [],
+      atlassianReconnectCalls: [],
     },
     handlers: defaultHandlers(),
   };
@@ -531,6 +540,71 @@ export function dayseamTauriMockInit(catalogue: Catalogue): void {
         void accountId;
         void apiToken;
         return created;
+      },
+
+      // ── Domain: Atlassian reconnect (DAY-87) ──────────────────
+      // Token-only reconnect. The Rust side validates the token
+      // server-side via `/rest/api/3/myself`, enforces the bound
+      // account id, rotates the keychain slot, and returns every
+      // source id that shared the rotated `SecretRef`. The mock
+      // mirrors that shape: we flip `last_health.ok` back to true
+      // on each affected row and return the ids so the frontend's
+      // follow-up `sources_healthcheck` lands on a freshly-green
+      // chip. Journey-A shared-PAT scenarios get both ids back.
+      atlassian_sources_reconnect: async (args) => {
+        const sourceId = String(args.sourceId ?? "");
+        const apiToken = String(args.apiToken ?? "");
+        state.captured.atlassianReconnectCalls.push({ sourceId, apiToken });
+
+        const target = sources.find((s) => s.id === sourceId);
+        if (!target) {
+          throw new Error(
+            `[dayseam-e2e] atlassian_sources_reconnect: unknown source ${sourceId}`,
+          );
+        }
+        const targetSecret = target.secret_ref as
+          | { keychain_service: string; keychain_account: string }
+          | null;
+        const affected: string[] = [];
+        for (const s of sources) {
+          const sr = s.secret_ref as
+            | { keychain_service: string; keychain_account: string }
+            | null;
+          const sameSlot =
+            sr != null &&
+            targetSecret != null &&
+            sr.keychain_service === targetSecret.keychain_service &&
+            sr.keychain_account === targetSecret.keychain_account;
+          if (s.id === sourceId || sameSlot) {
+            s.last_health = {
+              ok: true,
+              checked_at: new Date().toISOString(),
+              last_error: null,
+            };
+            affected.push(String(s.id));
+          }
+        }
+        return affected;
+      },
+
+      // Healthcheck is a simple "flip the row to ok, return the
+      // current health snapshot" shim — the real Rust side runs a
+      // connector-specific probe but the reconnect scenarios only
+      // need the "chip turns green again" affordance.
+      sources_healthcheck: async (args) => {
+        const id = String(args.id ?? "");
+        const target = sources.find((s) => s.id === id);
+        if (!target) {
+          throw new Error(
+            `[dayseam-e2e] sources_healthcheck: unknown source ${id}`,
+          );
+        }
+        target.last_health = {
+          ok: true,
+          checked_at: new Date().toISOString(),
+          last_error: null,
+        };
+        return target.last_health;
       },
     };
 
