@@ -28,6 +28,7 @@ fn serde_default_audit_trybuild() {
     t.pass("tests/trybuild/pass/accepts_repair_annotation.rs");
     t.pass("tests/trybuild/pass/accepts_no_repair_waiver.rs");
     t.pass("tests/trybuild/pass/accepts_enum_variant_fields.rs");
+    t.pass("tests/trybuild/pass/accepts_github_variant.rs");
     t.pass("tests/trybuild/pass/passes_fields_without_serde_default.rs");
     t.compile_fail("tests/trybuild/fail/missing_audit_annotation.rs");
     t.compile_fail("tests/trybuild/fail/empty_no_repair_reason.rs");

@@ -8,6 +8,24 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **DAY-94: `PatAuth::github` constructor + connectors-SDK DTO design
+  note.** New `PatAuth::github(token, keychain_service, keychain_account)`
+  constructor (delegates to `PatAuth::bearer` — GitHub's classic and
+  fine-grained PATs both accept the `Authorization: Bearer <token>`
+  shape) with inline unit tests pinning the header, descriptor
+  round-trip, Debug-no-leak, and shared-handle invariants.
+  Integration test `crates/connectors-sdk/tests/github_pat_auth.rs`
+  mirrors the Atlassian suite and re-proves CORR-01 for GitHub: 401
+  / 403 responses flow through `HttpClient::send` as raw
+  `reqwest::Response` objects so `connector-github` (DAY-95) owns
+  the `github.auth.*` classification. New `connectors_sdk::dtos`
+  doc-only module documents the persisted-state-vs-HTTP-DTO
+  convention (persisted: `SerdeDefaultAudit` required; HTTP:
+  `#[serde(default)]` freely) resolving CONS-v0.3-01 from the v0.3
+  capstone. A new trybuild pass fixture
+  `accepts_github_variant.rs` locks in that `SourceConfig::GitHub`'s
+  required-only `api_base_url` field passes the audit derive
+  alongside the existing audited-variant shape.
 - **DAY-93: `dayseam-core` GitHub types landed.** `SourceKind::GitHub`
   + `SourceConfig::GitHub { api_base_url }`,
   `SourceIdentityKind::GitHubUserId`, nine `ActivityKind::GitHub*`

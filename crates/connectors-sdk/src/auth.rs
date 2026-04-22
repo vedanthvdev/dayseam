@@ -207,6 +207,42 @@ impl PatAuth {
             },
         }
     }
+
+    /// Construct a PAT auth with GitHub's `Authorization: Bearer <token>`
+    /// header shape.
+    ///
+    /// This is a thin wrapper over [`PatAuth::bearer`] — GitHub's REST
+    /// API accepts the same bearer shape Jira DC uses, so the
+    /// implementation delegates. The reason `github(…)` exists as a
+    /// distinct constructor, rather than every GitHub caller reaching
+    /// for `bearer(…)` directly, is twofold:
+    ///
+    /// 1. **Discoverability.** A connector author scanning `PatAuth`'s
+    ///    associated functions sees `gitlab`, `bearer`, `github` and
+    ///    can pick by source kind without having to know GitHub's
+    ///    header spelling. This mirrors the v0.1 `gitlab`/`bearer` pair
+    ///    where `bearer` was left as the escape hatch and `gitlab` was
+    ///    the named-by-source factory.
+    /// 2. **Future-proofing.** If GitHub's auth shape diverges (e.g.
+    ///    fine-grained PATs add a `X-GitHub-Api-Version` companion
+    ///    header, or GitHub Enterprise requires a per-host `User-Agent`
+    ///    override), the changes land inside this constructor without
+    ///    touching callers. Keeping the named constructor is cheaper
+    ///    than inlining `bearer(…)` into every call site and then
+    ///    regretting it a quarter later.
+    ///
+    /// Token bytes are wrapped in a [`SecretString`] immediately; the
+    /// raw `token` argument is consumed by `format!` inside `bearer`
+    /// and does not outlive this call. See
+    /// [`crate::dtos`](crate::dtos) for the persisted-vs-wire-format
+    /// convention this connector family follows.
+    pub fn github(
+        token: impl Into<String>,
+        keychain_service: impl Into<String>,
+        keychain_account: impl Into<String>,
+    ) -> Self {
+        Self::bearer(token, keychain_service, keychain_account)
+    }
 }
 
 // Manual `Debug` — the derived impl would have printed `header_value`
@@ -424,6 +460,93 @@ mod tests {
             !rendered.contains("Bearer "),
             "header prefix leaked via Debug: {rendered}"
         );
+    }
+
+    // --------------------------------------------------------------
+    // DAY-94 — PatAuth::github (GitHub REST / Enterprise Server)
+    // --------------------------------------------------------------
+
+    /// GitHub documents `Authorization: Bearer <token>` as the forward
+    /// shape for classic PATs, fine-grained PATs, and GitHub App
+    /// installation tokens. `github(…)` delegates to `bearer(…)`, so a
+    /// regression that changes either the header name or the
+    /// `"Bearer "` prefix is caught here rather than at integration
+    /// time against the live API.
+    #[tokio::test]
+    async fn github_pat_attaches_bearer_authorization_header() {
+        let client = reqwest::Client::new();
+        let req = client.get("https://api.github.com/user");
+        let strat = PatAuth::github("ghp_abc123", "dayseam.github", "acme");
+        let out = strat.authenticate(req).await.expect("ok");
+        let built = out.build().expect("build");
+        assert_eq!(
+            built
+                .headers()
+                .get("Authorization")
+                .map(|v| v.to_str().unwrap()),
+            Some("Bearer ghp_abc123")
+        );
+        // The strategy name is still `pat` (not `github`): the trait's
+        // `name()` is the strategy-family label the UI renders, not a
+        // per-source discriminator. Renaming it would be a
+        // user-visible change and is explicitly out of scope.
+        assert_eq!(strat.name(), "pat");
+    }
+
+    /// `Debug` on a GitHub `PatAuth` must not leak either the raw
+    /// `ghp_*` token bytes or the baked `Bearer <token>` header value.
+    /// This is the same invariant [`bearer_debug_does_not_leak_token`]
+    /// asserts for the generic constructor — spelled out separately so
+    /// a future refactor that carves `github(…)` into its own struct
+    /// has to re-prove it rather than inheriting the guarantee
+    /// implicitly.
+    #[test]
+    fn github_pat_debug_does_not_leak_token() {
+        let strat = PatAuth::github("ghp_super_secret_token", "dayseam.github", "acme");
+        let rendered = format!("{strat:?}");
+        assert!(
+            !rendered.contains("ghp_super_secret_token"),
+            "GitHub PAT leaked via Debug: {rendered}"
+        );
+        assert!(
+            !rendered.contains("Bearer "),
+            "Bearer prefix leaked via Debug: {rendered}"
+        );
+        assert!(rendered.contains("***"), "missing redaction: {rendered}");
+    }
+
+    /// Descriptor round-trip: a `PatAuth::github` with keychain handle
+    /// `(svc, acct)` deserialises back into a matching
+    /// `AuthDescriptor::Pat { keychain_service: "svc", keychain_account:
+    /// "acct" }`. The `Pat` descriptor variant is shared across all
+    /// PAT-shaped strategies (GitLab PRIVATE-TOKEN, Jira DC bearer,
+    /// GitHub bearer) — the `AuthDescriptor` enum deliberately does
+    /// not carry a per-source discriminator because the keychain
+    /// handle is already a unique-per-source identifier.
+    #[test]
+    fn github_pat_descriptor_round_trips_keychain_handle() {
+        let strat = PatAuth::github("ghp_t", "dayseam.github", "acme");
+        assert_eq!(
+            strat.descriptor(),
+            AuthDescriptor::Pat {
+                keychain_service: "dayseam.github".into(),
+                keychain_account: "acme".into(),
+            }
+        );
+    }
+
+    /// Two `PatAuth::github` instances sharing the same keychain handle
+    /// (e.g. a user connecting two GitHub Enterprise Server hosts that
+    /// happen to use the same service account) round-trip into equal
+    /// descriptors. The DB-level `secret_ref` uniqueness guard
+    /// (DAY-73 `0005`) hangs off this invariant; a regression that
+    /// made two identical handles compare unequal would let the same
+    /// token bytes be written twice into the keychain.
+    #[test]
+    fn github_pat_same_keychain_handle_produces_equal_descriptors() {
+        let a = PatAuth::github("token-A", "dayseam.github", "acme");
+        let b = PatAuth::github("token-B", "dayseam.github", "acme");
+        assert_eq!(a.descriptor(), b.descriptor());
     }
 
     // --------------------------------------------------------------

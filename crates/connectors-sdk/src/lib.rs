@@ -25,6 +25,7 @@ pub mod auth;
 pub mod clock;
 pub mod connector;
 pub mod ctx;
+pub mod dtos;
 pub mod http;
 pub mod mock;
 pub mod raw_store;
