@@ -8,6 +8,40 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Added
 
+- **DAY-97: `dayseam-report` — GitHub PR ↔ Jira enrichment + cross-source
+  PR↔MR linking + verbose `(triggered by …)` rendering.**
+  `annotate_transition_with_mr` is now provider-agnostic: alongside
+  GitLab `MrOpened` / `MrMerged`, it credits `GitHubPullRequestOpened` /
+  `…Merged` / `…Closed` as triggering events for a Jira transition.
+  A new `MR_TRIGGER_WINDOW = 24h` constant enforces the temporal guard
+  the DAY-88 docstring promised but never actually applied — a
+  candidate MR/PR must fall in `[transition - 24h, transition]` to
+  be credited. New pass `extract_github_pr_urls` (regex-free, same
+  rationale as `scan_ticket_keys`) scans GitLab MR titles + bodies
+  for `https://github.com/<owner>/<repo>/pull/<N>` URLs and attaches
+  an `EntityKind::GitHubPullRequest` entity with
+  `external_id = "<repo>#<N>"` + `label = "#<N>"` on the MR event so
+  the evidence popover can surface the cross-link. Wired into
+  `pipeline` between `extract_ticket_keys` and
+  `annotate_transition_with_mr` so the usual ordering invariants
+  hold. `render_atlassian_bullet` now takes a `verbose_mode` flag and
+  renders a `(triggered by <label>)` suffix when the transition
+  carries a `parent_external_id` — GitLab MRs pass through as
+  `!321`, GitHub PRs strip the repo prefix to `#42` to match the
+  notation GitHub itself uses. `group_key_from_event` adds an
+  explicit GitHub arm so PR / issue events group by the
+  `github_repo` entity's `owner/repo` slug instead of landing in the
+  `/` orphan bucket. Tests: unit coverage for the URL scanner
+  (single / multiple / trailing path fragments / non-GitHub hosts /
+  non-MR events), the 24h temporal guard (before / after / exactly
+  at the window edge), the suffix-shape helpers
+  (`!321` pass-through, `repo#42` → `#42`, empty → `None`, unknown
+  → verbatim), the GitHub-repo grouping arm, and three integration
+  tests pinning the end-to-end shape: verbose mode renders
+  `(triggered by !321)` for GitLab and `(triggered by #42)` for
+  GitHub, plain mode hides the suffix, and a mixed GitLab + GitHub
+  + Jira day still produces one bullet per event with the earliest
+  credit winning.
 - **DAY-96: `connector-github::walk` — events walker + normaliser +
   rapid-review collapse.** `GithubConnector::sync(SyncRequest::Day)`
   now walks a local-timezone day of GitHub activity end-to-end. Four

@@ -1,6 +1,6 @@
 //! Cross-source enrichment pipeline.
 //!
-//! Two passes, both pure and idempotent:
+//! Three passes, all pure and idempotent:
 //!
 //! 1. [`extract_ticket_keys`] scans every event's `title` + `body`
 //!    for Jira-shaped ticket keys (`/\b[A-Z]{2,10}-\d+\b/`) and
@@ -9,13 +9,28 @@
 //!    gets a `jira_issue` entity pointing at `CAR-5117` with **zero
 //!    Jira API calls**. Downstream passes use this to cross-link MRs
 //!    to Jira transitions.
-//! 2. [`annotate_transition_with_mr`] walks `JiraIssueTransitioned`
+//! 2. [`extract_github_pr_urls`] scans GitLab MR events' `title` +
+//!    `body` for `https://github.com/<owner>/<repo>/pull/<N>` URLs
+//!    and attaches a `github_pull_request` [`EntityRef`] whose
+//!    `external_id` matches the GitHub connector's
+//!    `"{repo}#{number}"` shape, so a single day's events
+//!    cross-reference GitLab MRs and the GitHub PRs they mention.
+//!    DAY-97.
+//! 3. [`annotate_transition_with_mr`] walks `JiraIssueTransitioned`
 //!    events and, for each one, looks up whether the day also has a
-//!    matching `MrOpened` / `MrMerged` with a `jira_issue` target
+//!    matching MR-like event — a GitLab `MrOpened` / `MrMerged` or
+//!    a GitHub `GitHubPullRequestOpened` / `GitHubPullRequestMerged`
+//!    / `GitHubPullRequestClosed` — with a `jira_issue` target
 //!    pointing at the same issue key. When it does, the transition's
-//!    `parent_external_id` is set to the MR's `external_id`, so the
-//!    verbose-mode render can show `(triggered by !321)` next to a
-//!    status change.
+//!    `parent_external_id` is set to the MR/PR's `external_id`, so
+//!    the verbose-mode render can show `(triggered by !321)` or
+//!    `(triggered by #42)` next to a status change. DAY-97
+//!    generalises the DAY-78 GitLab-only pipeline and lands the
+//!    previously-documented-but-unimplemented 24h temporal guard:
+//!    the triggering MR/PR must *precede* the transition and be
+//!    within 24 hours of it. A PR opened *after* a transition can't
+//!    have triggered it, and an MR merged a week earlier is too far
+//!    out to credibly claim authorship of today's status change.
 //!
 //! # Why regex-free
 //!
@@ -40,12 +55,22 @@
 
 use std::collections::HashMap;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use dayseam_core::{ActivityEvent, ActivityKind, EntityKind, EntityRef};
 use uuid::Uuid;
 
 /// Bail threshold for [`extract_ticket_keys`]. See the module docs.
 pub(crate) const MAX_TICKET_KEYS_PER_EVENT: usize = 3;
+
+/// Maximum lookback for [`annotate_transition_with_mr`].
+///
+/// A triggering MR/PR must precede the transition by at most this
+/// window. The cap is the same 24h threshold the v0.2 dogfood notes
+/// called out as the "obviously too loose" band — a transition that
+/// happens more than a day after the MR is more likely organic
+/// triage than MR-driven. DAY-97 makes this a concrete guard
+/// instead of the prose promise it was pre-v0.4.
+pub(crate) const MR_TRIGGER_WINDOW: Duration = Duration::hours(24);
 
 /// Attach a `jira_issue` [`EntityRef`] for every ticket key found in
 /// each event's `title` and `body`.
@@ -87,41 +112,56 @@ pub fn extract_ticket_keys(events: &mut [ActivityEvent]) {
     }
 }
 
-/// Annotate `JiraIssueTransitioned` events with the GitLab MR that
-/// (probably) triggered them.
+/// Annotate `JiraIssueTransitioned` events with the GitLab MR or
+/// GitHub PR that (probably) triggered them.
 ///
 /// Uses the `jira_issue` [`EntityRef`] that [`extract_ticket_keys`]
-/// attaches to MRs: an `MrOpened` / `MrMerged` whose title carried
-/// the ticket key `CAR-5117` exposes a `jira_issue` entity with
-/// `external_id = "CAR-5117"`. A `JiraIssueTransitioned` event for
-/// `CAR-5117` then finds that MR via the index built here and stamps
-/// `parent_external_id = Some(<mr_external_id>)`.
+/// attaches to MRs and PRs: an `MrOpened` / `MrMerged` / GitHub PR
+/// event whose title carried the ticket key `CAR-5117` exposes a
+/// `jira_issue` entity with `external_id = "CAR-5117"`. A
+/// `JiraIssueTransitioned` event for `CAR-5117` then finds the
+/// triggering MR/PR and stamps `parent_external_id =
+/// Some(<mr_or_pr_external_id>)`.
 ///
-/// Earliest-MR-wins by `occurred_at`, with a stable tie-break on
-/// `ActivityEvent::id` (UUIDv5, deterministic from
-/// `(source_id, external_id, kind)` — content-addressable, so the
-/// tie-break is reproducible across runs regardless of walker
-/// insertion order).
+/// # Selection
 ///
-/// Pre-DAY-88 this picked "first in input order" using
-/// `HashMap::entry(_).or_insert(_)`. That was walker-insertion
-/// dependent: a fan-out that merged GitLab events before Jira ones
-/// (or vice-versa) changed which MR claimed a shared Jira issue.
-/// CORR-v0.2-05 makes the choice temporal: the MR that happened
-/// first chronologically wins — that's what the user would expect
-/// to see called out in the EOD narrative as "the MR that triggered
-/// the status change".
+/// For each transition, the candidate MR/PR set is the MRs and PRs
+/// on the same Jira issue whose `occurred_at` falls in
+/// `[transition - MR_TRIGGER_WINDOW, transition]` — i.e. the MR/PR
+/// must **precede** the transition by at most 24 hours. This is the
+/// DAY-88 temporal guard generalised to cross-source: a PR opened
+/// *after* a transition can't have triggered it, and an MR merged
+/// a week earlier is too stale to credibly claim authorship of
+/// today's status change. The chosen MR/PR within that window is
+/// the earliest one, tie-broken by `ActivityEvent::id` (UUIDv5 from
+/// `(source_id, external_id, kind)`) so swapping walker output
+/// order never flips the pick.
 ///
-/// Overwrites any existing `parent_external_id` on the transition.
-/// DAY-77's Jira connector populates `parent_external_id` with the
-/// issue key for routing purposes, but issue key is also in the
-/// event's `entities` list — the field is free to repurpose here.
+/// # Provider-agnostic
+///
+/// "MR-like" is a closed set of activity kinds:
+///
+/// * GitLab: [`ActivityKind::MrOpened`], [`ActivityKind::MrMerged`].
+/// * GitHub (DAY-97): [`ActivityKind::GitHubPullRequestOpened`],
+///   [`ActivityKind::GitHubPullRequestMerged`],
+///   [`ActivityKind::GitHubPullRequestClosed`]. Review and comment
+///   PR events are deliberately excluded — reviewing a PR doesn't
+///   imply authorship of the code that triggered the transition.
+///
+/// # Behaviour
+///
+/// Overwrites any existing `parent_external_id` on the transition
+/// when a trigger is found. DAY-77's Jira connector populates
+/// `parent_external_id` with the issue key for routing purposes,
+/// but the issue key is also in the event's `entities` list — the
+/// field is free to repurpose here.
 ///
 /// No-op on events that aren't `JiraIssueTransitioned`.
-/// No-op on transitions whose issue key has no matching MR.
+/// No-op on transitions whose issue key has no matching MR/PR in
+/// the window.
 pub fn annotate_transition_with_mr(events: &mut [ActivityEvent]) {
-    let issue_to_mr = build_issue_to_mr_index(events);
-    if issue_to_mr.is_empty() {
+    let candidates = build_issue_to_mr_candidates(events);
+    if candidates.is_empty() {
         return;
     }
     for event in events.iter_mut() {
@@ -136,52 +176,288 @@ pub fn annotate_transition_with_mr(events: &mut [ActivityEvent]) {
         else {
             continue;
         };
-        if let Some(mr_id) = issue_to_mr.get(issue_key.as_str()) {
-            event.parent_external_id = Some(mr_id.clone());
+        let Some(pool) = candidates.get(issue_key.as_str()) else {
+            continue;
+        };
+        let transition_at = event.occurred_at;
+        let window_start = transition_at - MR_TRIGGER_WINDOW;
+        // Pick the earliest MR/PR in `[window_start, transition_at]`
+        // on `(occurred_at, id)` order. Running the filter per
+        // transition (rather than once at index-build time) is what
+        // lets a single MR cleanly trigger same-day *and* next-day
+        // transitions while a far-back MR stops being credited on
+        // day two.
+        let winner = pool
+            .iter()
+            .filter(|c| c.occurred_at >= window_start && c.occurred_at <= transition_at)
+            .min_by_key(|c| (c.occurred_at, c.id));
+        if let Some(c) = winner {
+            event.parent_external_id = Some(c.external_id.clone());
         }
     }
 }
 
-/// Build an issue-key → winning-MR-`external_id` index.
+/// One MR/PR candidate for `annotate_transition_with_mr`'s
+/// per-transition window search.
 ///
-/// Owned strings so the caller can freely `iter_mut()` the event vec
-/// after we return. Using `&str` references ties the index lifetime
-/// to the borrow of `events`, which conflicts with the subsequent
-/// mutable walk.
+/// Owned strings so the caller can freely `iter_mut()` the event
+/// vec after we return — tying `&str` references to the `events`
+/// borrow would conflict with the subsequent mutable walk.
+#[derive(Debug, Clone)]
+struct MrCandidate {
+    occurred_at: DateTime<Utc>,
+    id: Uuid,
+    external_id: String,
+}
+
+/// Build an issue-key → candidate-MRs/PRs index.
 ///
-/// For each Jira issue referenced by any MR, picks the MR with the
-/// earliest `occurred_at`. Ties break on the MR's deterministic
-/// `ActivityEvent::id`, so two MRs with identical timestamps always
-/// resolve the same way across runs. See
-/// [`annotate_transition_with_mr`] for the rationale on switching
-/// from walker-insertion order to temporal order.
-fn build_issue_to_mr_index(events: &[ActivityEvent]) -> HashMap<String, String> {
-    // Candidate winning MR per issue_key: (occurred_at, id, external_id).
-    // The `(occurred_at, id)` tuple is `Ord` under the natural
-    // lexicographic rule — earlier time wins, same-time ties break
-    // on the UUID.
-    let mut best: HashMap<String, (DateTime<Utc>, Uuid, String)> = HashMap::new();
+/// Every MR/PR is a candidate for every same-issue transition; the
+/// per-transition window filter inside
+/// [`annotate_transition_with_mr`] picks the winner.
+fn build_issue_to_mr_candidates(events: &[ActivityEvent]) -> HashMap<String, Vec<MrCandidate>> {
+    let mut out: HashMap<String, Vec<MrCandidate>> = HashMap::new();
     for event in events {
-        if !matches!(event.kind, ActivityKind::MrOpened | ActivityKind::MrMerged) {
+        if !is_mr_like(event.kind) {
             continue;
         }
         for ent in &event.entities {
             if ent.kind != EntityKind::JiraIssue {
                 continue;
             }
-            let incoming = (event.occurred_at, event.id, event.external_id.clone());
-            best.entry(ent.external_id.clone())
-                .and_modify(|current| {
-                    if (incoming.0, incoming.1) < (current.0, current.1) {
-                        *current = incoming.clone();
-                    }
-                })
-                .or_insert(incoming);
+            out.entry(ent.external_id.clone())
+                .or_default()
+                .push(MrCandidate {
+                    occurred_at: event.occurred_at,
+                    id: event.id,
+                    external_id: event.external_id.clone(),
+                });
         }
     }
-    best.into_iter()
-        .map(|(issue_key, (_, _, mr_external_id))| (issue_key, mr_external_id))
-        .collect()
+    out
+}
+
+/// Kinds treated as "MR-like" trigger candidates by
+/// [`annotate_transition_with_mr`].
+///
+/// Kept local so the list stays next to its usage and adding a new
+/// provider's MR-opening kind is a one-line change. Review and
+/// comment events are excluded — reviewing a PR doesn't imply
+/// authorship of the code that triggered the transition.
+fn is_mr_like(kind: ActivityKind) -> bool {
+    matches!(
+        kind,
+        ActivityKind::MrOpened
+            | ActivityKind::MrMerged
+            | ActivityKind::GitHubPullRequestOpened
+            | ActivityKind::GitHubPullRequestMerged
+            | ActivityKind::GitHubPullRequestClosed
+    )
+}
+
+/// Scan GitLab MR events for cross-linked GitHub PR URLs and
+/// attach `EntityKind::GitHubPullRequest` entities pointing at
+/// them.
+///
+/// An MR description like
+/// `"Mirrors https://github.com/vedanthvdev/dayseam/pull/42"` produces
+/// a `github_pull_request` entity with
+/// `external_id = "dayseam#42"` — the same shape the GitHub
+/// connector emits in [`crate::group_key`] and on its own PR events.
+/// Downstream the render layer treats the cross-linked PR the same
+/// as a native one, and a future "PR↔MR diff" view can key off
+/// the entity to show the two artifacts side-by-side.
+///
+/// # Scope
+///
+/// Only scans GitLab MR-shaped events today
+/// ([`ActivityKind::MrOpened`] / [`ActivityKind::MrMerged`]).
+/// GitHub PR events don't need this pass because their entities
+/// are already populated by the GitHub connector itself. Scanning
+/// commits would be noisy — commit messages routinely link to
+/// upstream PRs that weren't authored by the user.
+///
+/// # Idempotent
+///
+/// A second call produces no new entities because the helper
+/// checks for an existing `github_pull_request` entity with a
+/// matching `external_id` before pushing.
+///
+/// # Regex-free
+///
+/// Hand-rolled byte scanner for the same reason
+/// [`scan_ticket_keys`] avoids the `regex` crate — keeping this
+/// crate dependency-light because every UI filter toggle
+/// re-renders through it. See the module docs.
+pub fn extract_github_pr_urls(events: &mut [ActivityEvent]) {
+    for event in events.iter_mut() {
+        if !matches!(event.kind, ActivityKind::MrOpened | ActivityKind::MrMerged) {
+            continue;
+        }
+        let mut found: Vec<GithubPrRef> = Vec::new();
+        scan_github_pr_urls(&event.title, &mut found);
+        if let Some(body) = &event.body {
+            scan_github_pr_urls(body, &mut found);
+        }
+        if found.is_empty() {
+            continue;
+        }
+        found.sort_by(|a, b| a.external_id.cmp(&b.external_id));
+        found.dedup_by(|a, b| a.external_id == b.external_id);
+        for pr in found {
+            let already = event.entities.iter().any(|e| {
+                e.kind == EntityKind::GitHubPullRequest && e.external_id == pr.external_id
+            });
+            if already {
+                continue;
+            }
+            event.entities.push(EntityRef {
+                kind: EntityKind::GitHubPullRequest,
+                external_id: pr.external_id,
+                label: Some(pr.label),
+            });
+        }
+    }
+}
+
+/// One `github.com` PR URL match.
+///
+/// `external_id` is the normalised `"{repo}#{number}"` shape the
+/// GitHub connector uses; `label` is the `#{number}` short form the
+/// Jira/Confluence render layer displays in the verbose suffix.
+struct GithubPrRef {
+    external_id: String,
+    label: String,
+}
+
+/// Scan `text` for `https://github.com/<owner>/<repo>/pull/<N>`
+/// URLs and append matches to `out`.
+///
+/// Case-insensitive on the scheme + host. Trailing path segments
+/// (`/files`, `/commits`, `#issuecomment-…`) are tolerated — the
+/// scan consumes characters after the PR number until it hits a
+/// non-URL-safe character or end of input.
+fn scan_github_pr_urls(text: &str, out: &mut Vec<GithubPrRef>) {
+    // Marker-based scan: we're looking for a `github.com/<owner>/<repo>/pull/<N>`
+    // fragment. Finding the literal `/pull/` first narrows the search — then we
+    // walk *backwards* to recover the owner/repo and *forwards* to collect the
+    // PR number.
+    let bytes = text.as_bytes();
+    let needle = b"/pull/";
+    let mut i = 0;
+    while i + needle.len() <= bytes.len() {
+        if !starts_with(&bytes[i..], needle) {
+            i += 1;
+            continue;
+        }
+        // Walk back to recover `<host>/<owner>/<repo>` by
+        // finding the four slash boundaries surrounding them.
+        // For `https://github.com/<owner>/<repo>/pull/<N>` those
+        // are, from the match site walking backwards: the slash
+        // before `pull`, the slash before `<repo>`, the slash
+        // before `<owner>`, and the second slash of `://` sitting
+        // before `<host>`.
+        let slash_before_pull = i;
+        let slash_before_repo = match rfind_byte(bytes, slash_before_pull, b'/') {
+            Some(j) => j,
+            None => {
+                i += needle.len();
+                continue;
+            }
+        };
+        let slash_before_owner = match rfind_byte(bytes, slash_before_repo, b'/') {
+            Some(j) => j,
+            None => {
+                i += needle.len();
+                continue;
+            }
+        };
+        let slash_before_host = match rfind_byte(bytes, slash_before_owner, b'/') {
+            Some(j) => j,
+            None => {
+                i += needle.len();
+                continue;
+            }
+        };
+        let host = &bytes[slash_before_host + 1..slash_before_owner];
+        if !eq_ignore_ascii_case(host, b"github.com") {
+            i += needle.len();
+            continue;
+        }
+        let owner = &bytes[slash_before_owner + 1..slash_before_repo];
+        let repo = &bytes[slash_before_repo + 1..slash_before_pull];
+        if owner.is_empty()
+            || repo.is_empty()
+            || !owner.iter().all(|&b| is_url_ident(b))
+            || !repo.iter().all(|&b| is_url_ident(b))
+        {
+            i += needle.len();
+            continue;
+        }
+        // Collect digits after `/pull/`.
+        let digits_start = i + needle.len();
+        let mut j = digits_start;
+        while j < bytes.len() && bytes[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j == digits_start {
+            i += needle.len();
+            continue;
+        }
+        let number = match std::str::from_utf8(&bytes[digits_start..j]) {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                i = j;
+                continue;
+            }
+        };
+        let repo_str = match std::str::from_utf8(repo) {
+            Ok(s) => s.to_string(),
+            Err(_) => {
+                i = j;
+                continue;
+            }
+        };
+        out.push(GithubPrRef {
+            external_id: format!("{repo_str}#{number}"),
+            label: format!("#{number}"),
+        });
+        i = j;
+    }
+}
+
+fn starts_with(hay: &[u8], needle: &[u8]) -> bool {
+    hay.len() >= needle.len() && &hay[..needle.len()] == needle
+}
+
+fn rfind_byte(hay: &[u8], end_exclusive: usize, target: u8) -> Option<usize> {
+    if end_exclusive == 0 {
+        return None;
+    }
+    let mut k = end_exclusive;
+    while k > 0 {
+        k -= 1;
+        if hay[k] == target {
+            return Some(k);
+        }
+    }
+    None
+}
+
+fn eq_ignore_ascii_case(a: &[u8], b: &[u8]) -> bool {
+    a.len() == b.len()
+        && a.iter()
+            .zip(b.iter())
+            .all(|(x, y)| x.eq_ignore_ascii_case(y))
+}
+
+/// Owner / repo segment character set: letters, digits, dot, dash,
+/// underscore. GitHub allows these in repo names and the scan is
+/// anchored inside `/pull/` so adjacency to URL punctuation
+/// (`(parenthesised)`, `[bracketed]`, trailing `.`) is already
+/// excluded by the `starts_with` check one level up.
+const fn is_url_ident(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || b == b'-' || b == b'_' || b == b'.'
 }
 
 /// Scan `text` for `[A-Z]{2,10}-\d+` tokens and push matches onto
@@ -252,7 +528,7 @@ const fn is_ascii_alnum(b: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::{TimeZone, Utc};
+    use chrono::{DateTime, Duration, TimeZone, Utc};
     use dayseam_core::{Actor, EntityKind, EntityRef, Privacy, RawRef, SourceId};
     use uuid::Uuid;
 
@@ -582,6 +858,333 @@ mod tests {
         assert_eq!(
             transition_ba.parent_external_id.as_deref(),
             Some(winning_id)
+        );
+    }
+
+    // ----- DAY-97: GitHub PR → Jira transition enrichment -----------------
+
+    /// Build a GitHub-shaped PR event. Mirrors the shape
+    /// `connector_github::normalise::compose_pr_event` produces:
+    /// `external_id` is `"{repo}#{number}"` (no owner prefix —
+    /// GitHub's `/users/{login}/events` stream uses the short form);
+    /// the title carries the Jira ticket key the same way a GitLab
+    /// MR title would; the `jira_issue` entity is populated by
+    /// `extract_ticket_keys` upstream in the pipeline and is
+    /// simulated here so the unit test stays focused on the
+    /// annotate pass.
+    fn github_pr_event(
+        kind: ActivityKind,
+        repo: &str,
+        number: u32,
+        occurred_at: DateTime<Utc>,
+        ticket_key: &str,
+    ) -> ActivityEvent {
+        let external_id = format!("{repo}#{number}");
+        let mut e = event(
+            kind,
+            &external_id,
+            &format!("{ticket_key}: Rename commands"),
+        );
+        e.occurred_at = occurred_at;
+        e.entities.push(EntityRef {
+            kind: EntityKind::GitHubPullRequest,
+            external_id: external_id.clone(),
+            label: Some(format!("#{number}")),
+        });
+        e.entities.push(EntityRef {
+            kind: EntityKind::JiraIssue,
+            external_id: ticket_key.into(),
+            label: None,
+        });
+        e
+    }
+
+    /// Plan v0.4 Task 6 invariant 1: a GitHub PR opened shortly
+    /// before a transition on the same Jira key stamps
+    /// `parent_external_id` with the PR's `external_id`.
+    #[test]
+    fn jira_transition_annotates_triggering_github_pr() {
+        let pr_time = Utc.with_ymd_and_hms(2026, 4, 20, 9, 0, 0).unwrap();
+        let pr = github_pr_event(
+            ActivityKind::GitHubPullRequestOpened,
+            "dayseam",
+            42,
+            pr_time,
+            "CAR-5117",
+        );
+        let mut transition = jira_transition("CAR-5117");
+        transition.occurred_at = Utc.with_ymd_and_hms(2026, 4, 20, 11, 0, 0).unwrap();
+        let mut events = vec![pr, transition];
+        annotate_transition_with_mr(&mut events);
+        let t = events
+            .iter()
+            .find(|e| e.kind == ActivityKind::JiraIssueTransitioned)
+            .unwrap();
+        assert_eq!(
+            t.parent_external_id.as_deref(),
+            Some("dayseam#42"),
+            "GitHub PR external_id must be stamped on the transition"
+        );
+    }
+
+    /// Plan v0.4 Task 6 invariant 2: a PR opened **after** the
+    /// transition must NOT produce the annotation. Guards against
+    /// the "attribution travelling backward in time" failure mode
+    /// the v0.2 dogfood notes flagged.
+    #[test]
+    fn jira_transition_does_not_annotate_subsequent_github_pr() {
+        let transition_time = Utc.with_ymd_and_hms(2026, 4, 20, 9, 0, 0).unwrap();
+        let pr_time = transition_time + Duration::minutes(30);
+        let pr = github_pr_event(
+            ActivityKind::GitHubPullRequestOpened,
+            "dayseam",
+            99,
+            pr_time,
+            "CAR-5117",
+        );
+        let mut transition = jira_transition("CAR-5117");
+        transition.occurred_at = transition_time;
+        let mut events = vec![pr, transition];
+        annotate_transition_with_mr(&mut events);
+        let t = events
+            .iter()
+            .find(|e| e.kind == ActivityKind::JiraIssueTransitioned)
+            .unwrap();
+        assert_eq!(
+            t.parent_external_id, None,
+            "PR that happens after the transition must not claim authorship"
+        );
+    }
+
+    /// Plan v0.4 Task 6 invariant 2 (stale side): a PR merged more
+    /// than `MR_TRIGGER_WINDOW` before the transition is not
+    /// credited. This is the "the MR that shipped last week" case.
+    #[test]
+    fn jira_transition_ignores_mr_outside_24h_window() {
+        let transition_time = Utc.with_ymd_and_hms(2026, 4, 20, 12, 0, 0).unwrap();
+        let stale_mr_time = transition_time - Duration::hours(25);
+        let pr = github_pr_event(
+            ActivityKind::GitHubPullRequestMerged,
+            "dayseam",
+            7,
+            stale_mr_time,
+            "CAR-5117",
+        );
+        let mut transition = jira_transition("CAR-5117");
+        transition.occurred_at = transition_time;
+        let mut events = vec![pr, transition];
+        annotate_transition_with_mr(&mut events);
+        let t = events
+            .iter()
+            .find(|e| e.kind == ActivityKind::JiraIssueTransitioned)
+            .unwrap();
+        assert_eq!(t.parent_external_id, None);
+    }
+
+    /// Exactly on the 24h boundary — the guard is inclusive so
+    /// an MR that opened 24 hours prior still counts. This pins
+    /// the boundary so a future refactor that flips it to
+    /// `<` instead of `<=` is caught.
+    #[test]
+    fn jira_transition_annotates_mr_exactly_at_24h_window_edge() {
+        let transition_time = Utc.with_ymd_and_hms(2026, 4, 20, 12, 0, 0).unwrap();
+        let boundary_mr_time = transition_time - Duration::hours(24);
+        let pr = github_pr_event(
+            ActivityKind::GitHubPullRequestOpened,
+            "dayseam",
+            7,
+            boundary_mr_time,
+            "CAR-5117",
+        );
+        let mut transition = jira_transition("CAR-5117");
+        transition.occurred_at = transition_time;
+        let mut events = vec![pr, transition];
+        annotate_transition_with_mr(&mut events);
+        let t = events
+            .iter()
+            .find(|e| e.kind == ActivityKind::JiraIssueTransitioned)
+            .unwrap();
+        assert_eq!(t.parent_external_id.as_deref(), Some("dayseam#7"));
+    }
+
+    /// Plan v0.4 Task 6 invariant 3 (regression gate): the existing
+    /// GitLab MR → Jira pipeline still fires, side-by-side with a
+    /// GitHub PR for a different ticket. Proves the generalised
+    /// index indexes both sources.
+    #[test]
+    fn both_gitlab_mr_and_github_pr_cross_source_annotate_in_one_pass() {
+        let gitlab_mr = {
+            let mut e = event(ActivityKind::MrOpened, "!321", "CAR-5117: Rename commands");
+            e.occurred_at = Utc.with_ymd_and_hms(2026, 4, 20, 9, 0, 0).unwrap();
+            e.entities.push(EntityRef {
+                kind: EntityKind::JiraIssue,
+                external_id: "CAR-5117".into(),
+                label: None,
+            });
+            e
+        };
+        let gh_pr = github_pr_event(
+            ActivityKind::GitHubPullRequestOpened,
+            "dayseam",
+            42,
+            Utc.with_ymd_and_hms(2026, 4, 20, 9, 30, 0).unwrap(),
+            "KTON-4550",
+        );
+        let mut t_car = jira_transition("CAR-5117");
+        t_car.occurred_at = Utc.with_ymd_and_hms(2026, 4, 20, 11, 0, 0).unwrap();
+        t_car.external_id = "CAR-5117::transition::car".into();
+        let mut t_kton = jira_transition("KTON-4550");
+        t_kton.occurred_at = Utc.with_ymd_and_hms(2026, 4, 20, 11, 30, 0).unwrap();
+        t_kton.external_id = "KTON-4550::transition::kton".into();
+
+        let mut events = vec![gitlab_mr, gh_pr, t_car, t_kton];
+        annotate_transition_with_mr(&mut events);
+
+        let got_car = events
+            .iter()
+            .find(|e| e.external_id == "CAR-5117::transition::car")
+            .unwrap()
+            .parent_external_id
+            .as_deref();
+        let got_kton = events
+            .iter()
+            .find(|e| e.external_id == "KTON-4550::transition::kton")
+            .unwrap()
+            .parent_external_id
+            .as_deref();
+        assert_eq!(got_car, Some("!321"));
+        assert_eq!(got_kton, Some("dayseam#42"));
+    }
+
+    // ----- DAY-97: GitLab MR body mentions GitHub PR -----------------------
+
+    fn mr_with_body(iid: &str, title: &str, body: &str) -> ActivityEvent {
+        let mut e = event(ActivityKind::MrOpened, iid, title);
+        e.body = Some(body.into());
+        e
+    }
+
+    /// Plan v0.4 Task 6 invariant 4: a GitLab MR body mentioning
+    /// `https://github.com/org/repo/pull/42` produces an
+    /// `EntityKind::GitHubPullRequest` entity on the MR event, so
+    /// downstream features (evidence popover, future "mirrored PR"
+    /// render) can surface the cross-link.
+    #[test]
+    fn gitlab_mr_body_mentions_github_pr_attaches_entity() {
+        let mut events = vec![mr_with_body(
+            "!321",
+            "CAR-5117: Rename commands",
+            "Mirrors https://github.com/vedanthvdev/dayseam/pull/42 upstream.",
+        )];
+        extract_github_pr_urls(&mut events);
+        let gh_ents: Vec<&EntityRef> = events[0]
+            .entities
+            .iter()
+            .filter(|e| e.kind == EntityKind::GitHubPullRequest)
+            .collect();
+        assert_eq!(gh_ents.len(), 1);
+        assert_eq!(gh_ents[0].external_id, "dayseam#42");
+        assert_eq!(gh_ents[0].label.as_deref(), Some("#42"));
+    }
+
+    /// Idempotent: a second call after the first must not push a
+    /// duplicate entity. Same contract as [`extract_ticket_keys`]
+    /// — callers run the pipeline repeatedly on the same data set
+    /// (dogfood CLI, streaming preview re-renders) and a growing
+    /// entity list would break evidence popovers.
+    #[test]
+    fn extract_github_pr_urls_is_idempotent() {
+        let mut events = vec![mr_with_body(
+            "!321",
+            "CAR-5117",
+            "See https://github.com/vedanthvdev/dayseam/pull/42",
+        )];
+        extract_github_pr_urls(&mut events);
+        let first = events[0].entities.clone();
+        extract_github_pr_urls(&mut events);
+        assert_eq!(events[0].entities, first);
+    }
+
+    /// Two distinct PRs in the same body → two entities. Matches
+    /// the DRY-RUN case where an MR body lists "closes X, Y,
+    /// rebased from Z".
+    #[test]
+    fn extract_github_pr_urls_handles_multiple_links() {
+        let mut events = vec![mr_with_body(
+            "!321",
+            "CAR-5117",
+            "Closes https://github.com/vedanthvdev/dayseam/pull/42 \
+             and https://github.com/vedanthvdev/dayseam/pull/99",
+        )];
+        extract_github_pr_urls(&mut events);
+        let mut ids: Vec<&str> = events[0]
+            .entities
+            .iter()
+            .filter(|e| e.kind == EntityKind::GitHubPullRequest)
+            .map(|e| e.external_id.as_str())
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec!["dayseam#42", "dayseam#99"]);
+    }
+
+    /// Trailing path / anchor characters (`#issuecomment-…`,
+    /// `/files`) are tolerated. The scan stops consuming digits as
+    /// soon as it sees a non-digit — everything after is ignored.
+    #[test]
+    fn extract_github_pr_urls_tolerates_trailing_path_fragments() {
+        let mut events = vec![mr_with_body(
+            "!321",
+            "CAR-5117",
+            "See https://github.com/vedanthvdev/dayseam/pull/42/files and \
+             https://github.com/vedanthvdev/dayseam/pull/99#issuecomment-7",
+        )];
+        extract_github_pr_urls(&mut events);
+        let mut ids: Vec<&str> = events[0]
+            .entities
+            .iter()
+            .filter(|e| e.kind == EntityKind::GitHubPullRequest)
+            .map(|e| e.external_id.as_str())
+            .collect();
+        ids.sort();
+        assert_eq!(ids, vec!["dayseam#42", "dayseam#99"]);
+    }
+
+    /// A URL pointing at a different host (`gitlab.com`) must not
+    /// match — the scan anchors on `github.com` explicitly.
+    #[test]
+    fn extract_github_pr_urls_ignores_non_github_hosts() {
+        let mut events = vec![mr_with_body(
+            "!321",
+            "CAR-5117",
+            "Upstream https://gitlab.com/org/repo/pull/42",
+        )];
+        extract_github_pr_urls(&mut events);
+        assert!(
+            events[0]
+                .entities
+                .iter()
+                .all(|e| e.kind != EntityKind::GitHubPullRequest),
+            "non-github hosts must not produce a github_pull_request entity"
+        );
+    }
+
+    /// The pass is scoped to GitLab MR-shaped events — scanning
+    /// commit messages or Jira comments would be noisy and risks
+    /// attaching cross-links to events that weren't authored by
+    /// the user. A commit that mentions a GitHub PR URL keeps its
+    /// original entity list untouched.
+    #[test]
+    fn extract_github_pr_urls_leaves_non_mr_events_untouched() {
+        let mut commit = event(ActivityKind::CommitAuthored, "sha1", "chore: bump deps");
+        commit.body = Some("See https://github.com/vedanthvdev/dayseam/pull/42".into());
+        let mut events = vec![commit];
+        extract_github_pr_urls(&mut events);
+        assert!(
+            events[0]
+                .entities
+                .iter()
+                .all(|e| e.kind != EntityKind::GitHubPullRequest),
+            "non-MR events must be skipped"
         );
     }
 }

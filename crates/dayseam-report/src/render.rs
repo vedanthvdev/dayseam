@@ -273,6 +273,7 @@ fn render_group(
                     event,
                     template_id,
                     section_id,
+                    verbose_mode,
                 )?);
             }
             Ok(out)
@@ -298,12 +299,22 @@ fn render_group(
 /// the label is missing the prefix degrades to `**<value>** —
 /// <title>` — the same shape `commit_headline` uses for repos, so
 /// a malformed upstream still renders without panicking.
+///
+/// In verbose mode and for `JiraIssueTransitioned` events carrying
+/// a `parent_external_id` (set by
+/// [`crate::enrich::annotate_transition_with_mr`]), the bullet
+/// gains a `(triggered by <label>)` suffix naming the GitLab MR
+/// (`!321`) or GitHub PR (`#42`) that preceded the transition.
+/// DAY-97 is the first release that actually renders this; the
+/// DAY-78 annotate pass set `parent_external_id` but the render
+/// side never consumed it.
 fn render_atlassian_bullet(
     artifact_id: ArtifactId,
     group_kind: GroupKind,
     event: &ActivityEvent,
     template_id: &str,
     section_id: &str,
+    verbose_mode: bool,
 ) -> Result<(RenderedBullet, Evidence), ReportError> {
     let event_ids = vec![event.id];
     let id = bullet_id(template_id, section_id, artifact_id, &event_ids);
@@ -328,12 +339,21 @@ fn render_atlassian_bullet(
     } else {
         let gk = group_key_from_event(event);
         let display = gk.display();
-        if gk.value.is_empty() || gk.value == "/" {
+        let base = if gk.value.is_empty() || gk.value == "/" {
             event.title.clone()
         } else if display == gk.value {
             format!("**{}** — {}", gk.value, event.title)
         } else {
             format!("**{display}** ({}) — {}", gk.value, event.title)
+        };
+        let suffix = if verbose_mode {
+            triggered_by_suffix(event)
+        } else {
+            None
+        };
+        match suffix {
+            Some(s) => format!("{base} {s}"),
+            None => base,
         }
     };
 
@@ -474,6 +494,64 @@ fn short_sha(sha: &str) -> String {
 /// parents are a connector bug, not a render concern.
 fn rolled_into_mr_label(event: &ActivityEvent) -> Option<String> {
     event.parent_external_id.clone()
+}
+
+/// Format the verbose-mode `(triggered by <label>)` suffix for a
+/// Jira transition event.
+///
+/// Consumes the `parent_external_id` the
+/// [`crate::enrich::annotate_transition_with_mr`] pass stamped on
+/// the transition and turns it into a short, human-friendly label:
+///
+/// * GitLab MRs keep their `!<iid>` shape as-is
+///   (`parent_external_id = "!321"` → `(triggered by !321)`).
+/// * GitHub PRs carry `"{repo}#{number}"`; the repo prefix is
+///   stripped so the bullet reads `(triggered by #42)` — the same
+///   shape GitHub itself uses in notifications and the UI. Keeping
+///   the repo name off the label is deliberate: the
+///   `jira_project` prefix on the bullet already disambiguates
+///   which project the transition belongs to, and the full
+///   `owner/repo#N` would line-wrap in the preview.
+///
+/// Returns `None` on non-transition events and on transitions with
+/// no stamped parent (i.e. no cross-source MR/PR was credited by
+/// the enrichment pass).
+fn triggered_by_suffix(event: &ActivityEvent) -> Option<String> {
+    if event.kind != dayseam_core::ActivityKind::JiraIssueTransitioned {
+        return None;
+    }
+    let parent = event.parent_external_id.as_deref()?;
+    let label = triggered_by_label(parent)?;
+    Some(format!("(triggered by {label})"))
+}
+
+/// Shape-aware label for the `(triggered by …)` suffix.
+///
+/// Kept separate from [`triggered_by_suffix`] so unit tests can
+/// exercise the shape-classification branches without constructing
+/// a full `ActivityEvent`. See the parent docstring for the two
+/// cases and their rationale.
+fn triggered_by_label(parent_external_id: &str) -> Option<String> {
+    if parent_external_id.is_empty() {
+        return None;
+    }
+    // GitLab MR iid: `!321`. The connector emits the `!` prefix
+    // already; pass through.
+    if parent_external_id.starts_with('!') {
+        return Some(parent_external_id.to_string());
+    }
+    // GitHub PR: `"{repo}#{number}"`. Keep only the `#{number}`
+    // tail so the label matches GitHub's own notation.
+    if let Some(idx) = parent_external_id.rfind('#') {
+        let tail = &parent_external_id[idx..];
+        if tail.len() >= 2 && tail[1..].bytes().all(|b| b.is_ascii_digit()) {
+            return Some(tail.to_string());
+        }
+    }
+    // Fallback: opaque parent id. Render it verbatim. A future
+    // connector picking a different shape can add its own branch
+    // above; in the meantime we never drop the annotation silently.
+    Some(parent_external_id.to_string())
 }
 
 // ---- id computation -------------------------------------------------------
@@ -641,6 +719,95 @@ mod tests {
         assert_eq!(
             commit_headline(Path::new("project-foo"), &event),
             "**project-foo** — Opened MR: feat: land payments slice"
+        );
+    }
+
+    // ----- DAY-97: `(triggered by X)` suffix shape tests -------------------
+
+    /// GitLab MR iids already carry the `!` prefix, so
+    /// [`triggered_by_label`] must pass them through verbatim.
+    /// Regression: an earlier draft stripped the prefix and
+    /// rendered `(triggered by 321)`, which reads like a Jira
+    /// issue ID.
+    #[test]
+    fn triggered_by_label_passes_gitlab_mr_iid_through() {
+        assert_eq!(triggered_by_label("!321"), Some("!321".to_string()));
+    }
+
+    /// GitHub PR `external_id` is `"{repo}#{number}"`. The suffix
+    /// must drop the repo prefix so the bullet reads the same
+    /// way GitHub itself renders notifications: `(triggered by
+    /// #42)`.
+    #[test]
+    fn triggered_by_label_strips_repo_prefix_from_github_pr_id() {
+        assert_eq!(
+            triggered_by_label("dayseam#42"),
+            Some("#42".to_string()),
+            "repo prefix must be dropped before rendering"
+        );
+    }
+
+    /// An `external_id` with a `#` but a non-numeric tail is
+    /// unlikely to come from any current connector, but we prefer
+    /// "render it verbatim" over "silently drop the annotation"
+    /// — the viewer still sees *that* a cross-source link exists,
+    /// even if the label is weird.
+    #[test]
+    fn triggered_by_label_falls_back_to_verbatim_on_unknown_shape() {
+        assert_eq!(
+            triggered_by_label("weird-thing"),
+            Some("weird-thing".to_string())
+        );
+        assert_eq!(
+            triggered_by_label("repo#not-a-number"),
+            Some("repo#not-a-number".to_string())
+        );
+    }
+
+    /// Empty parent id → no annotation. Protects the suffix from
+    /// rendering `(triggered by )` if a future connector stamps
+    /// an empty string.
+    #[test]
+    fn triggered_by_label_returns_none_on_empty_string() {
+        assert_eq!(triggered_by_label(""), None);
+    }
+
+    fn jira_transition_with_parent(parent: Option<&str>) -> ActivityEvent {
+        let mut e = fixture_event("In Progress → Done");
+        e.kind = ActivityKind::JiraIssueTransitioned;
+        e.parent_external_id = parent.map(str::to_string);
+        e
+    }
+
+    /// End-to-end: a Jira transition with `parent_external_id`
+    /// set by [`crate::enrich::annotate_transition_with_mr`]
+    /// produces the full `(triggered by …)` parenthetical. Non-
+    /// transition events (e.g. commit) must never render the
+    /// suffix, even if some future bug stamps `parent_external_id`
+    /// on them.
+    #[test]
+    fn triggered_by_suffix_only_fires_for_jira_transitions_with_parent() {
+        let with_mr = jira_transition_with_parent(Some("!321"));
+        assert_eq!(
+            triggered_by_suffix(&with_mr),
+            Some("(triggered by !321)".to_string())
+        );
+
+        let with_pr = jira_transition_with_parent(Some("dayseam#42"));
+        assert_eq!(
+            triggered_by_suffix(&with_pr),
+            Some("(triggered by #42)".to_string())
+        );
+
+        let without_parent = jira_transition_with_parent(None);
+        assert_eq!(triggered_by_suffix(&without_parent), None);
+
+        let mut commit = fixture_event("chore: bump");
+        commit.parent_external_id = Some("!321".into());
+        assert_eq!(
+            triggered_by_suffix(&commit),
+            None,
+            "commit events must never render a (triggered by …) suffix"
         );
     }
 }

@@ -13,11 +13,20 @@
 //!    `[A-Z]{2,10}-\d+` and attach `jira_issue` [`EntityRef`]s as
 //!    targets. Runs on deduped events so we only scan each SHA
 //!    once.
-//! 3. **Annotate Jira transitions with MRs.** Now that MRs carry
-//!    `jira_issue` targets, we can link each Jira transition to its
-//!    triggering MR. Runs after extraction so the index it builds
-//!    includes every MR.
-//! 4. **Annotate rolled-into-MR.** Set `parent_external_id` on
+//! 3. **Extract cross-linked GitHub PR URLs on GitLab MR bodies.**
+//!    DAY-97. Scans `MrOpened` / `MrMerged` bodies for
+//!    `https://github.com/.../pull/<N>` and attaches
+//!    `github_pull_request` entities. Runs after ticket-key
+//!    extraction to keep the MR event's entity list stable across
+//!    passes regardless of the order the scans fire.
+//! 4. **Annotate Jira transitions with MRs or PRs.** Now that MRs
+//!    and PRs carry `jira_issue` targets, we can link each Jira
+//!    transition to its triggering artifact. Runs after extraction
+//!    so the index it builds includes every MR and PR. The 24h
+//!    temporal guard (MR/PR must precede the transition by ≤24h)
+//!    lives inside the annotator — see
+//!    [`crate::enrich::annotate_transition_with_mr`].
+//! 5. **Annotate rolled-into-MR.** Set `parent_external_id` on
 //!    `CommitAuthored` events whose SHA belongs to an MR's commit
 //!    list. DAY-72 PERF-addendum-06 index, unchanged.
 //!
@@ -35,7 +44,7 @@
 use dayseam_core::ActivityEvent;
 
 use crate::dedup::dedup_commit_authored;
-use crate::enrich::{annotate_transition_with_mr, extract_ticket_keys};
+use crate::enrich::{annotate_transition_with_mr, extract_github_pr_urls, extract_ticket_keys};
 use crate::rollup_mr::{annotate_rolled_into_mr, MergeRequestArtifact};
 
 /// Run dedup → enrich → annotate-into-MR on a day's events.
@@ -55,6 +64,7 @@ use crate::rollup_mr::{annotate_rolled_into_mr, MergeRequestArtifact};
 pub fn pipeline(events: Vec<ActivityEvent>, mrs: &[MergeRequestArtifact]) -> Vec<ActivityEvent> {
     let mut events = dedup_commit_authored(events);
     extract_ticket_keys(&mut events);
+    extract_github_pr_urls(&mut events);
     annotate_transition_with_mr(&mut events);
     annotate_rolled_into_mr(&mut events, mrs);
     events

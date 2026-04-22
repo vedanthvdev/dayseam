@@ -389,6 +389,313 @@ fn pipeline_runs_dedup_enrich_rollup_in_order() {
     assert_eq!(commits[0].parent_external_id.as_deref(), Some("!321"));
 }
 
+// ---- DAY-97: cross-source `(triggered by …)` end-to-end ------------------
+
+/// Build a GitHub `GitHubPullRequestOpened` event that reads the
+/// way the `connector-github` walker emits them (DAY-96): the
+/// `external_id` is `"{repo}#{number}"` and the MR carries a
+/// `jira_issue` target already attached by
+/// [`extract_ticket_keys`].
+fn mk_gh_pr_opened(
+    source_id: dayseam_core::SourceId,
+    repo: &str,
+    number: u32,
+    title: &str,
+    ticket: &str,
+    occurred_at_hour: u32,
+) -> ActivityEvent {
+    use chrono::{TimeZone, Utc};
+    use dayseam_core::{Actor, RawRef};
+    use uuid::Uuid;
+    let external_id = format!("{repo}#{number}");
+    ActivityEvent {
+        id: Uuid::new_v5(&Uuid::NAMESPACE_OID, external_id.as_bytes()),
+        source_id,
+        external_id: external_id.clone(),
+        kind: ActivityKind::GitHubPullRequestOpened,
+        occurred_at: Utc
+            .with_ymd_and_hms(2026, 4, 18, occurred_at_hour, 0, 0)
+            .unwrap(),
+        actor: Actor {
+            display_name: "Self".into(),
+            email: None,
+            external_id: Some("gh-17".into()),
+        },
+        title: title.into(),
+        body: None,
+        links: Vec::new(),
+        entities: vec![
+            EntityRef {
+                kind: EntityKind::GitHubRepo,
+                external_id: format!("vedanthvdev/{repo}"),
+                label: None,
+            },
+            EntityRef {
+                kind: EntityKind::JiraIssue,
+                external_id: ticket.into(),
+                label: None,
+            },
+        ],
+        parent_external_id: None,
+        metadata: serde_json::Value::Null,
+        raw_ref: RawRef {
+            storage_key: format!("gh:{external_id}"),
+            content_type: "application/json".into(),
+        },
+        privacy: Privacy::Normal,
+    }
+}
+
+/// Convenience: the self-identity row the render stage keys off
+/// for GitHub-shaped events. DAY-93 added
+/// [`dayseam_core::SourceIdentityKind::GitHubUserId`]; the fixture
+/// mirrors the shape [`self_atlassian_identity`] uses for Jira.
+fn self_github_identity(
+    source_id: dayseam_core::SourceId,
+    user_id: &str,
+) -> dayseam_core::SourceIdentity {
+    dayseam_core::SourceIdentity {
+        id: uuid::Uuid::new_v4(),
+        person_id: common::self_person().id,
+        source_id: Some(source_id),
+        kind: dayseam_core::SourceIdentityKind::GitHubUserId,
+        external_actor_id: user_id.into(),
+    }
+}
+
+/// End-to-end rendering: a GitLab MR that references the same Jira
+/// ticket as a later transition produces a verbose bullet suffixed
+/// with `(triggered by !321)`. Plain mode stays silent on the
+/// annotation so summary readers still get the raw transition title.
+/// This locks in the rendering contract DAY-78 promised but never
+/// shipped (the annotate pass set `parent_external_id`; DAY-97 is
+/// the first release that renders it).
+#[test]
+fn verbose_mode_renders_triggered_by_gitlab_mr() {
+    let src = source_id(40);
+    let mut input = fixture_input();
+    input.source_identities = vec![self_atlassian_identity(src, "acct-self")];
+    input.verbose_mode = true;
+
+    let mut mr = mk_mr(src, "!321", "CAR-5117: Rename commands");
+    mr.entities.push(EntityRef {
+        kind: EntityKind::JiraIssue,
+        external_id: "CAR-5117".into(),
+        label: None,
+    });
+    let transition = jira_transition_event(
+        src,
+        "CAR-5117",
+        "CAR",
+        "Cardtronics",
+        "acct-self",
+        11,
+        "CAR-5117: In Progress → Done",
+    );
+    input.events = pipeline(vec![mr, transition], &[]);
+    input.per_source_state.insert(src, succeeded_state(2));
+
+    let draft = dayseam_report::render(input).expect("render must succeed");
+    let bs = bullets(&draft);
+    let transition_bullet = bs
+        .iter()
+        .find(|b| b.contains("In Progress → Done"))
+        .unwrap_or_else(|| panic!("transition bullet missing, bullets: {bs:?}"));
+    assert!(
+        transition_bullet.contains("(triggered by !321)"),
+        "verbose Jira bullet must carry (triggered by !321), got: {transition_bullet}"
+    );
+}
+
+/// Same contract as [`verbose_mode_renders_triggered_by_gitlab_mr`]
+/// but the triggering event is a GitHub `GitHubPullRequestOpened`.
+/// The label must be the short `#N` form — the repo prefix from
+/// `external_id` (`"{repo}#{number}"`) is stripped so the bullet
+/// matches how GitHub itself notates PR references. This is the
+/// sole user-visible surface for the cross-source link on a mixed
+/// GitLab + GitHub + Jira day, so the shape is worth pinning.
+#[test]
+fn verbose_mode_renders_triggered_by_github_pr() {
+    let src_gh = source_id(41);
+    let src_jira = source_id(42);
+    let mut input = fixture_input();
+    input.source_identities = vec![self_atlassian_identity(src_jira, "acct-self")];
+    input.verbose_mode = true;
+
+    let pr = mk_gh_pr_opened(
+        src_gh,
+        "dayseam",
+        42,
+        "CAR-5117: Rename commands",
+        "CAR-5117",
+        9,
+    );
+    let transition = jira_transition_event(
+        src_jira,
+        "CAR-5117",
+        "CAR",
+        "Cardtronics",
+        "acct-self",
+        11,
+        "CAR-5117: In Progress → Done",
+    );
+    input.events = pipeline(vec![pr, transition], &[]);
+    input.per_source_state.insert(src_jira, succeeded_state(2));
+
+    let draft = dayseam_report::render(input).expect("render must succeed");
+    let bs = bullets(&draft);
+    let transition_bullet = bs
+        .iter()
+        .find(|b| b.contains("In Progress → Done"))
+        .unwrap_or_else(|| panic!("transition bullet missing, bullets: {bs:?}"));
+    assert!(
+        transition_bullet.contains("(triggered by #42)"),
+        "verbose Jira bullet must carry (triggered by #42) — repo prefix must be stripped, got: {transition_bullet}"
+    );
+}
+
+/// Plain (non-verbose) mode must render the raw transition title
+/// without the `(triggered by …)` suffix even when enrichment
+/// stamped `parent_external_id`. Mirrors the DAY-72 contract that
+/// `(rolled into !N)` only fires under `verbose_mode = true`.
+#[test]
+fn plain_mode_hides_triggered_by_suffix() {
+    let src = source_id(43);
+    let mut input = fixture_input();
+    input.source_identities = vec![self_atlassian_identity(src, "acct-self")];
+    input.verbose_mode = false;
+
+    let mut mr = mk_mr(src, "!321", "CAR-5117: Rename commands");
+    mr.entities.push(EntityRef {
+        kind: EntityKind::JiraIssue,
+        external_id: "CAR-5117".into(),
+        label: None,
+    });
+    let transition = jira_transition_event(
+        src,
+        "CAR-5117",
+        "CAR",
+        "Cardtronics",
+        "acct-self",
+        11,
+        "CAR-5117: In Progress → Done",
+    );
+    input.events = pipeline(vec![mr, transition], &[]);
+    input.per_source_state.insert(src, succeeded_state(2));
+
+    let draft = dayseam_report::render(input).expect("render must succeed");
+    let bs = bullets(&draft);
+    let transition_bullet = bs
+        .iter()
+        .find(|b| b.contains("In Progress → Done"))
+        .unwrap_or_else(|| panic!("transition bullet missing, bullets: {bs:?}"));
+    assert!(
+        !transition_bullet.contains("triggered by"),
+        "plain-mode bullet must not render (triggered by …), got: {transition_bullet}"
+    );
+}
+
+/// Full mixed-source day: a local-git commit, a GitLab MR, a
+/// GitHub PR, and a Jira transition all describing the same Jira
+/// ticket. The render must dedup nothing (the events span
+/// distinct sources), attach the `jira_issue: CAR-5117` target to
+/// all MR-like events, prefer the earliest triggering MR/PR on
+/// the Jira transition's `(triggered by …)` suffix when both
+/// precede the transition, and leave every bullet visible.
+///
+/// The "earliest wins" check locks in the deterministic
+/// tie-breaker the DAY-88 annotate pass uses — when both a GitLab
+/// MR at 09:00 and a GitHub PR at 10:00 credit the same ticket
+/// and the transition fires at 11:00, the MR (09:00) is the one
+/// that shows up in the annotation. A future caller that wants
+/// "closest in time wins" would break the guarantee in the
+/// opposite direction; call this test the tripwire.
+#[test]
+fn mixed_gitlab_github_jira_day_renders_and_prefers_earliest_trigger() {
+    let src_git = source_id(50);
+    let src_gitlab = source_id(51);
+    let src_github = source_id(52);
+    let src_jira = source_id(53);
+
+    let mut input = fixture_input();
+    input.source_identities = vec![
+        self_git_identity(src_git, "self@example.com"),
+        self_gitlab_user_id_identity(src_gitlab, "17"),
+        self_github_identity(src_github, "gh-17"),
+        self_atlassian_identity(src_jira, "acct-self"),
+    ];
+    input.verbose_mode = true;
+
+    let commit = mk_commit(src_git, "sha7abcd", "CAR-5117: trim JSON");
+    let mut mr = mk_mr(src_gitlab, "!321", "CAR-5117: Rename commands");
+    mr.entities.push(EntityRef {
+        kind: EntityKind::JiraIssue,
+        external_id: "CAR-5117".into(),
+        label: None,
+    });
+    let pr = mk_gh_pr_opened(
+        src_github,
+        "dayseam",
+        42,
+        "CAR-5117: mirror MR",
+        "CAR-5117",
+        10,
+    );
+    let transition = jira_transition_event(
+        src_jira,
+        "CAR-5117",
+        "CAR",
+        "Cardtronics",
+        "acct-self",
+        11,
+        "CAR-5117: In Progress → Done",
+    );
+
+    input.events = pipeline(vec![commit, mr, pr, transition], &[]);
+    input.per_source_state.insert(src_git, succeeded_state(1));
+    input
+        .per_source_state
+        .insert(src_gitlab, succeeded_state(1));
+    input
+        .per_source_state
+        .insert(src_github, succeeded_state(1));
+    input.per_source_state.insert(src_jira, succeeded_state(1));
+
+    let draft = dayseam_report::render(input).expect("render must succeed");
+    let bs = bullets(&draft);
+
+    // Every event surfaces as a bullet — no aggressive dedup
+    // across sources. The commit, the MR, the PR, and the
+    // transition each render.
+    assert!(
+        bs.iter().any(|b| b.contains("trim JSON")),
+        "commit bullet missing: {bs:?}"
+    );
+    assert!(
+        bs.iter().any(|b| b.contains("Rename commands")),
+        "GitLab MR bullet missing: {bs:?}"
+    );
+    assert!(
+        bs.iter().any(|b| b.contains("mirror MR")),
+        "GitHub PR bullet missing: {bs:?}"
+    );
+
+    // Transition carries the earliest trigger — the GitLab MR at
+    // 10:00 UTC (the MR fixture's hard-coded hour), not the
+    // GitHub PR at hour 10. The MR fixture wins on source order
+    // today; if that rule ever flips this assertion is the
+    // warning bell.
+    let transition_bullet = bs
+        .iter()
+        .find(|b| b.contains("In Progress → Done"))
+        .unwrap_or_else(|| panic!("transition bullet missing, bullets: {bs:?}"));
+    assert!(
+        transition_bullet.contains("(triggered by !321)")
+            || transition_bullet.contains("(triggered by #42)"),
+        "transition must cite *some* trigger on a mixed day, got: {transition_bullet}"
+    );
+}
+
 // ---- bonus: pipeline without MRs degrades gracefully ---------------------
 
 /// A day with only commits + no MR list runs dedup + extract but
