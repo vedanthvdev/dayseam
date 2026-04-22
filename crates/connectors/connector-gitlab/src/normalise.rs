@@ -143,6 +143,7 @@ fn kind_token(kind: ActivityKind) -> &'static str {
         ActivityKind::JiraIssueTransitioned
         | ActivityKind::JiraIssueCommented
         | ActivityKind::JiraIssueAssigned
+        | ActivityKind::JiraIssueUnassigned
         | ActivityKind::JiraIssueCreated
         | ActivityKind::ConfluencePageCreated
         | ActivityKind::ConfluencePageEdited
@@ -187,6 +188,7 @@ fn event_external_id(event: &GitlabEvent, kind: ActivityKind) -> String {
         ActivityKind::JiraIssueTransitioned
         | ActivityKind::JiraIssueCommented
         | ActivityKind::JiraIssueAssigned
+        | ActivityKind::JiraIssueUnassigned
         | ActivityKind::JiraIssueCreated
         | ActivityKind::ConfluencePageCreated
         | ActivityKind::ConfluencePageEdited
@@ -237,6 +239,7 @@ fn title_and_body(event: &GitlabEvent, kind: ActivityKind) -> (String, Option<St
         ActivityKind::JiraIssueTransitioned
         | ActivityKind::JiraIssueCommented
         | ActivityKind::JiraIssueAssigned
+        | ActivityKind::JiraIssueUnassigned
         | ActivityKind::JiraIssueCreated
         | ActivityKind::ConfluencePageCreated
         | ActivityKind::ConfluencePageEdited

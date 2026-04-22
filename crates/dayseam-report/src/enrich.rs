@@ -40,7 +40,9 @@
 
 use std::collections::HashMap;
 
+use chrono::{DateTime, Utc};
 use dayseam_core::{ActivityEvent, ActivityKind, EntityRef};
+use uuid::Uuid;
 
 /// Bail threshold for [`extract_ticket_keys`]. See the module docs.
 pub(crate) const MAX_TICKET_KEYS_PER_EVENT: usize = 3;
@@ -92,14 +94,23 @@ pub fn extract_ticket_keys(events: &mut [ActivityEvent]) {
 /// attaches to MRs: an `MrOpened` / `MrMerged` whose title carried
 /// the ticket key `CAR-5117` exposes a `jira_issue` entity with
 /// `external_id = "CAR-5117"`. A `JiraIssueTransitioned` event for
-/// `CAR-5117` then finds that MR via the `HashMap<issue_key,
-/// mr_external_id>` built here and stamps
+/// `CAR-5117` then finds that MR via the index built here and stamps
 /// `parent_external_id = Some(<mr_external_id>)`.
 ///
-/// First-MR-wins: when two MRs both reference the same Jira issue,
-/// the first one in the input order claims the transition. Input
-/// order is already deterministic at the point this helper runs
-/// (dedup + stable connector emission), so "first" is reproducible.
+/// Earliest-MR-wins by `occurred_at`, with a stable tie-break on
+/// `ActivityEvent::id` (UUIDv5, deterministic from
+/// `(source_id, external_id, kind)` — content-addressable, so the
+/// tie-break is reproducible across runs regardless of walker
+/// insertion order).
+///
+/// Pre-DAY-88 this picked "first in input order" using
+/// `HashMap::entry(_).or_insert(_)`. That was walker-insertion
+/// dependent: a fan-out that merged GitLab events before Jira ones
+/// (or vice-versa) changed which MR claimed a shared Jira issue.
+/// CORR-v0.2-05 makes the choice temporal: the MR that happened
+/// first chronologically wins — that's what the user would expect
+/// to see called out in the EOD narrative as "the MR that triggered
+/// the status change".
 ///
 /// Overwrites any existing `parent_external_id` on the transition.
 /// DAY-77's Jira connector populates `parent_external_id` with the
@@ -131,12 +142,25 @@ pub fn annotate_transition_with_mr(events: &mut [ActivityEvent]) {
     }
 }
 
-/// Owned-strings index so the caller can freely `iter_mut()` the
-/// event vec after we return. Using `&str` references ties the
-/// index lifetime to the borrow of `events`, which conflicts with
-/// the subsequent mutable walk.
+/// Build an issue-key → winning-MR-`external_id` index.
+///
+/// Owned strings so the caller can freely `iter_mut()` the event vec
+/// after we return. Using `&str` references ties the index lifetime
+/// to the borrow of `events`, which conflicts with the subsequent
+/// mutable walk.
+///
+/// For each Jira issue referenced by any MR, picks the MR with the
+/// earliest `occurred_at`. Ties break on the MR's deterministic
+/// `ActivityEvent::id`, so two MRs with identical timestamps always
+/// resolve the same way across runs. See
+/// [`annotate_transition_with_mr`] for the rationale on switching
+/// from walker-insertion order to temporal order.
 fn build_issue_to_mr_index(events: &[ActivityEvent]) -> HashMap<String, String> {
-    let mut index: HashMap<String, String> = HashMap::new();
+    // Candidate winning MR per issue_key: (occurred_at, id, external_id).
+    // The `(occurred_at, id)` tuple is `Ord` under the natural
+    // lexicographic rule — earlier time wins, same-time ties break
+    // on the UUID.
+    let mut best: HashMap<String, (DateTime<Utc>, Uuid, String)> = HashMap::new();
     for event in events {
         if !matches!(event.kind, ActivityKind::MrOpened | ActivityKind::MrMerged) {
             continue;
@@ -145,13 +169,19 @@ fn build_issue_to_mr_index(events: &[ActivityEvent]) -> HashMap<String, String> 
             if ent.kind != "jira_issue" {
                 continue;
             }
-            // `entry().or_insert` preserves first-MR-wins semantics.
-            index
-                .entry(ent.external_id.clone())
-                .or_insert_with(|| event.external_id.clone());
+            let incoming = (event.occurred_at, event.id, event.external_id.clone());
+            best.entry(ent.external_id.clone())
+                .and_modify(|current| {
+                    if (incoming.0, incoming.1) < (current.0, current.1) {
+                        *current = incoming.clone();
+                    }
+                })
+                .or_insert(incoming);
         }
     }
-    index
+    best.into_iter()
+        .map(|(issue_key, (_, _, mr_external_id))| (issue_key, mr_external_id))
+        .collect()
 }
 
 /// Scan `text` for `[A-Z]{2,10}-\d+` tokens and push matches onto
@@ -449,10 +479,62 @@ mod tests {
         );
     }
 
+    /// DAY-88 / CORR-v0.2-05. Pre-fix, the winner was "first in the
+    /// vec", which was walker-insertion dependent. Now it is
+    /// "earliest `occurred_at`". This test vets the new rule by
+    /// placing the earlier-in-time MR *second* in the vec — so
+    /// any code that still relies on vec order would pick the wrong
+    /// MR and fail the assertion.
     #[test]
-    fn annotate_respects_first_mr_wins() {
+    fn annotate_prefers_earliest_mr_by_occurred_at() {
+        let later_in_time_but_first_in_vec = {
+            let mut e = event(ActivityKind::MrOpened, "!100", "CAR-5117: later-in-time");
+            e.occurred_at = Utc.with_ymd_and_hms(2026, 4, 20, 14, 0, 0).unwrap();
+            e.entities.push(EntityRef {
+                kind: "jira_issue".into(),
+                external_id: "CAR-5117".into(),
+                label: None,
+            });
+            e
+        };
+        let earlier_in_time_but_second_in_vec = {
+            let mut e = event(ActivityKind::MrMerged, "!200", "CAR-5117: earlier-in-time");
+            e.occurred_at = Utc.with_ymd_and_hms(2026, 4, 20, 9, 0, 0).unwrap();
+            e.entities.push(EntityRef {
+                kind: "jira_issue".into(),
+                external_id: "CAR-5117".into(),
+                label: None,
+            });
+            e
+        };
+        let mut events = vec![
+            later_in_time_but_first_in_vec,
+            earlier_in_time_but_second_in_vec,
+            jira_transition("CAR-5117"),
+        ];
+        annotate_transition_with_mr(&mut events);
+        let transition = events
+            .iter()
+            .find(|e| e.kind == ActivityKind::JiraIssueTransitioned)
+            .unwrap();
+        assert_eq!(
+            transition.parent_external_id.as_deref(),
+            Some("!200"),
+            "the MR that occurred earlier in time must win even when it appears later in the input vec"
+        );
+    }
+
+    /// DAY-88 / CORR-v0.2-05. When two MRs share an `occurred_at`,
+    /// pairing falls through to `ActivityEvent::id` — which is a
+    /// UUIDv5 from `(source_id, external_id, kind)`. Because that's
+    /// content-addressable, the tie-break is reproducible across
+    /// runs and across walker orderings.
+    #[test]
+    fn annotate_tie_breaks_mrs_with_same_occurred_at_by_deterministic_id() {
+        let shared_time = Utc.with_ymd_and_hms(2026, 4, 20, 9, 0, 0).unwrap();
         let mr_a = {
-            let mut e = event(ActivityKind::MrOpened, "!100", "CAR-5117: first");
+            let mut e = event(ActivityKind::MrOpened, "!100", "CAR-5117: a");
+            e.occurred_at = shared_time;
             e.entities.push(EntityRef {
                 kind: "jira_issue".into(),
                 external_id: "CAR-5117".into(),
@@ -461,7 +543,8 @@ mod tests {
             e
         };
         let mr_b = {
-            let mut e = event(ActivityKind::MrMerged, "!200", "CAR-5117: second");
+            let mut e = event(ActivityKind::MrOpened, "!200", "CAR-5117: b");
+            e.occurred_at = shared_time;
             e.entities.push(EntityRef {
                 kind: "jira_issue".into(),
                 external_id: "CAR-5117".into(),
@@ -469,16 +552,36 @@ mod tests {
             });
             e
         };
-        let mut events = vec![mr_a, mr_b, jira_transition("CAR-5117")];
-        annotate_transition_with_mr(&mut events);
-        let transition = events
+        // The expected winner is whichever of !100 / !200 has the
+        // smaller UUIDv5. Recompute deterministically rather than
+        // hard-code, so a seed change in `event()`'s test helper
+        // doesn't flip the assertion silently.
+        let winning_id = if mr_a.id < mr_b.id { "!100" } else { "!200" };
+
+        // Run once with one vec ordering ...
+        let mut events_ab = vec![mr_a.clone(), mr_b.clone(), jira_transition("CAR-5117")];
+        annotate_transition_with_mr(&mut events_ab);
+        let transition_ab = events_ab
             .iter()
             .find(|e| e.kind == ActivityKind::JiraIssueTransitioned)
             .unwrap();
+
+        // ... and again with the MRs swapped. Both must yield the
+        // same winner because the tie-break is deterministic.
+        let mut events_ba = vec![mr_b, mr_a, jira_transition("CAR-5117")];
+        annotate_transition_with_mr(&mut events_ba);
+        let transition_ba = events_ba
+            .iter()
+            .find(|e| e.kind == ActivityKind::JiraIssueTransitioned)
+            .unwrap();
+
         assert_eq!(
-            transition.parent_external_id.as_deref(),
-            Some("!100"),
-            "first MR in input order wins"
+            transition_ab.parent_external_id.as_deref(),
+            Some(winning_id)
+        );
+        assert_eq!(
+            transition_ba.parent_external_id.as_deref(),
+            Some(winning_id)
         );
     }
 }

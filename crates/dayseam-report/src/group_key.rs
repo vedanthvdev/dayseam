@@ -81,6 +81,7 @@ pub(crate) fn group_key_from_event(event: &ActivityEvent) -> GroupKey {
         ActivityKind::JiraIssueTransitioned
         | ActivityKind::JiraIssueCommented
         | ActivityKind::JiraIssueAssigned
+        | ActivityKind::JiraIssueUnassigned
         | ActivityKind::JiraIssueCreated => entity_group(event, "jira_project", GroupKind::Project),
         ActivityKind::ConfluencePageCreated
         | ActivityKind::ConfluencePageEdited

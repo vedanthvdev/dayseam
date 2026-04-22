@@ -9,10 +9,12 @@
 
 pub mod error;
 pub mod pool;
+pub mod repairs;
 pub mod repos;
 
 pub use error::{DbError, DbResult};
 pub use pool::open;
+pub use repairs::{registered_repairs, SerdeDefaultRepair};
 
 pub use repos::{
     activity_events::ActivityRepo,

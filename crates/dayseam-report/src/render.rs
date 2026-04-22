@@ -160,7 +160,14 @@ fn build_sections(
     let mut evidence: Vec<Evidence> = Vec::new();
 
     for group in groups {
-        let section = ReportSection::from_payload(&group.artifact.payload);
+        // DAY-88 / CORR-v0.2-06. Switched from `from_payload` to
+        // `from_group` so event-level overrides (unattached
+        // Confluence comments → `Other`) take effect. The
+        // `section.id()` travels into the bullet id derivation
+        // below, so a bullet that moves sections gets a new
+        // stable id — evidence popovers and the streaming preview
+        // need that to stay in sync.
+        let section = ReportSection::from_group(group);
         let rendered = render_group(group, registry, template_id, section.id(), verbose_mode)?;
         let bucket = bucketed.entry(section).or_default();
         for (bullet, ev) in rendered {

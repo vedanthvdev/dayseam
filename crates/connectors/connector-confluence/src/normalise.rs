@@ -335,11 +335,46 @@ fn normalise_comment(
         space_entity(space_key, space_name),
         comment_entity(content_id),
     ];
-    if let Some((parent_id, parent_title)) = comment_parent_page_ref(content) {
+    let parent_ref = comment_parent_page_ref(content);
+    let has_parent = parent_ref.is_some();
+    if let Some((parent_id, parent_title)) = parent_ref {
         entities.push(page_entity(
             &parent_id,
             parent_title.as_deref().unwrap_or(""),
         ));
+    } else {
+        // CORR-v0.2-06 (narrowed). The CQL row carried neither
+        // `ancestors[]` nor `container` — every in-the-wild response
+        // we've seen during the spike populated one or the other, so
+        // the absence is either a shape drift or a draft/archived
+        // page the tenant hides. The normaliser still emits the
+        // comment (its body is real work the user did); the rollup
+        // layer routes events without a parent page entity into a
+        // `ReportSection::Other` bucket so they render with a sane
+        // "unattached comments" header instead of collapsing into
+        // `UNKNOWN`. The warn surfaces this to the logs panel so an
+        // operator can open the CQL response and decide whether to
+        // file an upstream-shape ticket. Upgrading to `error` would
+        // be wrong: no data loss, no user-visible breakage — just a
+        // rendering quality hit that's worth knowing about.
+        tracing::warn!(
+            target: "connector_confluence::normalise",
+            source_id = %source_id,
+            comment_id = %content_id,
+            space_key = %space_key,
+            "confluence comment missing both ancestors[] and container; routing to report Other section",
+        );
+    }
+
+    // Metadata is the canonical signal for "route to Other" rather
+    // than re-deriving parent-absence downstream: report code reads
+    // `metadata.unattached == true` and never has to reparse entities.
+    // `Default::default` on serde_json::Value is `Value::Null`, which
+    // would serialise to `"unattached": null` — use an explicit bool
+    // field instead.
+    let mut metadata = json!({ "location": location });
+    if !has_parent {
+        metadata["unattached"] = json!(true);
     }
 
     Ok(Some(ActivityEvent {
@@ -354,9 +389,7 @@ fn normalise_comment(
         links: vec![link.clone()],
         entities,
         parent_external_id: comment_parent_page_id(content),
-        metadata: json!({
-            "location": location,
-        }),
+        metadata,
         raw_ref: RawRef {
             storage_key: format!("confluence:comment:{content_id}"),
             content_type: "application/json".to_string(),
@@ -967,6 +1000,107 @@ mod tests {
         )
         .unwrap();
         assert!(out.is_none());
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn comment_without_parent_page_emits_with_unattached_metadata_and_warns() {
+        // CORR-v0.2-06 (narrowed) regression. Confluence CQL rows
+        // almost always carry `ancestors[]` or `container`, but a
+        // shape drift or a draft-parent tenant can produce a comment
+        // row without either. Before DAY-88 the event still emitted
+        // but carried no `confluence_page` entity — the rollup then
+        // fell back to `"UNKNOWN"` and collapsed every unattached
+        // comment on the day into one silent bullet. The fix: emit
+        // the comment with `metadata.unattached == true` so the
+        // report layer can route it to the Other section, *and*
+        // `tracing::warn!` so operators notice the upstream-shape
+        // anomaly. The event must still be emitted (the body is real
+        // user work).
+        let comment = json!({
+            "content": {
+                "id": "42",
+                "type": "comment",
+                "title": "Re: x",
+                "space": { "key": "ST", "name": "Delivery Tribes" },
+                "history": {
+                    "createdDate": "2026-04-20T10:43:00.000Z",
+                    "createdBy": { "accountId": SELF_ID, "displayName": "Me" }
+                },
+                "extensions": { "location": "footer" },
+                "_links": { "webui": "/x" }
+            },
+            "url": "/x",
+            "_links": { "base": "https://acme.atlassian.net/wiki" }
+        });
+        let ev = normalise_result(
+            Uuid::new_v4(),
+            &workspace(),
+            SELF_ID,
+            window(),
+            &comment,
+            None,
+        )
+        .unwrap()
+        .expect("unattached self-authored comment should still emit");
+        assert_eq!(ev.kind, ActivityKind::ConfluenceComment);
+        assert_eq!(ev.metadata["unattached"], json!(true));
+        assert_eq!(ev.metadata["location"], json!("footer"));
+        assert!(
+            ev.entities.iter().all(|e| e.kind != "confluence_page"),
+            "unattached comment must not synthesise a confluence_page entity",
+        );
+        assert!(
+            ev.parent_external_id.is_none(),
+            "unattached comment must not guess a parent_external_id",
+        );
+        assert!(logs_contain(
+            "confluence comment missing both ancestors[] and container"
+        ));
+    }
+
+    #[test]
+    #[tracing_test::traced_test]
+    fn comment_with_parent_container_does_not_set_unattached_and_does_not_warn() {
+        // Symmetric to the above: happy path must leave
+        // `metadata.unattached` absent (not `false`, not `null`) so
+        // downstream can use `get("unattached") == Some(true)` as a
+        // three-state predicate without reasoning about defaults.
+        let comment = json!({
+            "content": {
+                "id": "42",
+                "type": "comment",
+                "title": "Re: x",
+                "space": { "key": "ST", "name": "Delivery Tribes" },
+                "history": {
+                    "createdDate": "2026-04-20T10:43:00.000Z",
+                    "createdBy": { "accountId": SELF_ID, "displayName": "Me" }
+                },
+                "extensions": { "location": "footer" },
+                "container": { "id": "999" },
+                "_links": { "webui": "/spaces/ST/pages/999" }
+            },
+            "url": "/spaces/ST/pages/999",
+            "_links": { "base": "https://acme.atlassian.net/wiki" }
+        });
+        let ev = normalise_result(
+            Uuid::new_v4(),
+            &workspace(),
+            SELF_ID,
+            window(),
+            &comment,
+            None,
+        )
+        .unwrap()
+        .expect("attached comment emits");
+        assert!(
+            ev.metadata.get("unattached").is_none(),
+            "attached comment must omit `unattached` entirely, got {:?}",
+            ev.metadata,
+        );
+        assert!(!logs_contain(
+            "confluence comment missing both ancestors[] and container"
+        ));
     }
 
     #[test]

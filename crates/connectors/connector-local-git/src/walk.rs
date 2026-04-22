@@ -64,6 +64,15 @@ pub struct RepoWalk {
 /// timezone at walk time; commits are bucketed in this tz so a commit
 /// at 01:00 UTC on day D+1 but 20:00 local on day D is attributed to
 /// day D when the user is in UTC-5.
+#[tracing::instrument(
+    skip_all,
+    fields(
+        connector = "local-git",
+        source_id = %source_id,
+        day = %day,
+        repo = %repo_root.display()
+    )
+)]
 pub fn walk_repo_for_day(
     source_id: &SourceId,
     repo_root: &Path,

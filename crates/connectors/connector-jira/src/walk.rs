@@ -79,6 +79,10 @@ pub struct WalkOutcome {
 
 /// Walk Jira issues for one local-timezone day.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    skip_all,
+    fields(connector = "jira", source_id = %source_id, day = %day)
+)]
 pub async fn walk_day(
     http: &HttpClient,
     auth: Arc<dyn AuthStrategy>,

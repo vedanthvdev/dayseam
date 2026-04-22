@@ -59,6 +59,19 @@ pub struct CollapsedTransition {
     /// Renderer will note `(rolled up from N transitions)` when this
     /// is greater than 1.
     pub transition_count: u32,
+    /// Intermediate statuses the cascade passed through, in
+    /// chronological order, exclusive of `from_status` (earliest) and
+    /// `to_status` (latest). Always has `transition_count.saturating_sub(1)`
+    /// entries (empty when `transition_count <= 1`).
+    ///
+    /// Added in DAY-88 (CORR-v0.2-04): pre-fix, a cascade
+    /// `Todo → InProgress → Review → Done` rendered as `Todo → Done`
+    /// and every intermediate state was silently discarded, which broke
+    /// audit use cases (e.g. "did this ticket ever enter Review
+    /// today?"). The field is serialised into `metadata.via` on the
+    /// emitted `ActivityEvent`; renderers can ignore it, and the
+    /// rollup test suite pins its chronological invariant.
+    pub via: Vec<String>,
 }
 
 /// Collapse consecutive transitions whose `created_at` gaps are within
@@ -76,9 +89,12 @@ pub fn collapse_rapid_transitions(transitions: &[StatusTransition]) -> Vec<Colla
             Some(last) => {
                 let gap = (t.created_at - last.created_at).num_seconds();
                 if (0..=RAPID_TRANSITION_WINDOW_SECONDS).contains(&gap) {
-                    // Extend the cascade: keep the earliest `from`, move
-                    // `to` / `status_category` / `created_at` forward,
-                    // bump the count.
+                    // Extend the cascade: keep the earliest `from`, push
+                    // the previous `to_status` (which is about to be
+                    // overwritten) onto `via`, move `to` /
+                    // `status_category` / `created_at` forward, bump
+                    // the count.
+                    last.via.push(std::mem::take(&mut last.to_status));
                     last.to_status = t.to_status.clone();
                     last.status_category = t.status_category.clone();
                     last.created_at = t.created_at;
@@ -100,6 +116,7 @@ fn singleton(t: &StatusTransition) -> CollapsedTransition {
         to_status: t.to_status.clone(),
         status_category: t.status_category.clone(),
         transition_count: 1,
+        via: Vec::new(),
     }
 }
 
@@ -189,5 +206,48 @@ mod tests {
     fn sixty_one_second_gap_splits() {
         let out = collapse_rapid_transitions(&[t(0, "A", "B"), t(61, "B", "C")]);
         assert_eq!(out.len(), 2);
+    }
+
+    /// DAY-88 / CORR-v0.2-04. Pre-fix, a `Todo → InProgress → Review →
+    /// Done` cascade rendered as `Todo → Done` and every intermediate
+    /// state was lost. The test pins that `via` now preserves the
+    /// intermediate hops in chronological order, exclusive of the
+    /// earliest `from_status` and the latest `to_status`.
+    #[test]
+    fn collapse_preserves_intermediate_transitions_in_via() {
+        let out = collapse_rapid_transitions(&[
+            t(0, "Todo", "InProgress"),
+            t(5, "InProgress", "Review"),
+            t(10, "Review", "Done"),
+        ]);
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].from_status, "Todo");
+        assert_eq!(out[0].to_status, "Done");
+        assert_eq!(
+            out[0].via,
+            vec!["InProgress".to_string(), "Review".to_string()],
+            "via must list every intermediate hop in chronological order"
+        );
+        assert_eq!(out[0].transition_count, 3);
+    }
+
+    /// Edge cases for `via` at the boundaries.
+    ///
+    /// * A singleton (one transition) has `transition_count == 1` and
+    ///   no intermediate hops.
+    /// * A two-step cascade `[A→B, B→C]` covers three states `A, B, C`;
+    ///   `from = A`, `to = C`, and the one intermediate state `B`
+    ///   moves into `via`.
+    #[test]
+    fn collapse_via_has_n_minus_one_entries_for_n_transitions() {
+        let singleton = collapse_rapid_transitions(&[t(0, "A", "B")]);
+        assert_eq!(singleton[0].transition_count, 1);
+        assert_eq!(singleton[0].via, Vec::<String>::new());
+
+        let two_step = collapse_rapid_transitions(&[t(0, "A", "B"), t(5, "B", "C")]);
+        assert_eq!(two_step[0].from_status, "A");
+        assert_eq!(two_step[0].to_status, "C");
+        assert_eq!(two_step[0].via, vec!["B".to_string()]);
+        assert_eq!(two_step[0].transition_count, 2);
     }
 }

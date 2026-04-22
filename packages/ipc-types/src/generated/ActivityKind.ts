@@ -12,4 +12,4 @@
  * enum additive here means later tasks can TDD walker behaviour against
  * a stable vocabulary without an intermediate core-types amendment.
  */
-export type ActivityKind = "CommitAuthored" | "MrOpened" | "MrMerged" | "MrClosed" | "MrReviewComment" | "MrApproved" | "IssueOpened" | "IssueClosed" | "IssueComment" | "JiraIssueTransitioned" | "JiraIssueCommented" | "JiraIssueAssigned" | "JiraIssueCreated" | "ConfluencePageCreated" | "ConfluencePageEdited" | "ConfluenceComment";
+export type ActivityKind = "CommitAuthored" | "MrOpened" | "MrMerged" | "MrClosed" | "MrReviewComment" | "MrApproved" | "IssueOpened" | "IssueClosed" | "IssueComment" | "JiraIssueTransitioned" | "JiraIssueCommented" | "JiraIssueAssigned" | "JiraIssueUnassigned" | "JiraIssueCreated" | "ConfluencePageCreated" | "ConfluencePageEdited" | "ConfluenceComment";

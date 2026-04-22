@@ -16,7 +16,8 @@ use dayseam_core::{
     DayseamError, LogLevel, SourceConfig, SourceIdentity, SourceIdentityKind, SourceKind,
 };
 use dayseam_db::{
-    open, LocalRepoRepo, LogRepo, LogRow, PersonRepo, SourceIdentityRepo, SourceRepo,
+    open, registered_repairs, LocalRepoRepo, LogRepo, LogRow, PersonRepo, SourceIdentityRepo,
+    SourceRepo,
 };
 use dayseam_events::AppBus;
 use dayseam_orchestrator::{
@@ -98,7 +99,7 @@ pub async fn build_app_state(data_dir: &Path) -> Result<AppState, DayseamError> 
     record_startup_log(&pool).await;
     backfill_gitlab_self_identities(&pool).await;
     backfill_atlassian_self_identities(&pool).await;
-    backfill_atlassian_confluence_email(&pool).await;
+    run_registered_repairs(&pool).await;
 
     let app_bus = AppBus::new();
     let secrets: Arc<dyn SecretStore> = Arc::new(KeychainStore::new());
@@ -285,112 +286,26 @@ async fn backfill_atlassian_self_identities(pool: &SqlitePool) {
     }
 }
 
-/// DAY-84 upgrade backfill: copy the sibling Atlassian email into any
-/// `Confluence` row whose `SourceConfig::Confluence::email` is empty.
+/// Run every [`dayseam_db::SerdeDefaultRepair`] the workspace
+/// registers. This is the v0.3 generalisation of the v0.2.1 one-off
+/// Confluence-email backfill (CORR-v0.2-08 / DAY-88): each repair
+/// lives next to the data it owns (`crates/dayseam-db/src/repairs/`)
+/// and startup just iterates. Adding a new data-shape recovery is
+/// one file under `repairs/` plus one line in `registered_repairs()`
+/// — startup never needs to learn the new name.
 ///
-/// v0.2.0 shipped `SourceConfig::Confluence` with only `workspace_url`.
-/// v0.2.1 (this hotfix) adds a required-at-auth-time `email` field; the
-/// `#[serde(default)]` attribute keeps old rows deserialisable, but
-/// [`crate::ipc::commands::build_source_auth`] then rejects the empty
-/// email with `atlassian.auth.invalid_credentials` before any network
-/// call. For users who connected on v0.2.0 via Journey A (shared PAT
-/// across Jira + Confluence), the sibling Jira row still holds the
-/// email the dialog collected — we copy it across at boot so reports
-/// resume working without a manual Reconnect.
-///
-/// Matching key is the `secret_ref` (keychain slot). Two sources
-/// pointing at the same slot share a credential by construction
-/// (Journey A / Journey C mode 1), which means they share a user, and
-/// therefore share an email. We deliberately do **not** fall back to
-/// matching on workspace URL alone: that would risk copying the wrong
-/// email across two independently-added Confluence instances on the
-/// same tenant.
-///
-/// Confluence-only installs (no sibling Jira row) hit the warn branch —
-/// manual Reconnect is the right flow for them because the email is
-/// genuinely not recoverable from any on-disk state.
-async fn backfill_atlassian_confluence_email(pool: &SqlitePool) {
-    let sources = match SourceRepo::new(pool.clone()).list().await {
-        Ok(sources) => sources,
-        Err(err) => {
+/// Each repair's idempotency is its own responsibility; a repair
+/// that fails is logged and skipped so the next one still runs.
+/// That matches the pre-DAY-88 behaviour of the inlined backfill:
+/// any error path already `tracing::warn!`ed + returned.
+async fn run_registered_repairs(pool: &SqlitePool) {
+    for repair in registered_repairs() {
+        if let Err(err) = repair.run(pool).await {
             tracing::warn!(
                 %err,
-                "backfill(confluence_email): source listing failed; skipping"
+                repair = repair.name(),
+                "serde-default repair returned an error; skipping",
             );
-            return;
-        }
-    };
-
-    let repo = SourceRepo::new(pool.clone());
-    for source in &sources {
-        let (workspace_url, empty_email) = match &source.config {
-            SourceConfig::Confluence {
-                workspace_url,
-                email,
-            } if email.trim().is_empty() => (workspace_url.clone(), true),
-            _ => continue,
-        };
-        if !empty_email {
-            continue;
-        }
-
-        let Some(secret_ref) = source.secret_ref.as_ref() else {
-            tracing::warn!(
-                source_id = %source.id,
-                "backfill(confluence_email): Confluence row has empty email and no secret_ref — \
-                 user must reconnect manually",
-            );
-            continue;
-        };
-
-        let sibling_email = sources.iter().find_map(|other| {
-            if other.id == source.id {
-                return None;
-            }
-            let other_ref = other.secret_ref.as_ref()?;
-            if other_ref.keychain_service != secret_ref.keychain_service
-                || other_ref.keychain_account != secret_ref.keychain_account
-            {
-                return None;
-            }
-            match &other.config {
-                SourceConfig::Jira { email, .. } | SourceConfig::Confluence { email, .. }
-                    if !email.trim().is_empty() =>
-                {
-                    Some(email.clone())
-                }
-                _ => None,
-            }
-        });
-
-        let Some(email) = sibling_email else {
-            tracing::warn!(
-                source_id = %source.id,
-                "backfill(confluence_email): Confluence row has empty email and no Atlassian \
-                 sibling with the same secret_ref — user must reconnect manually",
-            );
-            continue;
-        };
-
-        let new_config = SourceConfig::Confluence {
-            workspace_url,
-            email: email.clone(),
-        };
-        match repo.update_config(&source.id, &new_config).await {
-            Ok(()) => {
-                tracing::info!(
-                    source_id = %source.id,
-                    "backfill(confluence_email): copied sibling Atlassian email into Confluence \
-                     row to recover from v0.2.0 upgrade"
-                );
-            }
-            Err(err) => {
-                tracing::warn!(
-                    %err,
-                    source_id = %source.id,
-                    "backfill(confluence_email): update_config failed; user must reconnect"
-                );
-            }
         }
     }
 }
@@ -615,46 +530,90 @@ async fn run_startup_maintenance(orchestrator: &Orchestrator, pool: &SqlitePool)
 ///
 /// Returns the number of orphan refs detected (never an error —
 /// audit failures are surfaced purely through `tracing::warn!`).
+///
+/// DAY-88 / CORR-v0.2-01 (narrowed) extends the v0.2 warning line
+/// with a `source_id` field. The v0.2 warning said *"a keychain
+/// slot is no longer readable"* but stopped short of naming which
+/// source rows were affected; a user following the log drawer to
+/// find the Reconnect chip had to open every Atlassian row to
+/// guess. We now iterate the full `sources` list once and emit
+/// one warn line per affected `source_id`, so the user can jump
+/// straight to the row that needs reconnecting.
 async fn audit_orphan_secrets(pool: &SqlitePool, secrets: &dyn SecretStore) -> usize {
-    let refs = match SourceRepo::new(pool.clone()).distinct_secret_refs().await {
-        Ok(refs) => refs,
+    // Pull the full list once so the warning can name the
+    // `source_id` that depends on each orphan slot. Per-secret-ref
+    // listing (`distinct_secret_refs`) was enough to detect the
+    // problem, but "which source?" is what the user actually needs
+    // to reconnect — see CORR-v0.2-01 in DAY-88.
+    let sources = match SourceRepo::new(pool.clone()).list().await {
+        Ok(sources) => sources,
         Err(err) => {
-            tracing::warn!(%err, "orphan-secret audit: listing distinct secret refs failed; skipping");
+            tracing::warn!(
+                %err,
+                "orphan-secret audit: listing sources failed; skipping",
+            );
             return 0;
         }
     };
+
+    // Group sources by their shared `secret_ref` so a slot used by
+    // both a Jira row and its Confluence sibling (Journey A) probes
+    // once and attributes to both rows in the warning.
+    use std::collections::BTreeMap;
+    let mut by_ref: BTreeMap<(String, String), Vec<Uuid>> = BTreeMap::new();
+    for source in &sources {
+        if let Some(sr) = source.secret_ref.as_ref() {
+            let key = (sr.keychain_service.clone(), sr.keychain_account.clone());
+            by_ref.entry(key).or_default().push(source.id);
+        }
+    }
+
     let mut orphans = 0usize;
-    for sr in refs {
-        let key = crate::ipc::commands::secret_store_key(&sr);
+    for ((service, account), source_ids) in by_ref {
+        let key = crate::ipc::commands::secret_store_key(&dayseam_core::SecretRef {
+            keychain_service: service.clone(),
+            keychain_account: account.clone(),
+        });
         match secrets.get(&key) {
             Ok(Some(_)) => {}
             Ok(None) => {
                 orphans += 1;
-                tracing::warn!(
-                    service = %sr.keychain_service,
-                    account = %sr.keychain_account,
-                    "orphan-secret audit: `sources` row references a keychain slot the store can't read — source will fail to authenticate until the user reconnects"
-                );
+                for source_id in &source_ids {
+                    tracing::warn!(
+                        source_id = %source_id,
+                        service = %service,
+                        account = %account,
+                        "orphan-secret audit: source row references a keychain slot the \
+                         store can't read — source will fail to authenticate until the \
+                         user reconnects"
+                    );
+                }
             }
             Err(err) => {
                 // Probe errors are not treated as orphans — an
                 // unhealthy keychain (locked, permission denied)
                 // could otherwise stampede the warn log with rows
                 // that are actually fine. One line per probe error,
-                // no orphan count bump.
-                tracing::warn!(
-                    %err,
-                    service = %sr.keychain_service,
-                    account = %sr.keychain_account,
-                    "orphan-secret audit: keychain probe failed; skipping this ref"
-                );
+                // no orphan count bump. Still attribute to all
+                // affected source_ids so a transient error points
+                // the user at the same set of rows a real orphan
+                // would.
+                for source_id in &source_ids {
+                    tracing::warn!(
+                        %err,
+                        source_id = %source_id,
+                        service = %service,
+                        account = %account,
+                        "orphan-secret audit: keychain probe failed; skipping this ref"
+                    );
+                }
             }
         }
     }
     if orphans > 0 {
         tracing::warn!(
             orphans,
-            "orphan-secret audit: {orphans} source(s) reference a keychain slot that is no longer readable"
+            "orphan-secret audit: {orphans} keychain slot(s) no longer readable"
         );
     }
     orphans
@@ -1259,7 +1218,7 @@ mod tests {
         )
         .await;
 
-        backfill_atlassian_confluence_email(&pool).await;
+        run_registered_repairs(&pool).await;
 
         let after = SourceRepo::new(pool.clone())
             .get(&conf_id)
@@ -1296,7 +1255,7 @@ mod tests {
         )
         .await;
 
-        backfill_atlassian_confluence_email(&pool).await;
+        run_registered_repairs(&pool).await;
 
         let after = SourceRepo::new(pool.clone())
             .get(&conf_id)
@@ -1330,7 +1289,7 @@ mod tests {
         )
         .await;
 
-        backfill_atlassian_confluence_email(&pool).await;
+        run_registered_repairs(&pool).await;
 
         let after = SourceRepo::new(pool.clone())
             .get(&conf_id)
@@ -1435,7 +1394,7 @@ mod tests {
         }
 
         // The actual upgrade migration.
-        backfill_atlassian_confluence_email(&pool).await;
+        run_registered_repairs(&pool).await;
 
         let after = SourceRepo::new(pool.clone())
             .get(&conf_id)
@@ -1497,7 +1456,7 @@ mod tests {
         )
         .await;
 
-        backfill_atlassian_confluence_email(&pool).await;
+        run_registered_repairs(&pool).await;
 
         let after = SourceRepo::new(pool.clone())
             .get(&conf_id)

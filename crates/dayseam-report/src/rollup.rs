@@ -150,7 +150,11 @@ fn orphan_key(event: &ActivityEvent) -> OrphanKey {
     use dayseam_core::ActivityKind::*;
     let day = event.occurred_at.naive_local().date();
     match event.kind {
-        JiraIssueTransitioned | JiraIssueCommented | JiraIssueAssigned | JiraIssueCreated => {
+        JiraIssueTransitioned
+        | JiraIssueCommented
+        | JiraIssueAssigned
+        | JiraIssueUnassigned
+        | JiraIssueCreated => {
             let gk = group_key_from_event(event);
             // `jira_issue` entity carries the per-issue id the
             // synthetic `JiraIssue` artifact is keyed on.

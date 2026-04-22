@@ -38,7 +38,10 @@
 //! preserve the existing UI contract the desktop streaming preview
 //! depends on.
 
-use dayseam_core::ArtifactPayload;
+use dayseam_core::{ActivityKind, ArtifactPayload};
+use serde_json::json;
+
+use crate::rollup::RolledUpArtifact;
 
 /// A top-level section of the rendered report.
 ///
@@ -65,6 +68,19 @@ pub(crate) enum ReportSection {
     /// on — fed by [`ArtifactPayload::ConfluencePage`]. One bullet
     /// per event.
     ConfluencePages,
+    /// Catch-all for events the primary-kind sections can't host
+    /// honestly. DAY-88 / CORR-v0.2-06 adds this for Confluence
+    /// comments whose CQL result carried neither `ancestors[]` nor
+    /// `container`, so the normaliser couldn't resolve a parent
+    /// page. Before, those comments rolled up under a synthetic
+    /// `page_id = "UNKNOWN"` and rendered in `## Confluence pages`
+    /// as if they belonged to a real page; routing them here
+    /// instead keeps the Confluence section truthful (every bullet
+    /// has a real parent page) and still surfaces the work to the
+    /// user. Ordered *last* deliberately — the reading order is
+    /// "what I shipped → what I triaged → what I wrote → stray
+    /// activity I should triage later".
+    Other,
 }
 
 impl ReportSection {
@@ -75,12 +91,46 @@ impl ReportSection {
     /// routing is decided here. Do *not* add a wildcard arm —
     /// silent fall-through is the bug this module exists to
     /// prevent.
+    ///
+    /// This is the payload-only path: it knows nothing about the
+    /// events in the group. For event-aware routing (DAY-88 /
+    /// CORR-v0.2-06 unattached-comment override) callers should
+    /// prefer [`Self::from_group`], which defers to this function
+    /// after first checking event-level predicates.
     pub(crate) fn from_payload(payload: &ArtifactPayload) -> Self {
         match payload {
             ArtifactPayload::CommitSet { .. } => Self::Commits,
             ArtifactPayload::JiraIssue { .. } => Self::JiraIssues,
             ArtifactPayload::ConfluencePage { .. } => Self::ConfluencePages,
         }
+    }
+
+    /// Route a rolled-up group to its section.
+    ///
+    /// Extends [`Self::from_payload`] with an event-level override:
+    /// a Confluence synthetic-page group whose events all carry
+    /// `metadata.unattached == true` (emitted by
+    /// `connector_confluence::normalise::normalise_comment` when a
+    /// comment has no discoverable parent page — see
+    /// CORR-v0.2-06 in DAY-88) is routed to [`Self::Other`] rather
+    /// than [`Self::ConfluencePages`]. "All events" is deliberate:
+    /// if even one event in the group has a real parent page the
+    /// group deserves to render under Confluence pages; the override
+    /// only fires when every bullet in the group would otherwise be
+    /// lying about belonging to a real page.
+    pub(crate) fn from_group(group: &RolledUpArtifact) -> Self {
+        if matches!(
+            &group.artifact.payload,
+            ArtifactPayload::ConfluencePage { .. }
+        ) && !group.events.is_empty()
+            && group.events.iter().all(|ev| {
+                ev.kind == ActivityKind::ConfluenceComment
+                    && ev.metadata.get("unattached") == Some(&json!(true))
+            })
+        {
+            return Self::Other;
+        }
+        Self::from_payload(&group.artifact.payload)
     }
 
     /// Stable identifier written to
@@ -95,6 +145,7 @@ impl ReportSection {
             Self::Commits => "commits",
             Self::JiraIssues => "jira_issues",
             Self::ConfluencePages => "confluence_pages",
+            Self::Other => "other",
         }
     }
 
@@ -108,6 +159,7 @@ impl ReportSection {
             Self::Commits => "Commits",
             Self::JiraIssues => "Jira issues",
             Self::ConfluencePages => "Confluence pages",
+            Self::Other => "Other",
         }
     }
 }
@@ -115,7 +167,10 @@ impl ReportSection {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use chrono::NaiveDate;
+    use chrono::{NaiveDate, TimeZone, Utc};
+    use dayseam_core::{
+        ActivityEvent, Actor, Artifact, ArtifactId, ArtifactKind, EntityRef, Privacy, RawRef,
+    };
     use uuid::Uuid;
 
     fn commit_set() -> ArtifactPayload {
@@ -145,6 +200,60 @@ mod tests {
         }
     }
 
+    fn confluence_comment_event(unattached: bool) -> ActivityEvent {
+        let metadata = if unattached {
+            json!({ "location": "footer", "unattached": true })
+        } else {
+            json!({ "location": "footer" })
+        };
+        ActivityEvent {
+            id: Uuid::from_u128(1),
+            source_id: Uuid::from_u128(0xaaaa),
+            external_id: "comment:42".into(),
+            kind: ActivityKind::ConfluenceComment,
+            occurred_at: Utc.with_ymd_and_hms(2026, 4, 20, 10, 0, 0).unwrap(),
+            actor: Actor {
+                display_name: "Me".into(),
+                email: None,
+                external_id: Some("acct-1".into()),
+            },
+            title: "Comment on page".into(),
+            body: None,
+            links: vec![],
+            entities: vec![EntityRef {
+                kind: "confluence_space".into(),
+                external_id: "ST".into(),
+                label: None,
+            }],
+            parent_external_id: None,
+            metadata,
+            raw_ref: RawRef {
+                storage_key: "confluence:comment:42".into(),
+                content_type: "application/json".into(),
+            },
+            privacy: Privacy::Normal,
+        }
+    }
+
+    fn rolled_group(payload: ArtifactPayload, events: Vec<ActivityEvent>) -> RolledUpArtifact {
+        let source_id = Uuid::from_u128(0xaaaa);
+        RolledUpArtifact {
+            artifact: Artifact {
+                id: ArtifactId::deterministic(&source_id, ArtifactKind::ConfluencePage, "x"),
+                source_id,
+                kind: match payload {
+                    ArtifactPayload::CommitSet { .. } => ArtifactKind::CommitSet,
+                    ArtifactPayload::JiraIssue { .. } => ArtifactKind::JiraIssue,
+                    ArtifactPayload::ConfluencePage { .. } => ArtifactKind::ConfluencePage,
+                },
+                external_id: "x".into(),
+                payload,
+                created_at: Utc.with_ymd_and_hms(2026, 4, 20, 0, 0, 0).unwrap(),
+            },
+            events,
+        }
+    }
+
     #[test]
     fn from_payload_maps_each_variant_to_its_section() {
         assert_eq!(
@@ -161,6 +270,53 @@ mod tests {
         );
     }
 
+    /// CORR-v0.2-06. Confluence group whose every event carries
+    /// `metadata.unattached == true` (comments whose parent page
+    /// couldn't be resolved) must route to `Other`, not
+    /// `ConfluencePages`. Without this override the v0.2 shipped bug
+    /// re-surfaces: those bullets lie about belonging to a real
+    /// page.
+    #[test]
+    fn from_group_routes_all_unattached_confluence_comments_to_other() {
+        let group = rolled_group(
+            confluence_page(),
+            vec![
+                confluence_comment_event(true),
+                confluence_comment_event(true),
+            ],
+        );
+        assert_eq!(ReportSection::from_group(&group), ReportSection::Other);
+    }
+
+    /// Symmetric guard: one unattached + one attached → group still
+    /// routes to `ConfluencePages` because the attached comment
+    /// needs its real parent page to render correctly. Prevents an
+    /// overzealous predicate from evicting legitimate bullets.
+    #[test]
+    fn from_group_keeps_mixed_attached_and_unattached_in_confluence_pages() {
+        let mut attached = confluence_comment_event(false);
+        attached.id = Uuid::from_u128(2);
+        let group = rolled_group(
+            confluence_page(),
+            vec![confluence_comment_event(true), attached],
+        );
+        assert_eq!(
+            ReportSection::from_group(&group),
+            ReportSection::ConfluencePages,
+        );
+    }
+
+    /// The happy path must not drift: Confluence group with only
+    /// attached comments stays in `ConfluencePages`.
+    #[test]
+    fn from_group_keeps_attached_confluence_comments_in_confluence_pages() {
+        let group = rolled_group(confluence_page(), vec![confluence_comment_event(false)]);
+        assert_eq!(
+            ReportSection::from_group(&group),
+            ReportSection::ConfluencePages,
+        );
+    }
+
     /// The `id` strings are part of the engine's external contract
     /// (the markdown sink and the streaming preview both key on
     /// them). Pin the exact bytes so a rename is a loud test
@@ -170,6 +326,7 @@ mod tests {
         assert_eq!(ReportSection::Commits.id(), "commits");
         assert_eq!(ReportSection::JiraIssues.id(), "jira_issues");
         assert_eq!(ReportSection::ConfluencePages.id(), "confluence_pages");
+        assert_eq!(ReportSection::Other.id(), "other");
     }
 
     /// Titles appear as `## <title>` in Obsidian notes users have
@@ -179,6 +336,7 @@ mod tests {
         assert_eq!(ReportSection::Commits.title(), "Commits");
         assert_eq!(ReportSection::JiraIssues.title(), "Jira issues");
         assert_eq!(ReportSection::ConfluencePages.title(), "Confluence pages");
+        assert_eq!(ReportSection::Other.title(), "Other");
     }
 
     /// The derived `Ord` is what `build_sections` relies on to emit
@@ -189,6 +347,7 @@ mod tests {
     #[test]
     fn ord_matches_render_order() {
         let mut sections = vec![
+            ReportSection::Other,
             ReportSection::ConfluencePages,
             ReportSection::Commits,
             ReportSection::JiraIssues,
@@ -200,8 +359,9 @@ mod tests {
                 ReportSection::Commits,
                 ReportSection::JiraIssues,
                 ReportSection::ConfluencePages,
+                ReportSection::Other,
             ],
-            "derived Ord must render Commits before Jira issues before Confluence pages",
+            "derived Ord must render Commits → Jira issues → Confluence pages → Other",
         );
     }
 }

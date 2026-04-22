@@ -195,7 +195,10 @@ pub fn normalise_issue(
                         // rendering concern the upstream may not even
                         // populate consistently.
                         let to_account = item.get("to").and_then(Value::as_str).unwrap_or("");
+                        let from_account = item.get("from").and_then(Value::as_str).unwrap_or("");
                         if to_account == self_account_id {
+                            // Pre-DAY-88 semantics: emit only when the
+                            // user was newly assigned the ticket.
                             out.events.push(build_assigned_event(
                                 source_id,
                                 &project_key,
@@ -205,6 +208,26 @@ pub fn normalise_issue(
                                 &link,
                                 author,
                                 created_at,
+                            ));
+                        } else if from_account == self_account_id {
+                            // DAY-88 / CORR-v0.2-07. The user was
+                            // unassigned. This covers both true
+                            // unassignments (`to == ""`) and handoffs
+                            // to a different teammate (`to == other`).
+                            // Symmetric with the assigned arm above:
+                            // "I handed off CAR-5117" is as much a
+                            // calendar event for the user's EOD as
+                            // "I picked up CAR-5117".
+                            out.events.push(build_unassigned_event(
+                                source_id,
+                                &project_key,
+                                project_name.as_deref(),
+                                key,
+                                &issue_summary,
+                                &link,
+                                author,
+                                created_at,
+                                to_account,
                             ));
                         }
                     }
@@ -413,6 +436,10 @@ fn build_transition_event(
             "to_status": t.to_status,
             "status_category": t.status_category,
             "transition_count": t.transition_count,
+            // DAY-88 / CORR-v0.2-04. Intermediate hops a cascade passed
+            // through, in chronological order. Empty for a non-collapsed
+            // singleton; renderers can ignore the field.
+            "via": t.via,
         }),
         raw_ref: RawRef {
             storage_key: format!("jira:issue:{issue_key}:transition:{}", t.created_at),
@@ -455,6 +482,59 @@ fn build_assigned_event(
         metadata: json!({}),
         raw_ref: RawRef {
             storage_key: format!("jira:issue:{issue_key}:assigned:{created_at}"),
+            content_type: "application/json".to_string(),
+        },
+        privacy: Privacy::Normal,
+    }
+}
+
+/// DAY-88 / CORR-v0.2-07. Symmetric counterpart to
+/// [`build_assigned_event`] for the `from == self` case.
+///
+/// `to_account` is the accountId the ticket moved to — empty string
+/// for a true unassignment, a different accountId for a handoff. It
+/// is recorded on `metadata.reassigned_to_account_id` when non-empty
+/// so a future renderer can distinguish the two cases without
+/// reparsing the raw payload.
+#[allow(clippy::too_many_arguments)]
+fn build_unassigned_event(
+    source_id: SourceId,
+    project_key: &str,
+    project_name: Option<&str>,
+    issue_key: &str,
+    summary: &str,
+    link: &Link,
+    author: &Value,
+    created_at: DateTime<Utc>,
+    to_account: &str,
+) -> ActivityEvent {
+    let kind_token = "JiraIssueUnassigned";
+    let external_id = format!("{issue_key}:unassigned:{}", created_at.timestamp_millis());
+    let source_id_str = source_id.to_string();
+    let id = ActivityEvent::deterministic_id(&source_id_str, &external_id, kind_token);
+    let metadata = if to_account.is_empty() {
+        json!({})
+    } else {
+        json!({ "reassigned_to_account_id": to_account })
+    };
+    ActivityEvent {
+        id,
+        source_id,
+        external_id,
+        kind: ActivityKind::JiraIssueUnassigned,
+        occurred_at: created_at,
+        actor: actor_from_author(author),
+        title: format!("{issue_key} unassigned"),
+        body: None,
+        links: vec![link.clone()],
+        entities: vec![
+            project_entity(project_key, project_name),
+            issue_entity(issue_key, summary),
+        ],
+        parent_external_id: Some(issue_key.to_string()),
+        metadata,
+        raw_ref: RawRef {
+            storage_key: format!("jira:issue:{issue_key}:unassigned:{created_at}"),
             content_type: "application/json".to_string(),
         },
         privacy: Privacy::Normal,
@@ -743,6 +823,10 @@ mod tests {
 
     #[test]
     fn assignee_change_to_someone_else_does_not_emit() {
+        // Unrelated assignment — neither `from` nor `to` is self — must
+        // not emit. CORR-v0.2-07 only adds a `from == self` arm; it
+        // must not introduce false positives when the user is neither
+        // the losing assignee nor the gaining one.
         let mut issue = issue_skeleton();
         issue["changelog"] = json!({
             "histories": [
@@ -751,7 +835,9 @@ mod tests {
                     "author": {"accountId": SELF_ID, "displayName": "Me"},
                     "created": "2026-04-20T10:00:00.000+0000",
                     "items": [
-                        {"field": "assignee", "to": "other-user", "toString": "Them"}
+                        {"field": "assignee",
+                         "from": "someone-else", "fromString": "Them",
+                         "to": "other-user", "toString": "Other"}
                     ]
                 }
             ]
@@ -766,6 +852,172 @@ mod tests {
         )
         .unwrap();
         assert!(out.events.is_empty());
+    }
+
+    /// DAY-88 / CORR-v0.2-07. A true unassignment (`from == self`,
+    /// `to == ""`) must emit a `JiraIssueUnassigned` bullet. Pre-fix
+    /// this was silently dropped because the walker only looked at the
+    /// `to == self` branch.
+    #[test]
+    fn assignee_change_from_self_to_empty_emits_jira_issue_unassigned() {
+        let mut issue = issue_skeleton();
+        issue["changelog"] = json!({
+            "histories": [
+                {
+                    "id": "1",
+                    "author": {"accountId": SELF_ID, "displayName": "Me"},
+                    "created": "2026-04-20T10:00:00.000+0000",
+                    "items": [
+                        {"field": "assignee", "from": SELF_ID, "fromString": "Me",
+                         "to": "", "toString": ""}
+                    ]
+                }
+            ]
+        });
+        let out = normalise_issue(
+            Uuid::new_v4(),
+            &workspace(),
+            SELF_ID,
+            window(),
+            &issue,
+            None,
+        )
+        .unwrap();
+        assert_eq!(out.events.len(), 1);
+        let ev = &out.events[0];
+        assert_eq!(ev.kind, ActivityKind::JiraIssueUnassigned);
+        assert_eq!(ev.title, "CAR-5117 unassigned");
+        assert_eq!(
+            ev.metadata,
+            json!({}),
+            "empty `to` must not record a reassignment target"
+        );
+    }
+
+    /// DAY-88 / CORR-v0.2-07. A handoff (`from == self`, `to == other`)
+    /// also emits a `JiraIssueUnassigned` and records the new assignee
+    /// in `metadata.reassigned_to_account_id` so downstream renderers
+    /// can distinguish handoffs from true unassignments.
+    #[test]
+    fn assignee_change_from_self_to_other_emits_unassigned_with_handoff_metadata() {
+        let mut issue = issue_skeleton();
+        issue["changelog"] = json!({
+            "histories": [
+                {
+                    "id": "1",
+                    "author": {"accountId": SELF_ID, "displayName": "Me"},
+                    "created": "2026-04-20T10:00:00.000+0000",
+                    "items": [
+                        {"field": "assignee", "from": SELF_ID, "fromString": "Me",
+                         "to": "teammate-account", "toString": "Teammate"}
+                    ]
+                }
+            ]
+        });
+        let out = normalise_issue(
+            Uuid::new_v4(),
+            &workspace(),
+            SELF_ID,
+            window(),
+            &issue,
+            None,
+        )
+        .unwrap();
+        assert_eq!(out.events.len(), 1);
+        let ev = &out.events[0];
+        assert_eq!(ev.kind, ActivityKind::JiraIssueUnassigned);
+        assert_eq!(
+            ev.metadata["reassigned_to_account_id"],
+            json!("teammate-account")
+        );
+    }
+
+    /// DAY-88 / CORR-v0.2-04. A three-transition cascade must surface
+    /// every intermediate status in `metadata.via` on the emitted
+    /// transition event. Pre-fix, only the earliest `from` and the
+    /// latest `to` survived; intermediates were overwritten.
+    #[test]
+    fn transition_event_metadata_includes_via_on_collapsed_cascade() {
+        let mut issue = issue_skeleton();
+        issue["changelog"] = json!({
+            "histories": [
+                {
+                    "id": "1",
+                    "author": {"accountId": SELF_ID, "displayName": "Me"},
+                    "created": "2026-04-20T10:00:00.000+0000",
+                    "items": [
+                        {"field": "status", "fromString": "Todo", "toString": "In Progress"}
+                    ]
+                },
+                {
+                    "id": "2",
+                    "author": {"accountId": SELF_ID, "displayName": "Me"},
+                    "created": "2026-04-20T10:00:05.000+0000",
+                    "items": [
+                        {"field": "status", "fromString": "In Progress", "toString": "Review"}
+                    ]
+                },
+                {
+                    "id": "3",
+                    "author": {"accountId": SELF_ID, "displayName": "Me"},
+                    "created": "2026-04-20T10:00:10.000+0000",
+                    "items": [
+                        {"field": "status", "fromString": "Review", "toString": "Done"}
+                    ]
+                }
+            ]
+        });
+        let out = normalise_issue(
+            Uuid::new_v4(),
+            &workspace(),
+            SELF_ID,
+            window(),
+            &issue,
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            out.events.len(),
+            1,
+            "the three transitions must collapse into one event"
+        );
+        let ev = &out.events[0];
+        assert_eq!(ev.kind, ActivityKind::JiraIssueTransitioned);
+        assert_eq!(ev.metadata["transition_count"], json!(3));
+        assert_eq!(ev.metadata["from_status"], json!("Todo"));
+        assert_eq!(ev.metadata["to_status"], json!("Done"));
+        assert_eq!(ev.metadata["via"], json!(["In Progress", "Review"]));
+    }
+
+    /// Non-collapsed singleton transitions still carry an empty `via`
+    /// array so downstream consumers can rely on the key existing
+    /// (serde would omit it if the field were `Option<Vec<String>>`,
+    /// which would force an awkward `get().is_some_or_...` check).
+    #[test]
+    fn transition_event_metadata_via_is_empty_array_for_singleton() {
+        let mut issue = issue_skeleton();
+        issue["changelog"] = json!({
+            "histories": [
+                {
+                    "id": "1",
+                    "author": {"accountId": SELF_ID, "displayName": "Me"},
+                    "created": "2026-04-20T10:00:00.000+0000",
+                    "items": [
+                        {"field": "status", "fromString": "To Do", "toString": "In Progress"}
+                    ]
+                }
+            ]
+        });
+        let out = normalise_issue(
+            Uuid::new_v4(),
+            &workspace(),
+            SELF_ID,
+            window(),
+            &issue,
+            None,
+        )
+        .unwrap();
+        assert_eq!(out.events[0].metadata["via"], json!([]));
     }
 
     #[test]

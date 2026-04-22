@@ -89,6 +89,10 @@ pub struct WalkOutcome {
 
 /// Walk Confluence CQL content for one local-timezone day.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    skip_all,
+    fields(connector = "confluence", source_id = %source_id, day = %day)
+)]
 pub async fn walk_day(
     http: &HttpClient,
     auth: Arc<dyn AuthStrategy>,

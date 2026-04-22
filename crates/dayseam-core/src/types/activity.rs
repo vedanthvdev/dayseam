@@ -87,6 +87,16 @@ pub enum ActivityKind {
     /// ticket is a discrete calendar event in a dev's EOD narrative even
     /// when the status stays the same.
     JiraIssueAssigned,
+    /// Jira issue unassigned from the user (a changelog item where
+    /// `field == "assignee"` and `from == self.accountId`, regardless of
+    /// what `to` is set to — empty for true unassignments, another
+    /// accountId for reassignments to a teammate). Symmetric with
+    /// `JiraIssueAssigned`: a dev wants to see "I handed off CAR-5117"
+    /// on their EOD as much as "I picked up CAR-5117". Added in DAY-88
+    /// (CORR-v0.2-07 reshaped): the original v0.2 review noted "assigned
+    /// to "" nonsense" but the walker filter already dropped empty `to`;
+    /// the real bug was losing the `from == self` side entirely.
+    JiraIssueUnassigned,
     /// Jira issue created by the user (`reporter == self AND created_at in window`).
     JiraIssueCreated,
     /// Confluence page created by the user — `createdDate == lastModified`
@@ -125,6 +135,7 @@ impl ActivityKind {
             ActivityKind::JiraIssueTransitioned,
             ActivityKind::JiraIssueCommented,
             ActivityKind::JiraIssueAssigned,
+            ActivityKind::JiraIssueUnassigned,
             ActivityKind::JiraIssueCreated,
             ActivityKind::ConfluencePageCreated,
             ActivityKind::ConfluencePageEdited,
@@ -233,7 +244,7 @@ mod tests {
         let kinds = ActivityKind::all();
         assert_eq!(
             kinds.len(),
-            16,
+            17,
             "ActivityKind::all() must list every declared variant exactly once"
         );
         let mut set = std::collections::HashSet::new();

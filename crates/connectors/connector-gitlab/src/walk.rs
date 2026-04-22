@@ -58,6 +58,10 @@ pub struct WalkOutcome {
 /// into an [`ActivityEvent`]. The caller supplies `source_identities` so
 /// the walker can filter by `author.id` before returning.
 #[allow(clippy::too_many_arguments)]
+#[tracing::instrument(
+    skip_all,
+    fields(connector = "gitlab", source_id = %source_id, day = %day)
+)]
 pub async fn walk_day(
     http: &HttpClient,
     auth: Arc<dyn AuthStrategy>,
