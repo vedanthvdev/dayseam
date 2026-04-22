@@ -178,6 +178,11 @@ describe("AddGithubSourceDialog", () => {
         // account bound to the source" regression DAY-99 invariant 4
         // is designed to prevent.
         userId: 12345,
+        // CORR-v0.4-01: the dialog must also thread `login` through
+        // so `github_sources_add_impl` can seed the `GitHubLogin`
+        // identity row. Missing this value causes the walker to
+        // silently return zero events on every sync.
+        login: "vedanth",
       }),
     );
   });

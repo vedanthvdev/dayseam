@@ -513,19 +513,22 @@ async fn orchestrator_generates_report_for_github_plus_gitlab_day() {
         "combined day must carry the self-authored GitLab MR-opened event: got {kinds:?}",
     );
 
-    // Event → source provenance: at least one persisted event per
-    // Git host. Guards against a regression where a mux's events
-    // silently get attributed to the other mux's source_id (the
-    // registry-level bug DAY-95's `registry_kind_round_trips_for_every_registered_connector`
-    // catches at build time, pinned again here at run time).
+    // Event → source provenance: exactly one persisted event per
+    // Git host. Each fixture emits a single self-authored event, so
+    // strict `== 1` guards against **two** distinct regression classes
+    // this test is meant to catch: (a) a mux's events getting
+    // attributed to the other mux's source_id (caught by either count
+    // going to 0), and (b) a single event being double-persisted to
+    // its own source (caught by the inequality). TST-v0.4-03 tightened
+    // the earlier `>= 1` admission at the v0.4 capstone review.
     let gh_events = events.iter().filter(|e| e.source_id == gh_src.id).count();
     let gl_events = events.iter().filter(|e| e.source_id == gl_src.id).count();
-    assert!(
-        gh_events >= 1,
-        "expected at least 1 event attributed to the GitHub source; got {gh_events}",
+    assert_eq!(
+        gh_events, 1,
+        "expected exactly 1 event attributed to the GitHub source; got {gh_events}",
     );
-    assert!(
-        gl_events >= 1,
-        "expected at least 1 event attributed to the GitLab source; got {gl_events}",
+    assert_eq!(
+        gl_events, 1,
+        "expected exactly 1 event attributed to the GitLab source; got {gl_events}",
     );
 }

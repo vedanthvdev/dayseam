@@ -42,13 +42,16 @@ export type CapturedAtlassianReconnectCall = {
 // DAY-99: every `github_sources_add` invoke the renderer makes
 // lands here so a future `@github-add-ipc-contract` scenario can
 // assert the exact payload shape the dialog sent (api base url,
-// label, PAT, numeric user id). Kept symmetrical with the
-// Atlassian captures above.
+// label, PAT, numeric user id, login handle). Kept symmetrical with
+// the Atlassian captures above. DAY-101 (CORR-v0.4-01) widened the
+// shape with `login` so the capture can assert the dialog threads
+// through the identity-seed fields the walker requires.
 export type CapturedGithubAddCall = {
   apiBaseUrl: string;
   label: string;
   pat: string;
   userId: number;
+  login: string;
 };
 
 export type MockState = {

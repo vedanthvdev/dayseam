@@ -148,20 +148,27 @@ pub async fn validate_auth(
 }
 
 /// Build the [`SourceIdentity`] rows a freshly-added GitHub source
-/// needs. Today that is exactly one row (the self-identity keyed off
-/// the numeric user id), so the return shape is
-/// `Vec<SourceIdentity>` with a single element; the `Vec` type is
-/// chosen so a future "also seed the `GitHubLogin` row for
-/// human-readable attribution" extension doesn't require a signature
-/// change at every IPC caller.
+/// needs. Returns **two** rows — one keyed off the numeric user id
+/// (the filter-time key used by the events-stream self-filter), and
+/// one keyed off the login handle (the URL segment used to compose
+/// `/users/{login}/events`). Both rows are required for
+/// [`crate::walk::walk_day`] to return non-empty; missing either
+/// early-bails with `WalkOutcome::default()` and a `Warn` log, which
+/// would surface as a silently-zero-event day in the report.
+///
+/// The CORR-v0.4-01 finding at the v0.4 capstone review confirmed
+/// the earlier "one row, Vec-shaped so the second can land later"
+/// framing was a latent silent-failure chain — seeding only
+/// `GitHubUserId` through the IPC add path gave users a healthy-
+/// looking source that contributed zero events on every walk. Seed
+/// both rows on credentials (identity-on-credentials, not
+/// identity-on-first-sync) for the same reason `ensure_gitlab_self_identity`
+/// does: the DAY-71 post-mortem showed the delayed-seed flow silently
+/// drops every event produced before the first seed commits.
 ///
 /// Pure helper — no I/O, no DB writes. The caller (DAY-99 IPC command)
 /// is responsible for persisting the returned rows inside the same
-/// transaction that writes the source. Mirrors
-/// `ensure_gitlab_self_identity` in spirit:
-/// identity-on-credentials, not identity-on-first-sync, because the
-/// DAY-71 post-mortem showed the delayed-seed flow silently drops
-/// every event produced before the first seed commits.
+/// transaction that writes the source.
 pub fn list_identities(
     info: &GithubUserInfo,
     source_id: Uuid,
@@ -181,14 +188,38 @@ pub fn list_identities(
             ),
         }));
     }
-    let identity = SourceIdentity {
+    if info.login.trim().is_empty() {
+        // Same shape-corruption class as the non-positive id guard —
+        // GitHub's `/user` contract always populates `login`. An
+        // empty value here means the IPC caller forgot to thread
+        // `validation.result.login` into `github_sources_add` (the
+        // exact bug CORR-v0.4-01 caught). Refuse rather than seed
+        // a `GitHubLogin` row with `external_actor_id = ""`, which
+        // would route every walk through the "no login" early-bail
+        // branch in `walk::self_identity`.
+        return Err(DayseamError::from(GithubUpstreamError::ShapeChanged {
+            message: format!(
+                "GitHub /user returned an empty login for user id {}; refusing to \
+                 seed a login identity row that would silently match no events",
+                info.id
+            ),
+        }));
+    }
+    let user_id_row = SourceIdentity {
         id: Uuid::new_v4(),
         person_id,
         source_id: Some(source_id),
         kind: SourceIdentityKind::GitHubUserId,
         external_actor_id: info.id.to_string(),
     };
-    Ok(vec![identity])
+    let login_row = SourceIdentity {
+        id: Uuid::new_v4(),
+        person_id,
+        source_id: Some(source_id),
+        kind: SourceIdentityKind::GitHubLogin,
+        external_actor_id: info.login.clone(),
+    };
+    Ok(vec![user_id_row, login_row])
 }
 
 #[cfg(test)]
@@ -243,17 +274,34 @@ mod tests {
     }
 
     #[test]
-    fn list_identities_returns_exactly_one_row_on_happy_path() {
+    fn list_identities_returns_both_user_id_and_login_rows_on_happy_path() {
+        // CORR-v0.4-01: `walk::self_identity` requires **both** a
+        // `GitHubUserId` row (for the events-stream self-filter) and
+        // a `GitHubLogin` row (for composing the `/users/{login}/events`
+        // URL). Seeding only the user-id row was the silent-failure
+        // chain that caused every freshly-added GitHub source to
+        // contribute zero events on every walk.
         let source = Uuid::new_v4();
         let person = Uuid::new_v4();
         let info = sample_info(17);
         let identities = list_identities(&info, source, person, None).unwrap();
-        assert_eq!(identities.len(), 1);
-        let row = &identities[0];
-        assert_eq!(row.person_id, person);
-        assert_eq!(row.source_id, Some(source));
-        assert_eq!(row.kind, SourceIdentityKind::GitHubUserId);
-        assert_eq!(row.external_actor_id, "17");
+        assert_eq!(identities.len(), 2);
+
+        let user_id_row = identities
+            .iter()
+            .find(|r| r.kind == SourceIdentityKind::GitHubUserId)
+            .expect("GitHubUserId row present");
+        assert_eq!(user_id_row.person_id, person);
+        assert_eq!(user_id_row.source_id, Some(source));
+        assert_eq!(user_id_row.external_actor_id, "17");
+
+        let login_row = identities
+            .iter()
+            .find(|r| r.kind == SourceIdentityKind::GitHubLogin)
+            .expect("GitHubLogin row present");
+        assert_eq!(login_row.person_id, person);
+        assert_eq!(login_row.source_id, Some(source));
+        assert_eq!(login_row.external_actor_id, "vedanth");
     }
 
     #[test]
@@ -266,6 +314,27 @@ mod tests {
         let source = Uuid::new_v4();
         let person = Uuid::new_v4();
         let info = sample_info(0);
+        let err = list_identities(&info, source, person, None).unwrap_err();
+        assert_eq!(err.code(), error_codes::GITHUB_UPSTREAM_SHAPE_CHANGED);
+        assert_eq!(err.variant(), "UpstreamChanged");
+    }
+
+    #[test]
+    fn list_identities_rejects_empty_login_as_shape_change() {
+        // Symmetric to the non-positive user-id guard — GitHub's
+        // `/user` contract always populates `login`. An empty login
+        // here means the IPC caller forgot to thread the real login
+        // through (the exact CORR-v0.4-01 bug class). Refuse rather
+        // than seed a `GitHubLogin` row with `external_actor_id = ""`
+        // that the walker's `self_identity` path would treat as a
+        // missing row anyway.
+        let source = Uuid::new_v4();
+        let person = Uuid::new_v4();
+        let info = GithubUserInfo {
+            id: 17,
+            login: String::new(),
+            name: Some("No Login".into()),
+        };
         let err = list_identities(&info, source, person, None).unwrap_err();
         assert_eq!(err.code(), error_codes::GITHUB_UPSTREAM_SHAPE_CHANGED);
         assert_eq!(err.variant(), "UpstreamChanged");

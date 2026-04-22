@@ -210,6 +210,7 @@ export function AddGithubSourceDialog({
         label: label.trim(),
         pat: pat.trim(),
         userId: validation.result.user_id,
+        login: validation.result.login,
       });
       sourcesBus.dispatchEvent(new Event(SOURCES_CHANGED));
       onAdded(added);

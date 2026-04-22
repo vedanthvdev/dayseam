@@ -639,12 +639,19 @@ export function dayseamTauriMockInit(catalogue: Catalogue): void {
           typeof args.userId === "number"
             ? args.userId
             : Number(args.userId ?? 0);
+        // DAY-101 (CORR-v0.4-01): the dialog must thread `login`
+        // through so `github_sources_add_impl` can seed the
+        // `GitHubLogin` identity row alongside the `GitHubUserId`.
+        // Capture it so the IPC-contract scenarios can pin the
+        // dialog-to-IPC payload shape.
+        const login = String(args.login ?? "");
 
         state.captured.githubAddCalls.push({
           apiBaseUrl,
           label,
           pat,
           userId,
+          login,
         });
 
         const row = {

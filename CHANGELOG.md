@@ -6,7 +6,88 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-04-20
+
 ### Added
+
+- **DAY-101: v0.4 capstone — hardening + five-lens review + release
+  (DAY-92..DAY-101).** The v0.4 arc lands the fifth connector —
+  `connector-github` (PAT auth, REST, `Link`-header pagination; PRs
+  opened / merged / closed / reviewed / commented and issues opened
+  / closed / commented / assigned) — plus the three v0.3-seam
+  promotions that only make sense once a second external forge
+  exists: first-class `ArtifactPayload::MergeRequest` rolling GitLab
+  MRs **and** GitHub PRs into one `## Merge requests` report section
+  (DAY-98), `ReportSection::Other` renamed to
+  `ReportSection::Unlinked` per CORR-v0.3-01 (DAY-98), and the
+  one-pass `build_sections` grouper replacing the previous
+  two-map approach per PERF-v0.3-01 (DAY-98). The four v0.3 deferred
+  findings are all closed out in-arc: TST-v0.3-01
+  (`SerdeDefaultAudit` extended across `SinkConfig`, `Artifact`,
+  `SourceIdentity`, `ReportDraft` — DAY-100); PERF-v0.3-01
+  (one-pass grouper — DAY-98); CONS-v0.3-01 (`connectors_sdk::dtos`
+  doc module documenting the persisted-vs-wire-format serde
+  convention — DAY-94); CORR-v0.3-01 (`Other` → `Unlinked` rename —
+  DAY-98). Cross-source enrichment extends the v0.2 GitLab MR →
+  Jira key-extraction pattern symmetrically to GitHub PR → Jira
+  (DAY-95 walker + DAY-98 renderer); GitLab MR ↔ GitHub PR link
+  extraction from titles and bodies is the first genuine
+  two-external-forges-in-one-report seam. Ten PRs (DAY-92..DAY-101);
+  only DAY-101 carries `semver:minor`, re-proving the release-workflow
+  discipline v0.3 landed. The capstone review surfaced one P0 the
+  multi-lens pass caught before ship — **CORR-v0.4-01**: the
+  `github_sources_add` IPC command seeded only the numeric
+  `GitHubUserId` row and **never** the `GitHubLogin` row, which
+  caused `walk_user_events` + the `/search/issues` pass to silently
+  return zero events for every GitHub source created through the
+  real Add-Source dialog on v0.4 through DAY-100. The orchestrator
+  integration tests bypassed the bug by hand-seeding both rows;
+  only the end-to-end "add source through the real dialog, then
+  generate" path caught it. Inline fix: widened the
+  `github_sources_add` IPC signature + `AddGithubSourceDialog`
+  argument list to thread `login: String` through from the
+  validate step's `GithubValidationResult`; `list_identities` now
+  returns **both** a `GitHubUserId` and a `GitHubLogin` row and
+  rejects an empty login as a `GithubUpstreamError::ShapeChanged`
+  (symmetric with the existing non-positive-user-id guard);
+  `github_sources_reconnect` ensures the `GitHubLogin` row exists
+  on every successful reconnect so pre-fix v0.4 sources self-heal
+  on their next rotate. Packages: `packages/ipc-types/src/index.ts`
+  widens `github_sources_add.args` to include `login: string`. Two
+  Low test-quality findings fixed inline: TST-v0.4-03 tightens the
+  orchestrator integration test's per-source event-count assertion
+  from `>= 1` to `== 1` (would catch a future double-persistence
+  regression that the loose bound would miss); TST-v0.4-05 adds a
+  `trybuild` fail-fixture for `#[serde_default_audit(repair = "")]`
+  so the empty-repair-name arm is pinned alongside the existing
+  `no_repair = ""` fixture. The Graphify three-axis rubric
+  ([#61](https://github.com/vedanthvdev/dayseam/issues/61)) is
+  re-scored on v0.4-`master` and **deferred again to v0.5** — none
+  of the five re-evaluation triggers from the v0.1 decision doc
+  fired despite the codebase roughly doubling since v0.1; the
+  re-scoring and the specific triggers are in
+  [`docs/review/v0.4-review.md`](docs/review/v0.4-review.md) §4.
+  Full lens-by-lens writeup in
+  [`docs/review/v0.4-review.md`](docs/review/v0.4-review.md); the
+  3-day dogfood sweep is scaffolded in
+  [`docs/dogfood/v0.4-dogfood-notes.md`](docs/dogfood/v0.4-dogfood-notes.md)
+  and runs against the published `v0.4.0` DMG once the release
+  workflow completes. Hardening battery green
+  (`cargo fmt --all`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  `cargo test --workspace`, `pnpm typecheck`, `pnpm lint`,
+  `pnpm test`, and `pnpm --filter e2e run e2e`). Touches the v0.4
+  arc review / dogfood docs plus the CORR-v0.4-01 fix across
+  `crates/connectors/connector-github/src/auth.rs`,
+  `apps/desktop/src-tauri/src/ipc/github.rs`,
+  `apps/desktop/src/features/sources/AddGithubSourceDialog{,.test}.tsx`,
+  `packages/ipc-types/src/index.ts`,
+  `e2e/fixtures/runtime/{types,tauri-mock-init}.ts`, the two
+  test-quality finding fixes in
+  `crates/dayseam-orchestrator/tests/github_integration.rs` and
+  `crates/dayseam-macros/tests/{serde_default_audit.rs,trybuild/fail/empty_repair_name.{rs,stderr}}`,
+  `VERSION` (→ 0.4.0), `CHANGELOG.md` (this entry),
+  and `docs/plan/README.md` (v0.4 row marked complete, review doc
+  linked). `semver:minor` — triggers the `v0.4.0` tag.
 
 - **DAY-100: orchestrator — `connector-github` end-to-end through
   the generate-report fan-out + `SerdeDefaultAudit` sweep across

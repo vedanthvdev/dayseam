@@ -50,7 +50,7 @@ use connector_github::{list_identities, validate_auth, GithubUserInfo};
 use connectors_sdk::{HttpClient, PatAuth};
 use dayseam_core::{
     error_codes, DayseamError, GithubValidationResult, SecretRef, Source, SourceConfig,
-    SourceHealth, SourceId, SourceIdentityKind, SourceKind,
+    SourceHealth, SourceId, SourceIdentity, SourceIdentityKind, SourceKind,
 };
 use dayseam_db::{PersonRepo, SourceIdentityRepo, SourceRepo};
 use dayseam_secrets::Secret;
@@ -235,9 +235,10 @@ pub async fn github_sources_add(
     label: String,
     pat: IpcSecretString,
     user_id: i64,
+    login: String,
     state: State<'_, AppState>,
 ) -> Result<Source, DayseamError> {
-    github_sources_add_impl(&state, api_base_url, label, pat, user_id).await
+    github_sources_add_impl(&state, api_base_url, label, pat, user_id, login).await
 }
 
 /// Test-visible implementation of [`github_sources_add`].
@@ -247,6 +248,7 @@ pub async fn github_sources_add_impl(
     label: String,
     pat: IpcSecretString,
     user_id: i64,
+    login: String,
 ) -> Result<Source, DayseamError> {
     // ---- Structural validation -------------------------------------
     require_nonempty_pat(pat.expose())?;
@@ -261,6 +263,22 @@ pub async fn github_sources_add_impl(
                 "user_id must be positive; got {user_id}. Call github_validate_credentials first \
                  and pass its numeric id through."
             ),
+        ));
+    }
+    let trimmed_login = login.trim().to_string();
+    if trimmed_login.is_empty() {
+        // `login` is the URL segment used to compose
+        // `/users/{login}/events`; an empty value would silently
+        // 404 every walk and `list_identities` would refuse to
+        // seed the `GitHubLogin` identity. Catch it at the IPC
+        // boundary so the error surface points at the dialog
+        // (which already has `validation.result.login`) rather
+        // than deep inside the walker.
+        return Err(invalid_config_public(
+            error_codes::GITHUB_UPSTREAM_SHAPE_CHANGED,
+            "login must be non-empty; call github_validate_credentials first and pass its \
+             login string through alongside user_id."
+                .to_string(),
         ));
     }
     let parsed_url = parse_api_base_url(&api_base_url)?;
@@ -338,13 +356,16 @@ pub async fn github_sources_add_impl(
     }
     inserted = Some(source_id);
 
-    // ---- Seed the self-identity ------------------------------------
-    // Use a minimal `GithubUserInfo` — `list_identities` only reads
-    // the numeric `id`, so `login` / `name` can be placeholders. The
-    // real triple was already rendered in the dialog's validate step.
+    // ---- Seed the self-identity rows -------------------------------
+    // `list_identities` emits both a `GitHubUserId` and a
+    // `GitHubLogin` row (CORR-v0.4-01 fix) — the walker requires
+    // both to compose `/users/{login}/events` *and* filter
+    // `event.actor.id == self`. Thread the real `login` that
+    // `github_validate_credentials` returned; `name` is not
+    // persisted here so a placeholder is fine.
     let info = GithubUserInfo {
         id: user_id,
-        login: String::new(),
+        login: trimmed_login.clone(),
         name: None,
     };
     let identities = match list_identities(&info, source_id, self_person.id, None) {
@@ -519,6 +540,28 @@ pub async fn github_sources_reconnect_impl(
     // seeding (only possible if a row was hand-crafted before this
     // ticket). Treat reconnect as a self-healing path — rotate the
     // token and let the next sync seed the identity.
+    //
+    // Login-row self-heal (CORR-v0.4-01 recovery path): v0.4 pre-fix
+    // sources may already exist with only the `GitHubUserId` row
+    // (the IPC add path was dropping `login` before DAY-101). Ensure
+    // the `GitHubLogin` row exists on every successful reconnect so
+    // upgraded installs recover without the user having to
+    // delete-and-re-add. Idempotent via `SourceIdentityRepo::ensure`.
+    if !info.login.trim().is_empty() {
+        let login_row = SourceIdentity {
+            id: Uuid::new_v4(),
+            person_id: self_person.id,
+            source_id: Some(source_id),
+            kind: SourceIdentityKind::GitHubLogin,
+            external_actor_id: info.login.clone(),
+        };
+        if let Err(e) = identity_repo.ensure(&login_row).await {
+            return Err(DayseamError::Internal {
+                code: "ipc.source_identities.ensure".to_string(),
+                message: format!("reconnect login-row self-heal failed: {e}"),
+            });
+        }
+    }
 
     // ---- 4. Rotate the keychain slot ------------------------------
     let key = secret_store_key(&secret_ref);
@@ -658,6 +701,7 @@ mod tests {
             "GitHub — vedanth".into(),
             pat(),
             17,
+            "vedanth".into(),
         )
         .await
         .expect("happy path succeeds");
@@ -675,8 +719,10 @@ mod tests {
             .expect("keychain row present");
         assert_eq!(value.expose_secret(), "ghp_faketokenforthetest");
 
-        // Identity row: exactly one GitHubUserId row for the self
-        // person pointing at the source.
+        // CORR-v0.4-01: both a `GitHubUserId` row (filter-time key)
+        // and a `GitHubLogin` row (URL-composition key) must land on
+        // happy-path add, otherwise the walker silently returns
+        // `WalkOutcome::default()` on every sync.
         let person = PersonRepo::new(state.pool.clone())
             .bootstrap_self(SELF_DEFAULT_DISPLAY_NAME)
             .await
@@ -689,8 +735,34 @@ mod tests {
             .iter()
             .filter(|i| matches!(i.kind, SourceIdentityKind::GitHubUserId))
             .collect();
-        assert_eq!(user_ids.len(), 1, "exactly one self-identity row");
+        assert_eq!(user_ids.len(), 1, "exactly one GitHubUserId row");
         assert_eq!(user_ids[0].external_actor_id, "17");
+
+        let logins: Vec<_> = ids
+            .iter()
+            .filter(|i| matches!(i.kind, SourceIdentityKind::GitHubLogin))
+            .collect();
+        assert_eq!(logins.len(), 1, "exactly one GitHubLogin row");
+        assert_eq!(logins[0].external_actor_id, "vedanth");
+    }
+
+    #[tokio::test]
+    async fn add_rejects_empty_login_before_any_write() {
+        // Guard against the CORR-v0.4-01 regression: the dialog must
+        // thread a real login through; refuse rather than write a
+        // half-seeded source that produces zero events forever.
+        let (state, _dir) = make_state().await;
+        let err = github_sources_add_impl(
+            &state,
+            "https://api.github.com".into(),
+            "lbl".into(),
+            pat(),
+            17,
+            "   ".into(),
+        )
+        .await
+        .expect_err("empty login must be rejected");
+        assert_eq!(err.code(), error_codes::GITHUB_UPSTREAM_SHAPE_CHANGED);
     }
 
     #[tokio::test]
@@ -702,6 +774,7 @@ mod tests {
             "   ".into(),
             pat(),
             42,
+            "octocat".into(),
         )
         .await
         .expect("add with blank label");
@@ -717,6 +790,7 @@ mod tests {
             "GHE".into(),
             pat(),
             42,
+            "octocat".into(),
         )
         .await
         .expect("add");
@@ -737,6 +811,7 @@ mod tests {
             "lbl".into(),
             IpcSecretString::new("   "),
             17,
+            "vedanth".into(),
         )
         .await
         .expect_err("empty pat must reject before touching sqlite");
@@ -752,6 +827,7 @@ mod tests {
             "lbl".into(),
             pat(),
             0,
+            "vedanth".into(),
         )
         .await
         .expect_err("non-positive user_id must reject");
@@ -761,9 +837,16 @@ mod tests {
     #[tokio::test]
     async fn add_rejects_malformed_api_base_url() {
         let (state, _dir) = make_state().await;
-        let err = github_sources_add_impl(&state, "not-a-url".into(), "lbl".into(), pat(), 17)
-            .await
-            .expect_err("malformed url must reject");
+        let err = github_sources_add_impl(
+            &state,
+            "not-a-url".into(),
+            "lbl".into(),
+            pat(),
+            17,
+            "vedanth".into(),
+        )
+        .await
+        .expect_err("malformed url must reject");
         assert_eq!(err.code(), error_codes::IPC_GITHUB_INVALID_API_BASE_URL);
     }
 
@@ -784,6 +867,7 @@ mod tests {
             "lbl".into(),
             pat(),
             17,
+            "vedanth".into(),
         )
         .await
         .expect("seed github source")

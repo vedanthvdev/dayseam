@@ -39,4 +39,8 @@ fn serde_default_audit_trybuild() {
     // audit annotation must fail to compile with the same error shape
     // as `missing_audit_annotation.rs` above.
     t.compile_fail("tests/trybuild/fail/sink_config_serde_default_without_audit.rs");
+    // DAY-101 TST-v0.4-05 — symmetry with `empty_no_repair_reason.rs`.
+    // Both empty-string shapes (`no_repair = ""` and `repair = ""`)
+    // are audit-rejection cases and both must fail to compile.
+    t.compile_fail("tests/trybuild/fail/empty_repair_name.rs");
 }

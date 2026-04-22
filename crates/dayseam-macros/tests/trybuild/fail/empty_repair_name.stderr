@@ -1,0 +1,5 @@
+error: `serde_default_audit(repair = "…")` requires a non-empty repair name that matches a registered `SerdeDefaultRepair::name()`
+  --> tests/trybuild/fail/empty_repair_name.rs:15:5
+   |
+15 |     #[serde_default_audit(repair = "")]
+   |     ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^

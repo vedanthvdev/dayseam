@@ -349,19 +349,24 @@ export interface Commands {
     result: GithubValidationResultT;
   };
   /** Persist a single GitHub source in one round-trip. `userId` is
-   *  the numeric id `github_validate_credentials` returned; the
-   *  command stamps it onto a fresh `SourceIdentity` under
-   *  `GitHubUserId` so the render-stage self-filter recognises
-   *  events this user authored. `pat` is wrapped on the Rust side
-   *  in an `IpcSecretString` before anything else can observe it.
-   *  Returns the freshly-inserted `Source` row. Introduced in
-   *  DAY-99. */
+   *  the numeric id `github_validate_credentials` returned; `login`
+   *  is the handle the same probe returned. The command stamps both
+   *  onto fresh `SourceIdentity` rows under `GitHubUserId` (numeric,
+   *  filter-time key) and `GitHubLogin` (handle, used to compose
+   *  `/users/{login}/events`). Both rows are required — missing
+   *  either makes the walker return zero events on every sync, the
+   *  silent-failure chain CORR-v0.4-01 caught at the v0.4 capstone.
+   *  `pat` is wrapped on the Rust side in an `IpcSecretString`
+   *  before anything else can observe it. Returns the freshly-
+   *  inserted `Source` row. Introduced in DAY-99; widened with
+   *  `login` in DAY-101. */
   github_sources_add: {
     args: {
       apiBaseUrl: string;
       label: string;
       pat: string;
       userId: number;
+      login: string;
     };
     result: SourceT;
   };
