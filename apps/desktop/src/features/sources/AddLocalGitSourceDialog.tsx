@@ -46,6 +46,36 @@ function parseScanRoots(raw: string): string[] {
     .filter((line) => line.length > 0);
 }
 
+/**
+ * Unwrap a Tauri invoke error into a human-readable string.
+ *
+ * Rust side returns `DayseamError` which serialises to
+ * `{variant, data: {code, message, ...}}`. Left as-is, the error
+ * would render as JSON in the alert — technically informative, but
+ * the user-facing `message` field is far easier to act on. DAY-106
+ * introduced the `IPC_SOURCE_SCAN_ROOT_OVERLAP` variant whose whole
+ * value is in a carefully-worded prose message ("Scan root X
+ * overlaps with source 'Y' …"), so surfacing the raw JSON would
+ * defeat the point. We keep the existing `err instanceof Error`
+ * branch for frontend-synthesised errors (e.g. the Browse… dialog
+ * catch) and for tests that throw a plain `new Error(...)`.
+ */
+function formatDialogError(err: unknown): string {
+  if (err instanceof Error) return err.message;
+  if (
+    typeof err === "object" &&
+    err !== null &&
+    "data" in err &&
+    typeof (err as { data: unknown }).data === "object" &&
+    (err as { data: unknown }).data !== null &&
+    "message" in (err as { data: { message?: unknown } }).data &&
+    typeof (err as { data: { message: unknown } }).data.message === "string"
+  ) {
+    return (err as { data: { message: string } }).data.message;
+  }
+  return typeof err === "string" ? err : JSON.stringify(err);
+}
+
 function initialRootsForEdit(source: Source | null | undefined): string {
   if (!source) return "";
   if ("LocalGit" in source.config) {
@@ -115,7 +145,7 @@ export function AddLocalGitSourceDialog({
         return prev.endsWith("\n") ? `${prev}${picked}` : `${prev}\n${picked}`;
       });
     } catch (err) {
-      setError(err instanceof Error ? err.message : JSON.stringify(err));
+      setError(formatDialogError(err));
     }
   }, []);
 
@@ -139,7 +169,7 @@ export function AddLocalGitSourceDialog({
         onAdded(source);
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : JSON.stringify(err));
+      setError(formatDialogError(err));
       setSubmitting(false);
     }
   }, [add, update, isEdit, editing, label, scanRoots, canSubmit, reset, onAdded, onSaved]);

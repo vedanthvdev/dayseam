@@ -6,6 +6,73 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **DAY-106: reject overlapping LocalGit scan roots at the IPC
+  boundary (F-8 / [#113](https://github.com/vedanthvdev/dayseam/issues/113)).**
+  Two LocalGit sources whose scan roots contained one another used
+  to silently ping-pong ownership of every shared repo on each
+  rescan, because the [`local_repos`](crates/dayseam-db/src/repos/local_repos.rs)
+  table is primary-keyed on `path` alone and each source's walk
+  would `ON CONFLICT(path) DO UPDATE SET source_id = excluded.source_id`
+  the row under itself. The user-visible symptoms were sidebar chip
+  counts flickering between sources (last-walker wins) and
+  [`LocalRepoRepo::reconcile_for_source`](crates/dayseam-db/src/repos/local_repos.rs)
+  scoping its stale-row DELETE to `source_id = ?` and therefore no
+  longer pruning rows that another source had since claimed — a
+  repo removed from source A's scan root would linger in A's
+  sidebar until B's walker next ran. Cross-source event dedup in
+  `dayseam-report` already absorbed the duplicate-commit fallout,
+  so there was no data corruption — only UX confusion with no
+  in-product recovery path.
+  [`sources_add`](apps/desktop/src-tauri/src/ipc/commands.rs) and
+  [`sources_update`](apps/desktop/src-tauri/src/ipc/commands.rs)
+  now refuse any LocalGit config whose `scan_roots` would be equal
+  to, or an ancestor or descendant of, another LocalGit source's
+  scan roots, emitting a new
+  [`ipc.source.scan_root_overlap`](crates/dayseam-core/src/error_codes.rs)
+  `InvalidConfig` error whose prose message names the contending
+  source's label and the offending path so the user's next move
+  ("remove that source, or narrow this scan root") is obvious.
+  The probe is pure path-prefix reasoning on canonicalised roots
+  — no filesystem walk, no `local_repos` query — so it runs in
+  microseconds, returns the same answer regardless of walk order
+  or discovery state, and catches the textual-alias bypass (e.g.
+  `/code/./` vs `/code/`) that `PathBuf::eq` alone would miss.
+  Sibling roots under a shared parent (`~/code/alpha` and
+  `~/code/beta`) are **not** treated as overlapping — the probe
+  fires only when one root would swallow the other's repos. On
+  `sources_update`, the source being edited is exempted from the
+  contender list so a LocalGit source can round-trip its own
+  scan_roots through a pure-label edit without tripping the
+  guard. Pinned by 8 new tests in
+  [`crates/…/commands.rs`](apps/desktop/src-tauri/src/ipc/commands.rs)
+  (`overlap_guard_*`) covering: disjoint-siblings-accepted,
+  equal-roots-rejected, ancestor-rejected, descendant-rejected,
+  non-LocalGit-sources-invisible, self-source-skipped-on-update,
+  update-that-introduces-overlap-rejected, and
+  canonical-path-resolution. A companion frontend test in
+  [`AddLocalGitSourceDialog.test.tsx`](apps/desktop/src/__tests__/AddLocalGitSourceDialog.test.tsx)
+  pins that the new `DayseamError::InvalidConfig` from IPC
+  renders in the dialog as its prose `data.message` rather than
+  the raw `{variant, data:{…}}` JSON the old `JSON.stringify(err)`
+  fallback would have shown — the backend's carefully-worded
+  overlap message is surfaced verbatim to the user.
+
+  **Option trade-off (#113 triage):** the schema-migration path —
+  making `local_repos` primary-keyed on `(source_id, path)` so
+  each source owns its own row, with independent `is_private`
+  flags — was the option originally proposed in #113 and remains
+  the structurally-correct fix. It is **not** shipped in this PR:
+  no current Dayseam user has asked for per-source `is_private`
+  on a shared path, the `semver:minor` ripple through every
+  `local_repos` call site is larger than the `semver:patch`
+  validator in this PR by roughly an order of magnitude, and
+  validation-at-source-add is reversible — the composite-key
+  migration can still land whenever the feature ask is real.
+  Tracked on #113 (left open with an explicit follow-up comment)
+  so we don't lose the context.
+
 ### Changed
 
 - **DAY-105: batched reconcile-delete for `local_repos`

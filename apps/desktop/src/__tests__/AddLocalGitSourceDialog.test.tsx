@@ -175,4 +175,47 @@ describe("AddLocalGitSourceDialog", () => {
     );
     expect(onAdded).not.toHaveBeenCalled();
   });
+
+  // DAY-106 (F-8 / #113). The overlap guard on the Rust side
+  // returns `DayseamError::InvalidConfig` which Tauri serialises
+  // to `{variant, data: {code, message}}`. Without a bespoke
+  // formatter the dialog used to render the whole JSON object,
+  // burying the actionable prose message inside escape sequences.
+  // The test pins the happy-path that a DayseamError-shaped error
+  // from IPC renders as its plain `data.message` so the user sees
+  // exactly what the backend wrote ("Scan root X overlaps with
+  // source 'Y' …"), not a JSON blob.
+  it("renders a DayseamError from IPC as its prose message, not as raw JSON", async () => {
+    const onAdded = vi.fn();
+    registerInvokeHandler("sources_add", async () => {
+      throw {
+        variant: "InvalidConfig",
+        data: {
+          code: "ipc.source.scan_root_overlap",
+          message:
+            "Scan root \"/Users/me/code\" overlaps with source \"Work\" (scan root \"/Users/me/code/alpha\"). Remove the other source, or narrow this scan root so no discovered repo would be tracked twice.",
+        },
+      };
+    });
+    render(
+      <AddLocalGitSourceDialog open onClose={() => {}} onAdded={onAdded} />,
+    );
+    fireEvent.change(screen.getByRole("textbox", { name: /label/i }), {
+      target: { value: "Personal" },
+    });
+    fireEvent.change(
+      screen.getByRole("textbox", { name: /scan roots/i }),
+      { target: { value: "/Users/me/code" } },
+    );
+    fireEvent.click(screen.getByRole("button", { name: /add and scan/i }));
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/overlaps with source "Work"/i);
+    expect(alert).toHaveTextContent(/Remove the other source/i);
+    // The raw JSON form would include the `variant` key — if the
+    // formatter ever regresses to `JSON.stringify(err)` this guard
+    // catches it before the user sees a wall of braces.
+    expect(alert.textContent ?? "").not.toContain("variant");
+    expect(alert.textContent ?? "").not.toContain("InvalidConfig");
+    expect(onAdded).not.toHaveBeenCalled();
+  });
 });

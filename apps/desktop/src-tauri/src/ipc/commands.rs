@@ -768,6 +768,14 @@ pub async fn sources_add(
             ),
         ));
     }
+    // F-8 (DAY-106). Reject a LocalGit add whose scan roots overlap
+    // another LocalGit source's scan roots *before* we touch sqlite
+    // or Keychain, so a rejected overlap leaves zero traces behind
+    // and the user sees the same dialog they'll retry from. See
+    // `ensure_local_git_scan_roots_are_disjoint` for the rationale.
+    if let SourceConfig::LocalGit { scan_roots } = &config {
+        ensure_local_git_scan_roots_are_disjoint(&state, None, scan_roots).await?;
+    }
     // Fast path: fail before we touch sqlite if this is a GitLab add
     // without a PAT. The old code silently persisted a `secret_ref:
     // None` row here, which is exactly what made `report_generate`
@@ -922,6 +930,14 @@ pub async fn sources_update(
                     existing.kind
                 ),
             ));
+        }
+        // F-8 (DAY-106). Reject a scan-root edit that would introduce
+        // overlap with another LocalGit source *before* we rewrite
+        // the persisted config. `self_source_id = Some(id)` so the
+        // source can shrink or keep its own scan roots without
+        // reporting itself as a contender.
+        if let SourceConfig::LocalGit { scan_roots } = config {
+            ensure_local_git_scan_roots_are_disjoint(&state, Some(id), scan_roots).await?;
         }
         repo.update_config(&id, config)
             .await
@@ -1131,6 +1147,109 @@ pub async fn sources_healthcheck(
         .await
         .map_err(|e| internal("sources.update_health", e))?;
     Ok(health)
+}
+
+/// F-8 (DAY-106 / [#113](https://github.com/vedanthvdev/dayseam/issues/113)).
+/// Rejects a proposed `LocalGit` `scan_roots` set if any root would
+/// overlap — be equal to, or an ancestor or descendant of — a root
+/// already declared by another LocalGit source.
+///
+/// The `local_repos` table is primary-keyed on `path` alone (see
+/// [`crates/dayseam-db/migrations/0001_initial.sql`](crates/dayseam-db/migrations/0001_initial.sql)),
+/// so two LocalGit sources whose scan roots overlap would take turns
+/// claiming ownership of the shared repos on every rescan — the
+/// walker is per-source but the row isn't. The visible symptoms are
+/// (a) sidebar chip counts flickering between sources and (b)
+/// [`LocalRepoRepo::reconcile_for_source`] scoping its delete to
+/// `source_id = ?` and therefore no longer pruning rows that another
+/// source has since claimed. Cross-source event dedup downstream in
+/// `dayseam-report` absorbs the duplicate-commit fallout, so there
+/// is no *data* corruption, only UX confusion — but the UX confusion
+/// is real and has no in-product recovery path.
+///
+/// Rather than migrate the schema to a composite `(source_id, path)`
+/// key (the correct but larger `semver:minor` fix still tracked on
+/// #113), this probe stops overlap at the IPC boundary: both
+/// [`sources_add`] and [`sources_update`] call it before any source
+/// row is mutated, so the "no overlap" invariant is front-loaded and
+/// the DB never observes the bad state.
+///
+/// `self_source_id` is `Some(id)` on `sources_update` so the source
+/// being edited can shrink or keep its own scan roots without
+/// reporting itself as a contender, and `None` on `sources_add`.
+///
+/// The probe is pure path-prefix reasoning on canonicalised roots —
+/// no filesystem walk, no `local_repos` query — so it runs in
+/// microseconds and returns the same answer regardless of walk order
+/// or discovery state. A root whose `canonicalize()` call fails
+/// (typo, permission-denied, missing folder) falls back to the raw
+/// declared path so a not-yet-existing scan root still participates
+/// in the comparison rather than silently bypassing it.
+async fn ensure_local_git_scan_roots_are_disjoint(
+    state: &AppState,
+    self_source_id: Option<SourceId>,
+    proposed: &[std::path::PathBuf],
+) -> Result<(), DayseamError> {
+    if proposed.is_empty() {
+        return Ok(());
+    }
+    let canonical_proposed: Vec<std::path::PathBuf> = proposed
+        .iter()
+        .map(|p| std::fs::canonicalize(p).unwrap_or_else(|_| p.clone()))
+        .collect();
+
+    let source_repo = SourceRepo::new(state.pool.clone());
+    let all_sources = source_repo
+        .list()
+        .await
+        .map_err(|e| internal("sources.list", e))?;
+
+    for existing in &all_sources {
+        if existing.kind != SourceKind::LocalGit {
+            continue;
+        }
+        if let Some(self_id) = self_source_id {
+            if existing.id == self_id {
+                continue;
+            }
+        }
+        let SourceConfig::LocalGit {
+            scan_roots: existing_roots,
+        } = &existing.config
+        else {
+            continue;
+        };
+        for existing_root in existing_roots {
+            let canonical_existing =
+                std::fs::canonicalize(existing_root).unwrap_or_else(|_| existing_root.clone());
+            for (declared, canonical) in proposed.iter().zip(canonical_proposed.iter()) {
+                if paths_overlap(canonical, &canonical_existing) {
+                    return Err(invalid_config(
+                        error_codes::IPC_SOURCE_SCAN_ROOT_OVERLAP,
+                        format!(
+                            "Scan root {declared:?} overlaps with source \"{label}\" \
+                             (scan root {existing_root:?}). Two local-git sources whose \
+                             scan roots contain one another would ping-pong ownership of \
+                             every shared repo on each rescan. Remove the other source, \
+                             or narrow this scan root so no discovered repo would be \
+                             tracked twice.",
+                            label = existing.label,
+                        ),
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Two scan roots overlap if they resolve to the same path, or if
+/// one is a strict ancestor of the other on the filesystem tree.
+/// Siblings under a common parent do not overlap — `~/code/alpha`
+/// and `~/code/beta` can coexist in two LocalGit sources without
+/// producing a shared repo set.
+fn paths_overlap(a: &std::path::Path, b: &std::path::Path) -> bool {
+    a == b || a.starts_with(b) || b.starts_with(a)
 }
 
 async fn upsert_discovered_repos(
@@ -2387,6 +2506,222 @@ mod tests {
             .await
             .expect("list");
         assert!(rows.is_empty());
+    }
+
+    // --- F-8 (DAY-106 / #113): scan-root overlap guard ---------------
+    //
+    // Regression battery for `ensure_local_git_scan_roots_are_disjoint`.
+    // The probe is the whole fix for F-8 at the IPC boundary, so each
+    // failure mode deserves its own named test rather than a single
+    // table-driven case — a future reader chasing a regression should
+    // be able to find the exact test that pins their suspect invariant
+    // by name, not by branch-index.
+
+    /// Helper: seed a persisted LocalGit source with the given label
+    /// and scan roots so the probe has something to compare against.
+    async fn seed_local_git_source(
+        state: &AppState,
+        label: &str,
+        scan_roots: Vec<PathBuf>,
+    ) -> SourceId {
+        let id = Uuid::new_v4();
+        SourceRepo::new(state.pool.clone())
+            .insert(&Source {
+                id,
+                kind: SourceKind::LocalGit,
+                label: label.into(),
+                config: SourceConfig::LocalGit { scan_roots },
+                secret_ref: None,
+                created_at: Utc::now(),
+                last_sync_at: None,
+                last_health: SourceHealth::unchecked(),
+            })
+            .await
+            .expect("seed local-git source");
+        id
+    }
+
+    fn assert_overlap_error(err: &DayseamError, expected_contender: &str) {
+        match err {
+            DayseamError::InvalidConfig { code, message } => {
+                assert_eq!(code, error_codes::IPC_SOURCE_SCAN_ROOT_OVERLAP);
+                assert!(
+                    message.contains(expected_contender),
+                    "overlap error must name the contending source in its message; got: {message}",
+                );
+            }
+            other => panic!("expected InvalidConfig overlap, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn overlap_guard_accepts_disjoint_scan_roots_on_add() {
+        // `~/code/alpha` + `~/code/beta` share a parent but overlap
+        // nothing, which is the common "two sibling workspaces" case
+        // the probe must never reject.
+        let (state, dir) = make_state().await;
+        let alpha = dir.path().join("alpha");
+        let beta = dir.path().join("beta");
+        std::fs::create_dir(&alpha).unwrap();
+        std::fs::create_dir(&beta).unwrap();
+
+        seed_local_git_source(&state, "Alpha", vec![alpha]).await;
+
+        ensure_local_git_scan_roots_are_disjoint(&state, None, &[beta])
+            .await
+            .expect("sibling roots under a shared parent must not trip the overlap guard");
+    }
+
+    #[tokio::test]
+    async fn overlap_guard_rejects_add_whose_root_equals_existing_root() {
+        let (state, dir) = make_state().await;
+        let shared = dir.path().join("code");
+        std::fs::create_dir(&shared).unwrap();
+
+        seed_local_git_source(&state, "Work", vec![shared.clone()]).await;
+
+        let err = ensure_local_git_scan_roots_are_disjoint(&state, None, &[shared])
+            .await
+            .expect_err("identical scan root must be rejected");
+        assert_overlap_error(&err, "Work");
+    }
+
+    #[tokio::test]
+    async fn overlap_guard_rejects_add_whose_root_is_ancestor_of_existing() {
+        // Adding `~/code` when `~/code/foo` already exists: every
+        // repo the existing source discovers would also fall under
+        // the new source, so two rows per shared path on each
+        // rescan — the exact F-8 shape.
+        let (state, dir) = make_state().await;
+        let parent = dir.path().join("code");
+        let child = parent.join("foo");
+        std::fs::create_dir_all(&child).unwrap();
+
+        seed_local_git_source(&state, "Existing", vec![child]).await;
+
+        let err = ensure_local_git_scan_roots_are_disjoint(&state, None, &[parent])
+            .await
+            .expect_err("ancestor-of-existing scan root must be rejected");
+        assert_overlap_error(&err, "Existing");
+    }
+
+    #[tokio::test]
+    async fn overlap_guard_rejects_add_whose_root_is_descendant_of_existing() {
+        // Adding `~/code/foo` when `~/code` already exists — the
+        // symmetric case of the previous test. Same failure mode
+        // (ping-pong ownership), so the probe must catch both
+        // directions.
+        let (state, dir) = make_state().await;
+        let parent = dir.path().join("code");
+        let child = parent.join("foo");
+        std::fs::create_dir_all(&child).unwrap();
+
+        seed_local_git_source(&state, "Existing", vec![parent]).await;
+
+        let err = ensure_local_git_scan_roots_are_disjoint(&state, None, &[child])
+            .await
+            .expect_err("descendant-of-existing scan root must be rejected");
+        assert_overlap_error(&err, "Existing");
+    }
+
+    #[tokio::test]
+    async fn overlap_guard_ignores_non_local_git_sources() {
+        // A Jira or GitHub source has no `scan_roots` to compare, so
+        // it must never contribute false-positive overlap. Pattern-
+        // matching the config guards this at compile time, but this
+        // test pins the behaviour explicitly for anyone who might
+        // later widen the probe to compare labels or ids.
+        let (state, dir) = make_state().await;
+        let code = dir.path().join("code");
+        std::fs::create_dir(&code).unwrap();
+
+        // Seed a Jira source whose label / workspace_url are
+        // deliberately string-similar to the kind of path a LocalGit
+        // source might declare, to rule out accidental prefix
+        // comparison across kinds.
+        let jira_id = Uuid::new_v4();
+        SourceRepo::new(state.pool.clone())
+            .insert(&Source {
+                id: jira_id,
+                kind: SourceKind::Jira,
+                label: "Acme".into(),
+                config: SourceConfig::Jira {
+                    workspace_url: "https://acme.atlassian.net".into(),
+                    email: "me@acme.example".into(),
+                },
+                secret_ref: None,
+                created_at: Utc::now(),
+                last_sync_at: None,
+                last_health: SourceHealth::unchecked(),
+            })
+            .await
+            .expect("seed jira");
+
+        ensure_local_git_scan_roots_are_disjoint(&state, None, &[code])
+            .await
+            .expect("non-LocalGit sources must be invisible to the overlap probe");
+    }
+
+    #[tokio::test]
+    async fn overlap_guard_skips_self_source_on_update() {
+        // A source editing its own config must never report itself
+        // as a contender — otherwise any `sources_update` that
+        // includes the LocalGit config (even a pure label rename
+        // carrying the unchanged scan_roots for round-trip) would
+        // fail the guard and users could never edit LocalGit
+        // sources again.
+        let (state, dir) = make_state().await;
+        let code = dir.path().join("code");
+        std::fs::create_dir(&code).unwrap();
+
+        let id = seed_local_git_source(&state, "Self", vec![code.clone()]).await;
+
+        ensure_local_git_scan_roots_are_disjoint(&state, Some(id), &[code])
+            .await
+            .expect("update with self's own scan roots must be accepted");
+    }
+
+    #[tokio::test]
+    async fn overlap_guard_rejects_update_that_introduces_overlap() {
+        // Source A has `~/code/alpha`, source B has `~/code/beta`.
+        // Editing B to use `~/code` would swallow A's tree — the
+        // probe must catch this at the IPC boundary so B's bad
+        // config never hits sqlite.
+        let (state, dir) = make_state().await;
+        let parent = dir.path().join("code");
+        let alpha = parent.join("alpha");
+        let beta = parent.join("beta");
+        std::fs::create_dir_all(&alpha).unwrap();
+        std::fs::create_dir_all(&beta).unwrap();
+
+        seed_local_git_source(&state, "A", vec![alpha]).await;
+        let b_id = seed_local_git_source(&state, "B", vec![beta]).await;
+
+        let err = ensure_local_git_scan_roots_are_disjoint(&state, Some(b_id), &[parent])
+            .await
+            .expect_err("update that widens B's root to contain A must be rejected");
+        assert_overlap_error(&err, "A");
+    }
+
+    #[tokio::test]
+    async fn overlap_guard_uses_canonical_path_for_comparison() {
+        // Two textually-different scan roots that canonicalise to
+        // the same path (trailing `/.`, normalised separators, etc.)
+        // must still be flagged as overlap — otherwise a user could
+        // bypass the guard with a cosmetic textual tweak.
+        let (state, dir) = make_state().await;
+        let code = dir.path().join("code");
+        std::fs::create_dir(&code).unwrap();
+
+        seed_local_git_source(&state, "Existing", vec![code.clone()]).await;
+
+        // Same directory via `/.` suffix. `canonicalize` resolves
+        // both to `code`, so the guard should still fire.
+        let aliased = code.join(".");
+        let err = ensure_local_git_scan_roots_are_disjoint(&state, None, &[aliased])
+            .await
+            .expect_err("aliased scan root must canonicalise to the existing root and be rejected");
+        assert_overlap_error(&err, "Existing");
     }
 
     #[tokio::test]

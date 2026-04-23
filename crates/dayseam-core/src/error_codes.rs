@@ -325,6 +325,27 @@ pub const IPC_REPORT_DRAFT_NOT_FOUND: &str = "ipc.report_draft.not_found";
 /// patch.
 pub const IPC_SOURCE_CONFIG_KIND_MISMATCH: &str = "ipc.source.config_kind_mismatch";
 
+/// `sources_add` or `sources_update` was called with a `LocalGit`
+/// config whose `scan_roots` overlap (are equal to, or an ancestor
+/// or descendant of) the scan roots of another already-persisted
+/// `LocalGit` source. The guard is prefix-based on canonicalised
+/// paths — so `~/code` overlapping `~/code/foo` is rejected, but two
+/// siblings under the same parent (`~/code/alpha` vs `~/code/beta`)
+/// are not.
+///
+/// Introduced in DAY-106 (F-8 / #113) to prevent the pre-0.5.1
+/// failure mode where the `local_repos` table — primary-keyed on
+/// `path` alone — let two overlapping LocalGit sources
+/// ping-pong row ownership on every rescan, producing flickering
+/// sidebar counts and a `reconcile_for_source` that could no longer
+/// prune its own stale rows once another source had claimed them.
+/// The structurally-correct fix is a `(source_id, path)` composite
+/// key (still tracked as a deferred follow-up on #113), but
+/// disallowing overlap at source-add time is the cheaper, reversible
+/// shape that matches every current Dayseam user's mental model —
+/// sources are scopes, and scopes don't overlap.
+pub const IPC_SOURCE_SCAN_ROOT_OVERLAP: &str = "ipc.source.scan_root_overlap";
+
 /// `sources_add` / `sources_update` was called for a GitLab source
 /// without a PAT, or `sources_healthcheck` / `report_generate` loaded a
 /// GitLab source row whose `secret_ref` points at an empty keychain
