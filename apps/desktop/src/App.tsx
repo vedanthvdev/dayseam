@@ -92,7 +92,15 @@ export default function App() {
   if (!setupChecklist.complete && !setupChecklist.loading) {
     return (
       <ThemeProvider>
-        <div className="flex min-h-screen flex-col bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
+        {/* DOGFOOD-v0.4-06: bound the shell to the viewport (`h-dvh` +
+            `overflow-hidden`) so the column height is exact, not "at
+            least". Without a hard bound, a tall `FirstRunEmptyState`
+            pushes the window's scrollbar to the body and any future
+            footer would fall below the fold. */}
+        <div
+          data-testid="app-shell"
+          className="flex h-dvh flex-col overflow-hidden bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100"
+        >
           <TitleBar />
           <FirstRunEmptyState checklist={setupChecklist} />
         </div>
@@ -103,7 +111,16 @@ export default function App() {
 
   return (
     <ThemeProvider>
-      <div className="flex min-h-screen flex-col bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100">
+      {/* DOGFOOD-v0.4-06: shell is `h-dvh` + `overflow-hidden`; the
+          only scrollable child is `StreamingPreview`'s inner
+          `<section>` (which carries `flex-1 min-h-0 overflow-y-auto`).
+          That keeps the `<Footer>` pinned to the bottom strip on long
+          reports instead of sliding off when the draft outgrows the
+          viewport. */}
+      <div
+        data-testid="app-shell"
+        className="flex h-dvh flex-col overflow-hidden bg-white text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100"
+      >
         <TitleBar />
         <ActionRow
           status={report.status}

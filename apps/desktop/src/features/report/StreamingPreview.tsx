@@ -72,7 +72,14 @@ export function StreamingPreview({
     return (
       <section
         aria-label="Report preview"
-        className="flex flex-1 flex-col items-center justify-center gap-2 px-6 py-10 text-center"
+        // DOGFOOD-v0.4-06: `min-h-0` + `overflow-y-auto` lets this
+        // flex child shrink below its intrinsic content height so
+        // the parent's `h-dvh` bound is honored. Without it, `flex-1`
+        // still grows without limit and the window scrollbar migrates
+        // to `<body>`, pushing the footer off-screen. We keep the
+        // same invariants on the idle branch as on the drafted branch
+        // so the App-level layout regression test covers both.
+        className="flex min-h-0 flex-1 flex-col items-center justify-center gap-2 overflow-y-auto px-6 py-10 text-center"
       >
         <div
           aria-hidden="true"
@@ -92,7 +99,11 @@ export function StreamingPreview({
   return (
     <section
       aria-label="Report preview"
-      className="flex flex-1 flex-col gap-3 overflow-y-auto px-6 py-4"
+      // DOGFOOD-v0.4-06: `min-h-0` is the pairing with `flex-1` that
+      // keeps `overflow-y-auto` on *this* element (not on the body)
+      // — so only the preview scrolls, and the shell's footer stays
+      // pinned at the bottom of the viewport for long reports.
+      className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-6 py-4"
       data-testid="streaming-preview"
     >
       {isRunning ? (

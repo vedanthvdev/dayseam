@@ -107,7 +107,58 @@ pub async fn build_app_state(data_dir: &Path) -> Result<AppState, DayseamError> 
 
     let orchestrator = build_orchestrator(pool.clone(), app_bus.clone()).await?;
     run_startup_maintenance(&orchestrator, &pool).await;
-    audit_orphan_secrets(&pool, secrets.as_ref()).await;
+    // DOGFOOD-v0.4-07: the orphan-secret audit probes every distinct
+    // `secret_ref` stored for a source. Each probe goes through the
+    // macOS Keychain and — for an unsigned / ad-hoc-signed build
+    // where the ACL hasn't been "Always Allow"-ed yet — triggers a
+    // password prompt. Running it synchronously here meant the user
+    // saw up to N password prompts before the app window appeared;
+    // dogfooders described it as "the app asks for my laptop
+    // password 4 times to open". We now spawn the audit as a
+    // detached task so the window renders immediately; any
+    // macOS-level prompts the audit triggers show up *after* the
+    // app is visible and no longer gate the cold-boot UX. The
+    // audit's own output is unchanged — it still emits a warning
+    // log per orphan and is still covered by the dedicated
+    // Keychain-backed tests below.
+    //
+    // DAY-103 F-10: make the detached task observable. The previous
+    // fire-and-forget `spawn` discarded both the orphan count
+    // (useful for log forensics) and any panic inside the audit —
+    // a panic would have gone unlogged and invisible. We now
+    // supervise the audit from a second `spawn` that awaits the
+    // first's `JoinHandle`, so a panic turns into a single
+    // `tracing::error!` line and a clean completion logs the
+    // orphan count at `info!`. This only relies on tauri's
+    // `async_runtime::spawn` (which wraps tokio's `JoinHandle`
+    // with `is_panic()` semantics) — no new dependency needed.
+    {
+        let pool = pool.clone();
+        let secrets = secrets.clone();
+        let audit_handle = tauri::async_runtime::spawn(async move {
+            audit_orphan_secrets(&pool, secrets.as_ref()).await
+        });
+        tauri::async_runtime::spawn(async move {
+            match audit_handle.await {
+                Ok(orphans) => tracing::info!(
+                    orphans,
+                    "orphan-secret audit completed (deferred, post-window-show)"
+                ),
+                Err(join_err) => {
+                    // `JoinError::Display` surfaces whether the task
+                    // panicked vs. was cancelled, plus the panic
+                    // payload when it's a string. That's enough
+                    // breadcrumb for a post-mortem to find the
+                    // failing probe without extra scaffolding.
+                    tracing::error!(
+                        join_err = %join_err,
+                        "orphan-secret audit task failed to complete; swallowed by the \
+                         deferred task runner but recorded here for post-mortem",
+                    );
+                }
+            }
+        });
+    }
 
     Ok(AppState::new(pool, app_bus, secrets, orchestrator))
 }

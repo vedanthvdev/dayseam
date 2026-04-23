@@ -24,9 +24,22 @@ export function FirstRunEmptyState({ checklist }: FirstRunEmptyStateProps) {
     <main
       role="main"
       data-testid="first-run-empty-state"
-      className="flex min-h-screen flex-col items-center justify-center bg-white px-8 py-16 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100"
+      // DOGFOOD-v0.4-06 / DAY-103 F-4: inside the `h-dvh
+      // overflow-hidden` shell this `<main>` has to be `flex-1
+      // min-h-0` so it occupies remaining space without
+      // overflowing, and it needs its own `overflow-y-auto` to
+      // provide the scroll axis on a short viewport. An earlier
+      // revision combined `overflow-y-auto` with `justify-center`
+      // on this same element, which clipped the top of tall
+      // checklists: centering on a flex-col container spills
+      // overflow symmetrically into negative scrollTop space the
+      // browser won't expose. The fix splits the roles — `<main>`
+      // is the scroll container with neutral justification, and
+      // the inner wrapper is the centered block (via `m-auto`)
+      // that can grow without pushing the top out of reach.
+      className="flex min-h-0 flex-1 flex-col overflow-y-auto bg-white px-8 py-16 text-neutral-900 dark:bg-neutral-950 dark:text-neutral-100"
     >
-      <div className="grid w-full max-w-3xl grid-cols-1 gap-8 md:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
+      <div className="m-auto grid w-full max-w-3xl grid-cols-1 gap-8 md:grid-cols-[minmax(0,1fr)_minmax(0,1.25fr)]">
         <section className="flex flex-col justify-center gap-3">
           <span className="text-xs font-medium uppercase tracking-wide text-neutral-500 dark:text-neutral-400">
             Welcome to Dayseam
