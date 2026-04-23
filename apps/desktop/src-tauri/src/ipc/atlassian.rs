@@ -47,7 +47,7 @@ use connector_atlassian_common::{
     cloud::{discover_cloud, AtlassianAccountInfo},
     identity::seed_atlassian_identity,
 };
-use connectors_sdk::{BasicAuth, HttpClient};
+use connectors_sdk::BasicAuth;
 use dayseam_core::{
     error_codes, AtlassianValidationResult, DayseamError, SecretRef, Source, SourceConfig,
     SourceHealth, SourceId, SourceIdentityKind, SourceKind,
@@ -107,20 +107,31 @@ fn parse_workspace_url(input: &str) -> Result<Url, DayseamError> {
             format!("workspace_url `{trimmed}` is not a valid URL: {e}"),
         )
     })?;
-    if parsed.scheme() != "https" {
+    let host = parsed.host_str().unwrap_or("");
+    if host.is_empty() {
+        return Err(invalid_config_public(
+            error_codes::IPC_ATLASSIAN_INVALID_WORKSPACE_URL,
+            "workspace_url has no host component",
+        ));
+    }
+    let host_lower = host.to_ascii_lowercase();
+    // DAY-111 / TST-v0.4-04. Carve out a loopback escape hatch *only*
+    // under the `test-helpers` seam (or the crate's own
+    // `#[cfg(test)]` tests): a `http://127.0.0.1:PORT` workspace URL
+    // is the shape wiremock hands out, and nothing in production
+    // ever parses one. Both scheme and host are checked together so
+    // the existing DOG-v0.2-03 guard still rejects
+    // `http://modulrfinance.atlassian.net` (downgrade over cleartext)
+    // and `https://attacker.example` (wrong tenant) in every build —
+    // the loopback carve-out is the *only* relaxation.
+    let is_test_loopback = workspace_host_is_test_loopback(&host_lower);
+    if parsed.scheme() != "https" && !(is_test_loopback && parsed.scheme() == "http") {
         return Err(invalid_config_public(
             error_codes::IPC_ATLASSIAN_INVALID_WORKSPACE_URL,
             format!(
                 "workspace_url scheme must be `https`; got `{}`",
                 parsed.scheme()
             ),
-        ));
-    }
-    let host = parsed.host_str().unwrap_or("");
-    if host.is_empty() {
-        return Err(invalid_config_public(
-            error_codes::IPC_ATLASSIAN_INVALID_WORKSPACE_URL,
-            "workspace_url has no host component",
         ));
     }
     // DOG-v0.2-03 (security). Reject any host that is not under
@@ -131,9 +142,8 @@ fn parse_workspace_url(input: &str) -> Result<Url, DayseamError> {
     // case-mangled hosts (`Acme.Atlassian.NET`) are evaluated against
     // the same apex; `url::Url` already lower-cases on parse, but
     // belt-and-braces here keeps the rule self-contained.
-    let host_lower = host.to_ascii_lowercase();
     let host_ok = host_lower == "atlassian.net" || host_lower.ends_with(".atlassian.net");
-    if !host_ok {
+    if !host_ok && !is_test_loopback {
         return Err(invalid_config_public(
             error_codes::IPC_ATLASSIAN_INVALID_WORKSPACE_URL,
             format!(
@@ -168,6 +178,22 @@ fn canonical_workspace_url(url: &Url) -> String {
         s.pop();
     }
     s
+}
+
+/// DAY-111 / TST-v0.4-04. Let `127.0.0.1` / `localhost` through
+/// only under the `test-helpers` seam. The `*.atlassian.net` apex
+/// guard (DOG-v0.2-03) stays in place for production callers so a
+/// hostile clipboard cannot persist an attacker-controlled origin;
+/// the test seam carves out a narrow hole for the integration
+/// fixture that fronts `GET /rest/api/3/myself` on a loopback mock.
+fn workspace_host_is_test_loopback(_host_lower: &str) -> bool {
+    #[cfg(any(test, feature = "test-helpers"))]
+    {
+        if _host_lower == "127.0.0.1" || _host_lower == "localhost" {
+            return true;
+        }
+    }
+    false
 }
 
 fn require_nonempty_email(email: &str) -> Result<(), DayseamError> {
@@ -212,12 +238,28 @@ pub async fn atlassian_validate_credentials(
     workspace_url: String,
     email: String,
     api_token: IpcSecretString,
+    state: State<'_, AppState>,
+) -> Result<AtlassianValidationResult, DayseamError> {
+    atlassian_validate_credentials_impl(&state, workspace_url, email, api_token).await
+}
+
+/// Test-visible implementation of [`atlassian_validate_credentials`].
+/// Same shape minus the Tauri [`State`] wrapper, which cannot be
+/// constructed outside the Tauri runtime. DAY-111 moves the HTTP
+/// client construction out of this function (onto `AppState::http`)
+/// so `tests/reconnect_rebind.rs` can exercise the full probe path
+/// against a wiremock-backed client without going through a live
+/// network call.
+pub async fn atlassian_validate_credentials_impl(
+    state: &AppState,
+    workspace_url: String,
+    email: String,
+    api_token: IpcSecretString,
 ) -> Result<AtlassianValidationResult, DayseamError> {
     require_nonempty_email(&email)?;
     require_nonempty_token(api_token.expose())?;
     let parsed = parse_workspace_url(&workspace_url)?;
 
-    let http = HttpClient::new()?;
     // The `BasicAuth` constructed here lives only for the duration
     // of this call — the descriptor's keychain handle is a synthetic
     // `"probe"` slot because no keychain row actually backs this
@@ -230,7 +272,8 @@ pub async fn atlassian_validate_credentials(
         ATLASSIAN_KEYCHAIN_SERVICE,
         "probe",
     );
-    let cloud = discover_cloud(&http, &auth, &parsed, &CancellationToken::new(), None).await?;
+    let cloud =
+        discover_cloud(&state.http, &auth, &parsed, &CancellationToken::new(), None).await?;
 
     Ok(AtlassianValidationResult {
         account_id: cloud.account.account_id,
@@ -710,15 +753,27 @@ pub async fn atlassian_sources_reconnect_impl(
     }
 
     // ---- 2. Validate new token against the bound account ----------
+    //
+    // DAY-111 pulls the [`HttpClient`] from `state.http` rather than
+    // minting a fresh one per call — the same client the walker uses,
+    // so keep-alive survives a validate→reconnect round-trip on the
+    // same host and `tests/reconnect_rebind.rs` can route this probe
+    // through a wiremock server.
     let parsed_url = parse_workspace_url(&workspace_url)?;
-    let http = HttpClient::new()?;
     let auth = BasicAuth::atlassian(
         email.as_str(),
         api_token.expose(),
         ATLASSIAN_KEYCHAIN_SERVICE,
         "probe",
     );
-    let cloud = discover_cloud(&http, &auth, &parsed_url, &CancellationToken::new(), None).await?;
+    let cloud = discover_cloud(
+        &state.http,
+        &auth,
+        &parsed_url,
+        &CancellationToken::new(),
+        None,
+    )
+    .await?;
     let new_account_id = cloud.account.account_id;
 
     // ---- 3. Identity-binding invariant ----------------------------
@@ -823,7 +878,14 @@ mod tests {
         )
         .build()
         .expect("build orchestrator");
-        let state = AppState::new(pool, app_bus, Arc::new(InMemoryStore::new()), orchestrator);
+        let http = connectors_sdk::HttpClient::new().expect("build HttpClient");
+        let state = AppState::new(
+            pool,
+            app_bus,
+            Arc::new(InMemoryStore::new()),
+            orchestrator,
+            http,
+        );
         (state, dir)
     }
 

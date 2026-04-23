@@ -47,7 +47,7 @@
 
 use chrono::Utc;
 use connector_github::{list_identities, validate_auth, GithubUserInfo};
-use connectors_sdk::{HttpClient, PatAuth};
+use connectors_sdk::PatAuth;
 use dayseam_core::{
     error_codes, DayseamError, GithubValidationResult, SecretRef, Source, SourceConfig,
     SourceHealth, SourceId, SourceIdentity, SourceIdentityKind, SourceKind,
@@ -119,20 +119,29 @@ fn parse_api_base_url(input: &str) -> Result<Url, DayseamError> {
             format!("api_base_url `{trimmed}` is not a valid URL: {e}"),
         )
     })?;
-    if parsed.scheme() != "https" {
+    let host = parsed.host_str().unwrap_or("");
+    if host.is_empty() {
+        return Err(invalid_config_public(
+            error_codes::IPC_GITHUB_INVALID_API_BASE_URL,
+            "api_base_url has no host component",
+        ));
+    }
+    // DAY-111 / TST-v0.4-04. Scheme and host are evaluated together
+    // so the `http`-for-tests escape hatch is scoped to loopback
+    // origins only. Production builds continue to reject `http://`
+    // (a downgrade over cleartext would ship the PAT in the clear);
+    // under `test-helpers` / `#[cfg(test)]`, `http://127.0.0.1:PORT`
+    // is the only cleartext form we accept, because that is the
+    // shape wiremock hands `tests/reconnect_rebind.rs`.
+    let host_lower = host.to_ascii_lowercase();
+    let is_test_loopback = github_host_is_test_loopback(&host_lower);
+    if parsed.scheme() != "https" && !(is_test_loopback && parsed.scheme() == "http") {
         return Err(invalid_config_public(
             error_codes::IPC_GITHUB_INVALID_API_BASE_URL,
             format!(
                 "api_base_url scheme must be `https`; got `{}`",
                 parsed.scheme()
             ),
-        ));
-    }
-    let host = parsed.host_str().unwrap_or("");
-    if host.is_empty() {
-        return Err(invalid_config_public(
-            error_codes::IPC_GITHUB_INVALID_API_BASE_URL,
-            "api_base_url has no host component",
         ));
     }
     if parsed.query().is_some() || parsed.fragment().is_some() {
@@ -151,6 +160,23 @@ fn parse_api_base_url(input: &str) -> Result<Url, DayseamError> {
 /// [`GithubConfig::from_raw`] normalises.
 fn canonical_api_base_url(url: &Url) -> String {
     url.as_str().to_string()
+}
+
+/// DAY-111 / TST-v0.4-04. Narrow loopback carve-out for
+/// `parse_api_base_url`: production builds never match, so the
+/// `https`-only invariant holds in release. Under `test-helpers`
+/// (or the crate's own `#[cfg(test)]` tests) `127.0.0.1` and
+/// `localhost` are allowed so `tests/reconnect_rebind.rs` can point
+/// the probe at a wiremock origin. The mock never sees a real
+/// token because the whole test stack is in-process.
+fn github_host_is_test_loopback(_host_lower: &str) -> bool {
+    #[cfg(any(test, feature = "test-helpers"))]
+    {
+        if _host_lower == "127.0.0.1" || _host_lower == "localhost" {
+            return true;
+        }
+    }
+    false
 }
 
 fn require_nonempty_pat(pat: &str) -> Result<(), DayseamError> {
@@ -176,13 +202,28 @@ fn require_nonempty_pat(pat: &str) -> Result<(), DayseamError> {
 pub async fn github_validate_credentials(
     api_base_url: String,
     pat: IpcSecretString,
+    state: State<'_, AppState>,
+) -> Result<GithubValidationResult, DayseamError> {
+    github_validate_credentials_impl(&state, api_base_url, pat).await
+}
+
+/// Test-visible implementation of [`github_validate_credentials`]. Same
+/// shape minus the Tauri [`State`] wrapper, which cannot be
+/// constructed outside the Tauri runtime. DAY-111 moves the HTTP
+/// client construction out of this function (onto `AppState::http`)
+/// so `tests/reconnect_rebind.rs` can exercise the full probe path
+/// against a wiremock-backed client without going through a live
+/// network call.
+pub async fn github_validate_credentials_impl(
+    state: &AppState,
+    api_base_url: String,
+    pat: IpcSecretString,
 ) -> Result<GithubValidationResult, DayseamError> {
     require_nonempty_pat(pat.expose())?;
     let parsed = parse_api_base_url(&api_base_url)?;
 
-    let http = HttpClient::new()?;
     let auth = PatAuth::github(pat.expose(), GITHUB_KEYCHAIN_SERVICE, "probe");
-    let info = validate_auth(&http, &auth, &parsed, &CancellationToken::new(), None).await?;
+    let info = validate_auth(&state.http, &auth, &parsed, &CancellationToken::new(), None).await?;
 
     Ok(GithubValidationResult {
         user_id: info.id,
@@ -492,10 +533,22 @@ pub async fn github_sources_reconnect_impl(
     })?;
 
     // ---- 2. Validate new token against the bound account ----------
+    //
+    // DAY-111 pulls the [`HttpClient`] from `state.http` rather than
+    // minting a fresh one per call — the same client the walker uses,
+    // so keep-alive survives a validate→reconnect round-trip on the
+    // same host and `tests/reconnect_rebind.rs` can route this probe
+    // through a wiremock server.
     let parsed_url = parse_api_base_url(&api_base_url)?;
-    let http = HttpClient::new()?;
     let auth = PatAuth::github(pat.expose(), GITHUB_KEYCHAIN_SERVICE, "probe");
-    let info = validate_auth(&http, &auth, &parsed_url, &CancellationToken::new(), None).await?;
+    let info = validate_auth(
+        &state.http,
+        &auth,
+        &parsed_url,
+        &CancellationToken::new(),
+        None,
+    )
+    .await?;
     let new_user_id = info.id;
 
     // ---- 3. Identity-binding invariant ----------------------------
@@ -598,7 +651,14 @@ mod tests {
         )
         .build()
         .expect("build orchestrator");
-        let state = AppState::new(pool, app_bus, Arc::new(InMemoryStore::new()), orchestrator);
+        let http = connectors_sdk::HttpClient::new().expect("build HttpClient");
+        let state = AppState::new(
+            pool,
+            app_bus,
+            Arc::new(InMemoryStore::new()),
+            orchestrator,
+            http,
+        );
         (state, dir)
     }
 

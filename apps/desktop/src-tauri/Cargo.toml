@@ -98,6 +98,26 @@ tauri-plugin-process = "2"
 [dev-dependencies]
 tempfile = "3"
 tauri = { version = "2", features = ["test"] }
+# DAY-111 / TST-v0.4-04. Wiremock drives
+# `tests/reconnect_rebind.rs`, the end-to-end integration suite for
+# the three IPC commands that hit HTTP (`github_validate_credentials`,
+# `atlassian_validate_credentials`, and the reconnect-rebind
+# self-heal inside `github_sources_reconnect`). Standing the mock up
+# at an `http://127.0.0.1:PORT` URL is the only way to exercise the
+# full validate → persist → seed-identity chain without a live
+# network dependency; the companion `test-helpers` feature below
+# relaxes the two IPC URL validators so they accept that scheme in
+# tests only. Pinned at 0.6 to match the `connector-github`
+# dev-dep used by DAY-110's pagination fixture so a workspace build
+# resolves a single `wiremock` version.
+wiremock = "0.6"
+# DAY-111. The integration suite seeds GitHub / Atlassian source rows
+# directly against SQLite to reach the reconnect-rebind self-heal
+# code path — bypassing the normal `sources_add` flow keeps each
+# scenario focused on a single branch of the IPC under test. We lean
+# on `sqlx` for the raw inserts and on `connectors-sdk` so we can
+# build an `HttpClient` pointing at the wiremock origin.
+connectors-sdk = { path = "../../../crates/connectors-sdk" }
 
 [features]
 # `custom-protocol` wires in Tauri's custom-protocol flag for release
@@ -112,4 +132,30 @@ custom-protocol = ["tauri/custom-protocol"]
 # production permissions. Development and CI (including `pnpm tauri dev`)
 # re-enable it with `--features dev-commands`.
 dev-commands = []
+# DAY-111 / TST-v0.4-04. Opt-in scaffolding that external integration
+# tests (`tests/reconnect_rebind.rs`) flip on so:
+#   1. `parse_api_base_url` / `parse_workspace_url` accept
+#      `http://127.0.0.1[:PORT]/…` — the only way a wiremock server
+#      can front `GET /user` or `GET /rest/api/3/myself`; and
+#   2. `AppState::http_for_tests(...)` compiles so tests can
+#      construct an app state that routes every HTTP call through
+#      an instant-retry client pointing at the mock origin.
+# Production binaries never enable this feature, so neither the
+# relaxed URL check nor the test constructor reaches a release build.
+# `cargo test --workspace --all-features` flips it on for CI.
+test-helpers = []
 default = []
+
+# DAY-111 / TST-v0.4-04. `reconnect_rebind.rs` only compiles when the
+# `test-helpers` feature is on — the URL validators are
+# `https`-loopback strict otherwise, and the test body directly
+# references `AppState::with_http_for_test`, which is also
+# feature-gated. Listing it under `required-features` is what lets
+# `cargo test -p dayseam-desktop --all-features` (CI's default) run
+# the suite while plain `cargo test -p dayseam-desktop` keeps
+# working — the file is simply skipped in the default feature set
+# rather than erroring on the missing symbol.
+[[test]]
+name = "reconnect_rebind"
+path = "tests/reconnect_rebind.rs"
+required-features = ["test-helpers"]

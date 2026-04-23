@@ -2061,7 +2061,14 @@ mod tests {
         )
         .build()
         .expect("build orchestrator");
-        let state = AppState::new(pool, app_bus, Arc::new(InMemoryStore::new()), orchestrator);
+        let http = connectors_sdk::HttpClient::new().expect("build HttpClient");
+        let state = AppState::new(
+            pool,
+            app_bus,
+            Arc::new(InMemoryStore::new()),
+            orchestrator,
+            http,
+        );
         (state, dir)
     }
 

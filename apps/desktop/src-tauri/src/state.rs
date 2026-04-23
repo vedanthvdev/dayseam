@@ -13,6 +13,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use connectors_sdk::HttpClient;
 use dayseam_core::RunId;
 use dayseam_events::AppBus;
 use dayseam_orchestrator::Orchestrator;
@@ -117,18 +118,35 @@ pub struct AppState {
     /// PR-B wires it onto `AppState` so Task 6's `report_generate` /
     /// `report_save` have a place to land.
     pub orchestrator: Orchestrator,
+    /// Process-wide [`HttpClient`] every IPC command that hits HTTP
+    /// pulls from — validate-credentials, reconnect, and future
+    /// IPC-initiated probes — so the dialog path uses the same
+    /// retry / jitter / cancellation contract the walker path does,
+    /// and so `tests/reconnect_rebind.rs` can inject a wiremock-
+    /// backed client without monkey-patching a `HttpClient::new()`
+    /// call buried inside each command.
+    ///
+    /// `HttpClient` is not a trait — it's a concrete struct whose
+    /// inner `reqwest::Client` is already `Arc`-backed, so `Clone`
+    /// is cheap and both `Send + Sync + 'static`. Storing the
+    /// concrete type rather than an `Arc<dyn HttpClient>` (as the
+    /// DAY-111 plan originally called for) keeps dispatch monomorphic
+    /// and avoids the trait-object shape there's no second
+    /// implementation to justify.
+    pub http: HttpClient,
 }
 
 impl AppState {
     /// Construct an [`AppState`] from its collaborators. Keep this a
-    /// plain constructor — wiring the pool, keychain, and
-    /// orchestrator is the responsibility of [`crate::startup`].
+    /// plain constructor — wiring the pool, keychain, HTTP client,
+    /// and orchestrator is the responsibility of [`crate::startup`].
     #[must_use]
     pub fn new(
         pool: SqlitePool,
         app_bus: AppBus,
         secrets: Arc<dyn SecretStore>,
         orchestrator: Orchestrator,
+        http: HttpClient,
     ) -> Self {
         Self {
             pool,
@@ -136,7 +154,31 @@ impl AppState {
             secrets,
             runs: Arc::new(RwLock::new(RunRegistry::new())),
             orchestrator,
+            http,
         }
+    }
+
+    /// Test-only constructor that lets `tests/reconnect_rebind.rs`
+    /// (DAY-111 / TST-v0.4-04) build an `AppState` around a
+    /// wiremock-backed [`HttpClient`] without duplicating the
+    /// orchestrator / registry wiring that `startup::build_app_state`
+    /// owns. Gated behind the `test-helpers` feature so production
+    /// binaries cannot reach it; intra-crate `#[cfg(test)]` unit
+    /// tests also get access without flipping a feature. The
+    /// constructor deliberately takes a ready-made `HttpClient` so
+    /// each test can decide whether to reuse the default retry
+    /// policy or swap in `RetryPolicy::instant()` — letting the
+    /// suite cover retry behaviour without wall-clock delays.
+    #[cfg(any(test, feature = "test-helpers"))]
+    #[must_use]
+    pub fn with_http_for_test(
+        pool: SqlitePool,
+        app_bus: AppBus,
+        secrets: Arc<dyn SecretStore>,
+        orchestrator: Orchestrator,
+        http: HttpClient,
+    ) -> Self {
+        Self::new(pool, app_bus, secrets, orchestrator, http)
     }
 }
 

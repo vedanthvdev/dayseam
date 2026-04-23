@@ -53,7 +53,16 @@ impl IpcSecretString {
     /// have already deserialised the payload by some other means; the
     /// production path is [`serde::Deserialize`] via Tauri's `invoke`
     /// reactor.
-    #[cfg(test)]
+    ///
+    /// DAY-111 widens the gate to `cfg(any(test, feature =
+    /// "test-helpers"))` so the `tests/reconnect_rebind.rs`
+    /// integration suite (which lives *outside* `#[cfg(test)]` from
+    /// this crate's perspective — integration tests compile as
+    /// separate crates) can build PATs without round-tripping
+    /// through `serde_json`. The constructor remains invisible to
+    /// release binaries because the `test-helpers` feature is never
+    /// enabled in a release build.
+    #[cfg(any(test, feature = "test-helpers"))]
     pub fn new(inner: impl Into<String>) -> Self {
         Self(inner.into())
     }

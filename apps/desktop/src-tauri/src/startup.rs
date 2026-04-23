@@ -13,6 +13,7 @@ use connector_confluence::{ConfluenceConfig, ConfluenceSourceCfg};
 use connector_github::{GithubConfig, GithubSourceCfg};
 use connector_gitlab::GitlabSourceCfg;
 use connector_jira::{JiraConfig, JiraSourceCfg};
+use connectors_sdk::HttpClient;
 use dayseam_core::{
     DayseamError, LogLevel, SourceConfig, SourceIdentity, SourceIdentityKind, SourceKind,
 };
@@ -160,7 +161,22 @@ pub async fn build_app_state(data_dir: &Path) -> Result<AppState, DayseamError> 
         });
     }
 
-    Ok(AppState::new(pool, app_bus, secrets, orchestrator))
+    // DAY-111 / TST-v0.4-04. Build the process-wide `HttpClient`
+    // once here so every IPC command that hits HTTP
+    // (`github_validate_credentials`, `atlassian_validate_credentials`,
+    // and the reconnect variants of both) shares one connection pool
+    // and one retry contract with the walker path. Before DAY-111 each
+    // of those four commands called `HttpClient::new()?` inline — which
+    // (a) lost keep-alive between a validate and the immediately-
+    // following reconnect on the same host and (b) made the IPC
+    // surface untestable without a live network, because there was no
+    // seam for `tests/reconnect_rebind.rs` to inject a wiremock-backed
+    // client. A failure to build the client is a boot-level fatal
+    // (the app cannot reach the outside world without it), which
+    // matches what the inline `?`s surfaced before.
+    let http = HttpClient::new()?;
+
+    Ok(AppState::new(pool, app_bus, secrets, orchestrator, http))
 }
 
 /// DAY-71 backfill: for every persisted GitLab source, make sure a
