@@ -6,6 +6,56 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+## [0.6.1]
+
+### Fixed
+
+- **DAY-116: in-app updater unblocked for every v0.6.0 Mac.**
+  v0.6.0 shipped its first `latest.json` manifest under a single
+  `darwin-universal` platform key (the v1-era convention), but
+  `tauri-plugin-updater` 2.10.x composes the platform string it
+  looks up as `{os}-{arch}` from the running binary —
+  `darwin-aarch64-app` / `darwin-aarch64` on Apple Silicon,
+  `darwin-x86_64-app` / `darwin-x86_64` on Intel — and dropped
+  the `darwin-universal` fallback. Every installed v0.6.0 client
+  therefore surfaced *Couldn't check for updates: None of the
+  fallback platforms `["darwin-aarch64-app", "darwin-aarch64"]`
+  were found in the response `platforms` object* on every probe,
+  even though the signed binary we published would have run on
+  either arch. v0.6.1's manifest publishes the same signed
+  universal `.app.tar.gz` under both `darwin-aarch64` and
+  `darwin-x86_64` keys; the bytes on the wire are byte-identical
+  between the two entries (the `lipo`-fused universal binary
+  already runs on both archs, and the release workflow's
+  `Assert universal binary` step continues to enforce that),
+  only the key the plugin's `{os}-{arch}` lookup resolves
+  changes. The sidecar
+  [`test-generate-latest-json.sh`](scripts/release/test-generate-latest-json.sh)
+  now loops over both arch keys, asserts each child carries a
+  preserved minisign-format signature and the expected download
+  URL, and refuses a manifest that reintroduces the silently-
+  ignored `darwin-universal` key, so the same regression cannot
+  recur.
+
+### Changed
+
+- **DAY-109 / TST-v0.4-01: `SerdeDefaultAudit` now guards the
+  deeper persisted types.** `ArtifactPayload`, `ActivityEvent`,
+  `SyncRun`, `PerSourceState`, and `LogEntry` each carry the
+  compile-time derive that forces every `#[serde(default)]`
+  field to be explicitly audited, closing the class of silent-
+  default-on-deserialise bugs DOG-v0.2-04 (DAY-88) surfaced at
+  shallower types. Compile-time only; no on-disk shape change
+  and the `ts-rs` drift guard in
+  [`crates/dayseam-core/tests/ts_types_generated.rs`](crates/dayseam-core/tests/ts_types_generated.rs)
+  confirmed zero generated-TypeScript drift.
+- **DAY-110 / TST-v0.4-02: GitHub `Link`-header pagination pinned
+  end-to-end.** A wiremock-driven two-page happy-path test plus
+  a self-referential-`Link` cycle test now exercise the walker's
+  `Link: …; rel="next"` traversal and its `MAX_PAGES` guard in
+  CI, closing the v0.4 capstone gap that previously only covered
+  single-page responses.
+
 ## [0.6.0]
 
 ### Added
