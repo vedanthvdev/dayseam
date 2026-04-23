@@ -6,7 +6,58 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+## [0.6.3]
+
+### Added
+
+- **DAY-121: uniform Rename action on every source chip.** Previously
+  users could only rename LocalGit sources reliably; GitHub and
+  Atlassian "Edit" opened in reconnect mode with the label pinned,
+  and GitLab's edit dialog exposed a label input whose Save button
+  never enabled on a label-only change (its `canSubmit` gated on a
+  completed PAT-validation round-trip that a rename flow never
+  produced). The DAY-121 patch adds a dedicated
+  [`RenameSourceDialog`](apps/desktop/src/features/sources/RenameSourceDialog.tsx)
+  reached from a new "Aa" button in every chip's action cluster,
+  and it calls the existing `sources_update` IPC with a label-only
+  patch (`config: null`, `pat: null`) — a shape the backend has
+  supported since DAY-70 but that the UI had no path to exercise.
+  One dialog covers all five connector kinds (LocalGit, GitLab,
+  GitHub, Jira, Confluence); seven RTL assertions in
+  [`RenameSourceDialog.test.tsx`](apps/desktop/src/features/sources/__tests__/RenameSourceDialog.test.tsx)
+  pin the "Save stays disabled until the label actually changes",
+  per-kind `sources_update` wiring, and inline-error-on-backend-
+  rejection invariants. The standalone
+  [GitLab dialog's Save bug is also fixed](apps/desktop/src/features/sources/AddGitlabSourceDialog.tsx)
+  in the same patch: when a user leaves the PAT field blank on an
+  edit, the dialog now forwards `pat: null` (picking up the
+  backend's `(GitLab, None, Some(_)) => Ok(())` arm in
+  `validate_pat_arg`) instead of `""` (which the backend rejects
+  as `ipc.gitlab.pat.missing`), and `canSubmit` gates on
+  "something actually changed" rather than "PAT validation is
+  ok". A dedicated regression test in
+  [`AddGitlabSourceDialog.test.tsx`](apps/desktop/src/features/sources/__tests__/AddGitlabSourceDialog.test.tsx)
+  pins the `pat: null` + "reuse current config" shape so the fix
+  cannot silently regress.
+
 ### Changed
+
+- **DAY-121: Keychain prompt cascade documented, deferred to
+  Developer ID.** Users still see one macOS Keychain
+  approval prompt per configured connector (GitHub + GitLab +
+  Atlassian = three prompts) on the first launch after each
+  release. This is not a bug in Dayseam code — it is a
+  consequence of ad-hoc codesigning: each Keychain item's ACL is
+  bound to the binary's cdhash, so every rebuild (i.e. every
+  release) invalidates the previous "Always Allow" grants.
+  Removing the eager orphan-secret audit or consolidating tokens
+  into a single Keychain item can each only reduce the cardinality
+  of prompts; neither addresses the "re-prompts every release"
+  root cause. The real fix is Apple Developer ID signing, which
+  makes the Designated Requirement Team-ID-based (stable across
+  releases). That's deferred to a standalone ticket; rationale and
+  plan are in
+  [`docs/decisions/2026-04-20-keychain-prompts-defer-developer-id.md`](docs/decisions/2026-04-20-keychain-prompts-defer-developer-id.md).
 
 - **DAY-113 / F-10 follow-up: panic-safe `supervised_spawn` helper +
   no-bare-spawn CI gate.** F-10 found that v0.4's deferred

@@ -257,4 +257,74 @@ describe("AddGitlabSourceDialog", () => {
     );
     expect(onSaved).toHaveBeenCalled();
   });
+
+  // DAY-121 regression: the Save button used to sit disabled forever
+  // on a label-only edit because `canSubmit` gated on
+  // `validation.kind === "ok"`, which is only reached after running
+  // "Validate" against a freshly-pasted PAT. And even if the user
+  // somehow tripped Save, `handleSubmit` forwarded `pat.trim()`
+  // (an empty string) — which the Rust-side `validate_pat_arg`
+  // rejects with `ipc.gitlab.pat.missing`. The fix: when the row
+  // already has a `secret_ref` and the PAT field is blank, submit
+  // becomes enabled as soon as the label changes and sends
+  // `pat: null` so the stored token is preserved.
+  it("in edit mode, allows renaming with no PAT re-entry and sends pat: null", async () => {
+    const onSaved = vi.fn();
+    registerInvokeHandler("sources_update", async () => ({
+      ...EXISTING_GITLAB_SOURCE,
+      label: "Renamed Acme",
+    }));
+
+    render(
+      <AddGitlabSourceDialog
+        open
+        onClose={() => {}}
+        onAdded={() => {}}
+        editing={EXISTING_GITLAB_SOURCE}
+        onSaved={onSaved}
+      />,
+    );
+
+    const saveBtn = screen.getByRole("button", { name: /save/i });
+    // Before the user types: no change, so Save is disabled. This
+    // pins the UX so "Save" only lights up when something actually
+    // changed — a stricter bar than "any input is valid".
+    expect(saveBtn).toBeDisabled();
+
+    const labelInputs = screen.getAllByRole("textbox");
+    // The label input is the only non-readonly text field on the
+    // form (the base URL is read-only in edit mode).
+    const labelField = labelInputs.find(
+      (el) => !(el as HTMLInputElement).readOnly,
+    ) as HTMLInputElement;
+    fireEvent.change(labelField, { target: { value: "Renamed Acme" } });
+
+    expect(saveBtn).toBeEnabled();
+    fireEvent.click(saveBtn);
+
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "sources_update",
+        expect.objectContaining({
+          id: EXISTING_GITLAB_SOURCE.id,
+          pat: null,
+          patch: expect.objectContaining({
+            label: "Renamed Acme",
+            // Config must be the currently-persisted GitLab config —
+            // not `null` — so the backend's
+            // `ensure_gitlab_self_identity` path still runs with a
+            // valid `user_id`.
+            config: {
+              GitLab: {
+                base_url: "https://gitlab.acme.test",
+                user_id: 42,
+                username: "ved",
+              },
+            },
+          }),
+        }),
+      ),
+    );
+    expect(onSaved).toHaveBeenCalled();
+  });
 });

@@ -116,11 +116,43 @@ export function AddGitlabSourceDialog({
     pat.trim().length > 0 &&
     validation.kind !== "checking";
 
+  // DAY-121: label-only edits no longer require a fresh PAT. The
+  // backend already tolerates `pat: null` for a GitLab row that has
+  // an existing `secret_ref` on file (see `validate_pat_arg` —
+  // `(GitLab, None, Some(_)) => Ok(())`), but the dialog used to
+  // gate submit on `validation.kind === "ok"` which is only reached
+  // after running "Validate" against a newly-pasted PAT. That made
+  // it impossible to rename a GitLab source from this dialog: with
+  // the PAT field empty the validation stays idle forever.
+  //
+  // Now: when we are editing an existing source that already has a
+  // `secret_ref`, submit is enabled as long as something actually
+  // changed (label OR base_url). Create mode still requires a
+  // validated PAT — otherwise we'd be trying to seed a new GitLab
+  // row with no credentials at all.
+  const isLabelOnlyEdit =
+    isEdit &&
+    editing !== null &&
+    editing.secret_ref !== null &&
+    pat.trim().length === 0;
+  const labelChanged = isEdit && editing ? label.trim() !== editing.label : true;
+  const urlChanged =
+    isEdit && editing && "GitLab" in editing.config
+      ? normalisation.kind === "ok" &&
+        normalisation.url !== editing.config.GitLab.base_url
+      : false;
+  const hasEditableChange = labelChanged || urlChanged;
+
   const canSubmit =
     normalisation.kind === "ok" &&
     label.trim().length > 0 &&
-    validation.kind === "ok" &&
-    !submitting;
+    !submitting &&
+    (isLabelOnlyEdit
+      ? hasEditableChange
+      : // Create mode — or edit mode where the user is also
+        // rotating the PAT — still requires the "Validate" round-
+        // trip so we never seed a row with an unverified token.
+        validation.kind === "ok");
 
   const handleValidate = useCallback(async () => {
     if (!canValidate || normalisedUrl == null) return;
@@ -162,19 +194,10 @@ export function AddGitlabSourceDialog({
   }, [normalisation]);
 
   const handleSubmit = useCallback(async () => {
-    if (!canSubmit || validation.kind !== "ok" || normalisation.kind !== "ok") {
-      return;
-    }
+    if (!canSubmit || normalisation.kind !== "ok") return;
     setSubmitting(true);
     setSubmitError(null);
     try {
-      const config = {
-        GitLab: {
-          base_url: normalisation.url,
-          user_id: validation.result.user_id,
-          username: validation.result.username,
-        },
-      } as const;
       // DAY-70: the PAT travels alongside the add/update call so the
       // orchestrator can build a real `PatAuth` at sync time.
       // Previously the dialog validated the PAT via
@@ -182,16 +205,57 @@ export function AddGitlabSourceDialog({
       // hosted instances that produced empty reports with no visible
       // error because unauthenticated `/api/v4/users/:id/events`
       // returns HTTP 200 with `[]`.
-      const patValue = pat.trim();
+      const trimmedPat = pat.trim();
+      // DAY-121: for a label-only edit on a row that already has a
+      // `secret_ref`, send `pat: null` (not `""`) so Rust's
+      // `validate_pat_arg` picks the `(GitLab, None, Some(_))` arm
+      // and keeps the stored PAT in place. An empty string hits the
+      // `Some(p) if p.is_empty()` arm and is rejected as
+      // `ipc.gitlab.pat.missing`, which is why renaming used to
+      // fail silently from the Save button.
+      const patArg = trimmedPat.length > 0 ? trimmedPat : null;
+
       if (isEdit && editing) {
-        const saved = await update(
-          editing.id,
-          { label: label.trim(), config },
-          patValue,
-        );
+        // When the PAT field is empty we are doing a label-only (or
+        // label + URL) edit. Reuse the config that's already
+        // persisted on the row rather than sending `config: null` —
+        // the existing backend path updates config unconditionally
+        // when present, and passing the current config is a no-op
+        // that keeps this dialog's shape consistent with the
+        // validated-edit branch below.
+        const config =
+          validation.kind === "ok"
+            ? ({
+                GitLab: {
+                  base_url: normalisation.url,
+                  user_id: validation.result.user_id,
+                  username: validation.result.username,
+                },
+              } as const)
+            : "GitLab" in editing.config
+              ? ({ GitLab: editing.config.GitLab } as const)
+              : null;
+        const patch =
+          config !== null
+            ? { label: label.trim(), config }
+            : { label: label.trim(), config: null };
+        const saved = await update(editing.id, patch, patArg);
         onSaved?.(saved);
       } else {
-        const added = await add("GitLab", label.trim(), config, patValue);
+        if (validation.kind !== "ok") {
+          // Defensive: `canSubmit` already blocks this branch, but
+          // the narrow makes TypeScript happy and guards against a
+          // future refactor that accidentally loosens the gate.
+          return;
+        }
+        const config = {
+          GitLab: {
+            base_url: normalisation.url,
+            user_id: validation.result.user_id,
+            username: validation.result.username,
+          },
+        } as const;
+        const added = await add("GitLab", label.trim(), config, trimmedPat);
         onAdded(added);
       }
     } catch (err) {
@@ -226,7 +290,7 @@ export function AddGitlabSourceDialog({
       title={isEdit ? "Reconnect GitLab" : "Add GitLab source"}
       description={
         isEdit
-          ? "Paste a fresh Personal Access Token to restore this source. The host stays the same; the existing identity is preserved."
+          ? "Paste a fresh Personal Access Token to restore this source. The host stays the same; the existing identity is preserved. Leave the token blank to change only the label."
           : "Connect a self-hosted or cloud GitLab instance with a Personal Access Token. Dayseam only needs read access."
       }
       testId="add-gitlab-dialog"

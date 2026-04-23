@@ -96,6 +96,27 @@ describe("SourcesSidebar", () => {
     );
   });
 
+  // DAY-121: every chip exposes a dedicated "Rename" button alongside
+  // Rescan / Edit / Delete. Clicking it opens `RenameSourceDialog`
+  // with the current label prefilled; the dialog itself owns the
+  // `sources_update` round-trip (covered in `RenameSourceDialog.test`).
+  // This test just pins the wiring from the chip to the dialog so a
+  // future refactor of the action cluster can't silently orphan the
+  // rename flow.
+  it("opens RenameSourceDialog from the chip's rename button", async () => {
+    registerInvokeHandler("sources_list", async () => [SOURCE]);
+    render(<SourcesSidebar />);
+    await waitFor(() =>
+      expect(screen.getByText("Work repos")).toBeInTheDocument(),
+    );
+    fireEvent.click(screen.getByTestId("source-chip-rename-src-1"));
+    const dialog = await screen.findByTestId("rename-source-dialog");
+    expect(dialog).toBeInTheDocument();
+    expect(
+      (screen.getByTestId("rename-source-label") as HTMLInputElement).value,
+    ).toBe("Work repos");
+  });
+
   it("opens the local-git add dialog from the add-source menu", async () => {
     registerInvokeHandler("sources_list", async () => []);
     render(<SourcesSidebar />);
