@@ -3,7 +3,8 @@
 use dayseam_db::LogRepo;
 use dayseam_desktop::ipc::{atlassian, broadcast_forwarder, commands, github};
 use dayseam_desktop::startup;
-use tauri::Manager;
+use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
+use tauri::{Emitter, Manager};
 
 fn main() {
     // One multi-threaded Tokio runtime powers the whole app: the
@@ -48,6 +49,76 @@ fn main() {
             let handle = app.handle().clone();
             let logs = LogRepo::new(pool);
             let _broadcast_task = broadcast_forwarder::spawn(handle, app_bus, logs);
+
+            // DAY-119: install a native application menu. The macOS
+            // build used to ship with Tauri's default window menu
+            // (which has no app submenu at all), so the "Dayseam"
+            // entry next to the Apple logo didn't exist and there was
+            // nowhere to surface "Check for Updates…". Without an
+            // explicit menu on macOS the standard Cmd+Q / Cmd+W /
+            // clipboard shortcuts also rely on the webview's own
+            // keybindings, which is fragile. Building the menu here
+            // gives us (1) the OS-native "Dayseam" submenu, (2) a
+            // custom "Check for Updates…" item that emits
+            // `menu://check-for-updates` so the frontend's
+            // `useUpdater.check()` can re-run, and (3) standard Edit /
+            // Window submenus so copy-paste and window management
+            // behave like every other Mac app.
+            let check_updates =
+                MenuItemBuilder::with_id("check_for_updates", "Check for Updates…").build(app)?;
+            let about_metadata = AboutMetadataBuilder::new()
+                .name(Some("Dayseam"))
+                .version(Some(env!("CARGO_PKG_VERSION")))
+                .copyright(Some("Local-first work reporting"))
+                .build();
+            let app_submenu = SubmenuBuilder::new(app, "Dayseam")
+                .about(Some(about_metadata))
+                .item(&check_updates)
+                .separator()
+                .services()
+                .separator()
+                .hide()
+                .hide_others()
+                .show_all()
+                .separator()
+                .quit()
+                .build()?;
+            let edit_submenu = SubmenuBuilder::new(app, "Edit")
+                .undo()
+                .redo()
+                .separator()
+                .cut()
+                .copy()
+                .paste()
+                .select_all()
+                .build()?;
+            let window_submenu = SubmenuBuilder::new(app, "Window")
+                .minimize()
+                .maximize()
+                .separator()
+                .close_window()
+                .build()?;
+            let menu = MenuBuilder::new(app)
+                .items(&[&app_submenu, &edit_submenu, &window_submenu])
+                .build()?;
+            app.set_menu(menu)?;
+
+            let check_updates_id = check_updates.id().clone();
+            app.on_menu_event(move |app_handle, event| {
+                if event.id() == &check_updates_id {
+                    // The frontend's `useUpdater` hook listens for
+                    // this event and calls `check()` — which drives
+                    // the same code path the automatic check on
+                    // mount uses. We intentionally do NOT perform
+                    // the update check in Rust here because the UI
+                    // state machine (idle → checking → available →
+                    // downloading → ready) lives entirely on the JS
+                    // side; emitting keeps a single source of truth
+                    // for updater status.
+                    let _ = app_handle.emit("menu://check-for-updates", ());
+                }
+            });
+
             Ok(())
         });
 

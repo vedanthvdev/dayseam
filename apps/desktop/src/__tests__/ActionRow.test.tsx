@@ -71,7 +71,6 @@ describe("ActionRow", () => {
     render(
       <ActionRow
         status="running"
-        progressMessage="Merging events…"
         onGenerate={() => {}}
         onCancel={onCancel}
       />,
@@ -82,9 +81,12 @@ describe("ActionRow", () => {
     expect(
       screen.queryByTestId("action-row-generate"),
     ).not.toBeInTheDocument();
-    expect(screen.getByTestId("action-row-progress-message")).toHaveTextContent(
-      "Merging events…",
-    );
+    // DAY-119: ActionRow no longer renders a live progress message — the
+    // canonical narration lives in StreamingPreview. Guard against
+    // regression so we never surface progress in both places again.
+    expect(
+      screen.queryByTestId("action-row-progress-message"),
+    ).not.toBeInTheDocument();
     fireEvent.click(screen.getByTestId("action-row-cancel"));
     expect(onCancel).toHaveBeenCalledTimes(1);
   });

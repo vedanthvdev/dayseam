@@ -6,6 +6,79 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+## [0.6.2]
+
+### Fixed
+
+- **DAY-119: macOS folder-picker + keychain popup cascade reduced
+  (partial root-cause fix).** v0.6.1 users reported 5–6 "allow
+  access" TCC prompts when picking a local-git scan root under
+  `$HOME`, then another prompt cascade on **Generate**, plus a
+  Keychain re-prompt on every launch. Two root causes intersected:
+  (1) `connector-local-git`'s `discover_repos` walk only pruned
+  `Library`, `Pictures`, `Music`, `Movies`, `Volumes`, `.Trash`,
+  and `node_modules`, so picking `$HOME` as the scan root meant
+  every first-level descendant under `Desktop`, `Documents`,
+  `Downloads`, and `Public` (each a modern macOS TCC-protected
+  container since 10.14 Mojave) fired its own prompt, and
+  (2) v0.6.1 shipped completely unsigned, so macOS treated each
+  build as an unknown binary with no persistent identity, which
+  meant every folder-access grant and every Keychain ACL was
+  scoped to a CDHash that changed on every release. v0.6.2
+  attacks both: the `is_macos_protected_name` prune list in
+  [`crates/connectors/connector-local-git/src/discovery.rs`](crates/connectors/connector-local-git/src/discovery.rs)
+  now skips `Desktop`, `Documents`, `Downloads`, and `Public`
+  (with a regression test asserting the walk prunes them and a
+  companion test confirming those names are still accepted as
+  *explicit* scan roots when the user picks them directly), and
+  the Tauri bundle is now ad-hoc code-signed with a declared
+  [`entitlements.plist`](apps/desktop/src-tauri/entitlements.plist)
+  granting `com.apple.security.files.user-selected.read-write`
+  plus the hardened-runtime JIT / unsigned-executable-memory
+  allowances Tauri webviews need. The release pipeline's
+  [`scripts/release/build-dmg.sh`](scripts/release/build-dmg.sh)
+  fails fast if `codesign --verify --deep --strict` does not
+  pass on the built `.app` or if the entitlements dump does not
+  include `user-selected.read-write`, so a regression in
+  `tauri.conf.json` cannot silently ship a re-unsigned bundle.
+  **Known limitation:** ad-hoc signing produces a CDHash that
+  still changes between releases, so the v0.6.1 → v0.6.2
+  upgrade will trigger a one-time Keychain re-prompt. A truly
+  stable Designated Requirement requires an Apple Developer ID
+  and is deferred to v0.7; see the note in
+  [`entitlements.plist`](apps/desktop/src-tauri/entitlements.plist).
+- **DAY-119: removed duplicate "scanning …" narration under the
+  date picker.** During a live scan the current folder was
+  rendered twice — once under the progress bar in
+  `StreamingPreview` and once under the date field in
+  `ActionRow`. The preview is the canonical, `aria-live="polite"`
+  home for live narration; `ActionRow` now focuses on input
+  state (date picker, source chips, Generate / Cancel) and leaves
+  progress to the preview. A test in
+  [`apps/desktop/src/__tests__/ActionRow.test.tsx`](apps/desktop/src/__tests__/ActionRow.test.tsx)
+  pins the behaviour so the second copy cannot regress.
+- **DAY-119: "Check for Updates…" is now in the native Dayseam
+  menu.** v0.6.1 had no custom macOS menu, so the only way to
+  trigger a fresh update check was to relaunch the app. The Tauri
+  setup hook in
+  [`apps/desktop/src-tauri/src/main.rs`](apps/desktop/src-tauri/src/main.rs)
+  now installs a standard macOS menu bar (Dayseam / Edit /
+  Window) with a **Check for Updates…** item under the app
+  menu; clicking it emits `menu://check-for-updates`, and the
+  `useUpdater` hook in
+  [`apps/desktop/src/features/updater/useUpdater.ts`](apps/desktop/src/features/updater/useUpdater.ts)
+  listens for that event and re-runs the same `runCheck()` path
+  the mount-time check uses, keeping the JS state machine the
+  single source of truth. Regression-tested in
+  [`apps/desktop/src/features/updater/__tests__/useUpdater.test.tsx`](apps/desktop/src/features/updater/__tests__/useUpdater.test.tsx).
+- **DAY-119: removed the static "Idle" status next to the Logs
+  button.** The footer's hard-coded "Idle" label was never wired
+  to any runtime state — `StreamingPreview` and the toast host
+  already render live progress and transient status — so it
+  added noise without conveying information. Removed in
+  [`apps/desktop/src/components/Footer.tsx`](apps/desktop/src/components/Footer.tsx)
+  with the snapshot test updated accordingly.
+
 ## [0.6.1]
 
 ### Fixed

@@ -34,6 +34,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { check, type Update } from "@tauri-apps/plugin-updater";
 import { relaunch } from "@tauri-apps/plugin-process";
+import { listen } from "@tauri-apps/api/event";
 import { isSkipped, skipVersion } from "./skipped-versions";
 
 export type UpdaterStatus =
@@ -187,6 +188,38 @@ export function useUpdater(): UpdaterState {
     // so this effect really does run exactly once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // DAY-119: listen for the native "Check for Updates…" menu item
+  // (installed by the Rust setup hook). The menu emits
+  // `menu://check-for-updates` so the JS state machine stays the
+  // single source of truth for updater status — the menu action
+  // just drives the same `runCheck()` path the mount-time check
+  // uses. If the event API is unavailable (test harness, browser
+  // fallback) we simply skip registering; the mount-time check
+  // still runs.
+  useEffect(() => {
+    let unlisten: (() => void) | null = null;
+    let cancelled = false;
+    void listen("menu://check-for-updates", () => {
+      void runCheck();
+    })
+      .then((fn) => {
+        if (cancelled) {
+          fn();
+        } else {
+          unlisten = fn;
+        }
+      })
+      .catch(() => {
+        // No Tauri event bridge (e.g. under vitest/jsdom) — the
+        // automatic mount-time check still runs, so the rest of
+        // the updater flow remains testable.
+      });
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
+  }, [runCheck]);
 
   const isCurrentSkipped =
     status.kind === "available" ? isSkipped(status.version) : false;

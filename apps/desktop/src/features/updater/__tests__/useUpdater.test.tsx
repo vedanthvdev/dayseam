@@ -1,6 +1,7 @@
 import { act, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
+  emitEvent,
   MockUpdate,
   mockRelaunch,
   queueUpdaterCheck,
@@ -159,6 +160,45 @@ describe("useUpdater + UpdaterBanner", () => {
     await waitFor(() =>
       expect(screen.getByTestId("kind").textContent).toBe("up-to-date"),
     );
+  });
+
+  // DAY-119: when the native "Check for Updates…" menu item is
+  // clicked, the Rust setup hook emits `menu://check-for-updates`.
+  // `useUpdater` must listen for that event and re-run its
+  // `runCheck()` path so the user sees a fresh state transition —
+  // otherwise the menu entry is inert chrome that reproduces
+  // exactly the UX gap this bug was filed against ("I still don't
+  // see the check for updates when I click on the dayseam on the
+  // top left"). The test pins the behaviour by:
+  //   1. returning "up-to-date" on mount,
+  //   2. queueing a *new* available update,
+  //   3. firing the menu event, and
+  //   4. asserting the banner flips from clean to "available".
+  // A fix-revert that removes the `listen()` block leaves the
+  // banner stuck on "up-to-date" and the test fails.
+  it("re-runs the update check when the native menu item fires the event", async () => {
+    queueUpdaterCheck(null);
+    render(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByTestId("kind").textContent).toBe("up-to-date"),
+    );
+
+    queueUpdaterCheck(
+      new MockUpdate({
+        version: "0.6.3",
+        currentVersion: "0.6.2",
+        body: "Hot patch",
+      }),
+    );
+    await act(async () => {
+      emitEvent("menu://check-for-updates", null);
+    });
+
+    await waitFor(() =>
+      expect(screen.getByTestId("kind").textContent).toBe("available"),
+    );
+    const banner = await screen.findByTestId("updater-banner-available");
+    expect(banner.textContent).toContain("Dayseam 0.6.3");
   });
 
   it("maps download failures into the error banner without a stray relaunch", async () => {

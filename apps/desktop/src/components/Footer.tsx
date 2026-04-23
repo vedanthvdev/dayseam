@@ -9,12 +9,18 @@ interface FooterProps {
 }
 
 /**
- * Status footer — occupies the bottom strip of the window. Phase 1
- * shows the app is idle; Phase 2 replaces the text with live sync
- * progress from the log drawer and Task 9's toast system. Phase 1 also
- * exposes the "Logs" toggle that opens `LogDrawer`, and Phase 2 adds
- * entry points for the admin dialogs (identities, sinks) alongside
- * it.
+ * Status footer — occupies the bottom strip of the window. Renders
+ * entry points for the admin surfaces (Logs / Identities / Sinks) and
+ * — once a completed draft is available — a "Save report" primary.
+ *
+ * DAY-119: the footer used to lead with a literal `"Idle"` label as a
+ * placeholder for live sync progress. In practice the streaming
+ * progress now lives inside `StreamingPreview`'s determinate bar
+ * (DAY-104) and the toast host shows anything out-of-band, so the
+ * static `"Idle"` became chrome that never changed state and only
+ * added visual noise next to the action buttons. Dropping it leaves
+ * the left cluster as the action buttons themselves; the right cluster
+ * keeps the local-only reassurance text.
  */
 export function Footer({
   onOpenLogs,
@@ -28,7 +34,6 @@ export function Footer({
       className="flex items-center justify-between border-t border-neutral-200 px-6 py-2 text-xs text-neutral-500 dark:border-neutral-800 dark:text-neutral-400"
     >
       <div className="flex items-center gap-3">
-        <span>Idle</span>
         {onOpenLogs ? (
           <button
             type="button"
