@@ -10,7 +10,7 @@
 //! has been closed on the frontend side, `send` returns `Err` and we
 //! exit too.
 
-use dayseam_core::{LogEvent, ProgressEvent};
+use dayseam_core::{runtime::supervised_spawn, LogEvent, ProgressEvent};
 use dayseam_events::{LogReceiver, ProgressReceiver};
 use tauri::ipc::Channel;
 use tokio::task::JoinHandle;
@@ -19,12 +19,19 @@ use tokio::task::JoinHandle;
 /// every `ProgressSender` for the run has been dropped (receiver
 /// yields `None`) or the frontend's `Channel` has been closed
 /// (`send` errors).
+///
+/// DAY-113: wrapped in `supervised_spawn` so a panic in event
+/// serialisation cannot silently detach the forwarder — a panic here
+/// used to drop the entire progress stream for the run, leaving the
+/// UI stuck at whatever phase it last rendered. Supervision turns
+/// that into a single `error`-level log line and lets the run reaper
+/// close the loop cleanly.
 #[must_use]
 pub fn spawn_progress_forwarder(
     mut rx: ProgressReceiver,
     channel: Channel<ProgressEvent>,
 ) -> JoinHandle<()> {
-    tokio::spawn(async move {
+    supervised_spawn("run_forwarder::progress", async move {
         while let Some(event) = rx.recv().await {
             if channel.send(event).is_err() {
                 tracing::debug!("progress channel closed — stopping forwarder");
@@ -35,10 +42,11 @@ pub fn spawn_progress_forwarder(
 }
 
 /// Spawn the log-stream forwarder. Same termination rules as
-/// [`spawn_progress_forwarder`].
+/// [`spawn_progress_forwarder`] and the same DAY-113 supervision
+/// reasoning.
 #[must_use]
 pub fn spawn_log_forwarder(mut rx: LogReceiver, channel: Channel<LogEvent>) -> JoinHandle<()> {
-    tokio::spawn(async move {
+    supervised_spawn("run_forwarder::log", async move {
         while let Some(event) = rx.recv().await {
             if channel.send(event).is_err() {
                 tracing::debug!("log channel closed — stopping forwarder");

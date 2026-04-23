@@ -25,11 +25,11 @@ use connectors_sdk::{
     AuthStrategy, BasicAuth, ConnCtx, NoneAuth, NoopRawStore, PatAuth, SystemClock,
 };
 use dayseam_core::{
-    error_codes, ActivityEvent, DayseamError, GitlabValidationResult, LocalRepo, LogEntry,
-    LogLevel, Person, ProgressEvent, ReportCompletedEvent, ReportDraft, RunId, SecretRef, Settings,
-    SettingsPatch, Sink, SinkConfig, SinkKind, Source, SourceConfig, SourceHealth, SourceId,
-    SourceIdentity, SourceIdentityKind, SourceKind, SourcePatch, ToastEvent, ToastSeverity,
-    WriteReceipt,
+    error_codes, runtime::supervised_spawn, ActivityEvent, DayseamError, GitlabValidationResult,
+    LocalRepo, LogEntry, LogLevel, Person, ProgressEvent, ReportCompletedEvent, ReportDraft, RunId,
+    SecretRef, Settings, SettingsPatch, Sink, SinkConfig, SinkKind, Source, SourceConfig,
+    SourceHealth, SourceId, SourceIdentity, SourceIdentityKind, SourceKind, SourcePatch,
+    ToastEvent, ToastSeverity, WriteReceipt,
 };
 use dayseam_db::{
     ActivityRepo, DraftRepo, LocalRepoRepo, LogRepo, LogRow, PersonRepo, SettingsRepo, SinkRepo,
@@ -1594,7 +1594,14 @@ pub async fn report_generate(
     let log_task = run_forwarder::spawn_log_forwarder(handle.log_rx, logs);
 
     let app_handle = app.clone();
-    let completion_task = tokio::spawn(async move {
+    // DAY-113: supervised so a panic inside `handle.completion`
+    // cannot silently detach the completion task and leave the
+    // frontend stuck on "generating" with no terminal `report:completed`
+    // event. The pre-DAY-113 inner `match` already handled
+    // `Err(JoinError)` from the orchestrator's completion future, but
+    // nothing caught a panic in the `emit()` call itself — the new
+    // outer supervision covers that gap.
+    let completion_task = supervised_spawn("commands::report_completion", async move {
         match handle.completion.await {
             Ok(outcome) => {
                 let payload = ReportCompletedEvent {
@@ -1965,7 +1972,12 @@ mod dev {
         let cancel = CancellationToken::new();
         let producer_cancel = cancel.clone();
 
-        let producer = tokio::spawn(async move {
+        // DAY-113: even the dev-only demo-run producer is supervised.
+        // A panic in the frontend's test harness-triggered demo run
+        // used to silently detach the producer task, which then
+        // deadlocked Playwright's "run completes" assertion because
+        // the progress channel stayed open with no further events.
+        let producer = supervised_spawn("commands::dev_demo_producer", async move {
             progress_tx.send(
                 None,
                 ProgressPhase::Starting {

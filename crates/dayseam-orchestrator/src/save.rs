@@ -78,7 +78,16 @@ pub(crate) async fn run(
     let (progress_tx, log_tx, mut progress_rx, mut log_rx) =
         RunStreams::with_progress(RunId::new());
     let ctx = SinkCtx::new(None, progress_tx, log_tx, CancellationToken::new());
+    // DAY-113 opt-out rationale (for both drains below): trivial
+    // `while rx.recv().await.is_some() {}` drains whose only purpose
+    // is to keep the receivers' senders-count > 0 during a one-shot
+    // save. The body cannot panic, so wrapping in `supervised_spawn`
+    // would allocate a second task per save call for no observable
+    // gain. The marker comments on each line below are what the
+    // `scripts/ci/no-bare-spawn.sh` gate pattern-matches against.
+    // bare-spawn: intentional
     tokio::spawn(async move { while progress_rx.recv().await.is_some() {} });
+    // bare-spawn: intentional
     tokio::spawn(async move { while log_rx.recv().await.is_some() {} });
 
     let receipt = adapter.write(&ctx, &sink.config, &draft).await?;

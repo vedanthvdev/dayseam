@@ -16,7 +16,7 @@
 use std::time::{Duration, Instant};
 
 use chrono::Utc;
-use dayseam_core::{LogLevel, ToastEvent};
+use dayseam_core::{runtime::supervised_spawn, LogLevel, ToastEvent};
 use dayseam_db::{LogRepo, LogRow};
 use dayseam_events::{AppBus, ToastSubscribeError};
 use serde_json::json;
@@ -49,7 +49,11 @@ const LAG_WRITE_MIN_INTERVAL: Duration = Duration::from_millis(500);
 /// explicitly `.await` this handle or call `.abort()`.
 #[must_use]
 pub fn spawn<R: Runtime>(handle: AppHandle<R>, bus: AppBus, logs: LogRepo) -> JoinHandle<()> {
-    tokio::spawn(run(handle, bus, logs))
+    // DAY-113: supervised so a panic inside the `broadcast`
+    // subscribe or the log-row writer cannot silently detach the
+    // one process-wide toast-forwarder and leave the UI without
+    // toast delivery for the rest of the session.
+    supervised_spawn("broadcast_forwarder::toasts", run(handle, bus, logs))
 }
 
 async fn run<R: Runtime>(handle: AppHandle<R>, bus: AppBus, logs: LogRepo) {

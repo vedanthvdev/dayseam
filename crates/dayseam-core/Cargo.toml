@@ -27,7 +27,22 @@ ts-rs = { version = "12", features = [
 # Declared as a regular dependency (not dev) because the derive is
 # on production types (`SourceConfig`, `EntityRef`), not tests.
 dayseam-macros = { path = "../dayseam-macros" }
+# DAY-113 / F-10. `runtime::supervised_spawn` wraps tokio spawns so a
+# panic in a background future is caught, logged through `tracing`,
+# and the task completes cleanly from the supervisor's perspective.
+# Both deps are already workspace-level so no new version is pinned
+# here; the runtime module lives in `dayseam-core` because both the
+# desktop app (`apps/desktop/src-tauri`) and the orchestrator crate
+# (`crates/dayseam-orchestrator`) need it and `dayseam-core` is the
+# only crate both already depend on.
+tokio = { workspace = true }
+tracing = { workspace = true }
 
 [dev-dependencies]
 insta = { version = "1", features = ["yaml"] }
 proptest = "1"
+# DAY-113. The `supervised_spawn` unit tests assert the helper's
+# `tracing` emissions land on the configured subscriber; this is the
+# lightest way to capture subscriber events in-process.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-test = "0.2"

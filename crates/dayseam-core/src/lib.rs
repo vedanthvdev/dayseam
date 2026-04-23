@@ -8,7 +8,10 @@
 
 pub mod error;
 pub mod error_codes;
+pub mod runtime;
 pub mod types;
+
+pub use runtime::supervised_spawn;
 
 pub use error::DayseamError;
 pub use types::{

@@ -200,6 +200,18 @@ pub fn spawn_run_reaper(
     run_id: RunId,
     tasks: Vec<JoinHandle<()>>,
 ) -> JoinHandle<()> {
+    // DAY-113 opt-out rationale: the reaper IS the supervisor. Its
+    // whole job is to drain every child `JoinHandle` (each of which
+    // is already a `supervised_spawn` return value, so panics have
+    // been logged by the time the reaper sees the `JoinError`) and
+    // then deregister the run from the registry. Wrapping the reaper
+    // itself in `supervised_spawn` would add a useless second layer
+    // of panic-logging around a body whose only operations are
+    // `.await`, `let _ = …`, and a registry write; if any of those
+    // panic, the outer `supervised_spawn` would swallow a bug we'd
+    // want to surface at test time. The single-line marker on the
+    // following line is what the DAY-113 CI gate pattern-matches.
+    // bare-spawn: intentional
     tokio::spawn(async move {
         for task in tasks {
             // `Err` here means the task panicked or was aborted; in
@@ -260,6 +272,10 @@ mod tests {
         }
 
         // Three trivial tasks — the reaper waits on all of them.
+        // The DAY-113 no-bare-spawn gate doesn't parse `#[cfg(test)]`
+        // inline modules, so test-only bare spawns carry the same
+        // marker as production opt-outs — honest and locally visible.
+        // bare-spawn: intentional
         let tasks = (0..3).map(|_| tokio::spawn(async {})).collect();
         let reaper = spawn_run_reaper(registry.clone(), run_id, tasks);
         reaper.await.expect("reaper joined");
@@ -281,7 +297,9 @@ mod tests {
             guard.insert(handle(run_id));
         }
 
+        // bare-spawn: intentional
         let panicking = tokio::spawn(async { panic!("task panic on purpose") });
+        // bare-spawn: intentional
         let ok = tokio::spawn(async {});
         let reaper = spawn_run_reaper(registry.clone(), run_id, vec![panicking, ok]);
         reaper.await.expect("reaper joined");

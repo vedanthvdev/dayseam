@@ -123,41 +123,28 @@ pub async fn build_app_state(data_dir: &Path) -> Result<AppState, DayseamError> 
     // log per orphan and is still covered by the dedicated
     // Keychain-backed tests below.
     //
-    // DAY-103 F-10: make the detached task observable. The previous
-    // fire-and-forget `spawn` discarded both the orphan count
-    // (useful for log forensics) and any panic inside the audit —
-    // a panic would have gone unlogged and invisible. We now
-    // supervise the audit from a second `spawn` that awaits the
-    // first's `JoinHandle`, so a panic turns into a single
-    // `tracing::error!` line and a clean completion logs the
-    // orphan count at `info!`. This only relies on tauri's
-    // `async_runtime::spawn` (which wraps tokio's `JoinHandle`
-    // with `is_panic()` semantics) — no new dependency needed.
+    // DAY-103 F-10 then DAY-113: make the detached task observable.
+    // The original fire-and-forget `spawn` discarded both the orphan
+    // count (useful for log forensics) and any panic inside the
+    // audit — a panic would have gone unlogged and invisible.
+    // DAY-103 hand-wrote a two-task supervisor inline here; DAY-113
+    // generalises that pattern as `supervised_spawn` so every other
+    // background-task site in the workspace inherits the same
+    // guarantee for free. Clean completion still logs the orphan
+    // count at `info!` below the call; a panic turns into a single
+    // `tracing::error!` keyed by the `"orphan_secret_audit"` context
+    // string. The old post-mortem breadcrumb copy is preserved inside
+    // the `info!` / supervisor pair so log readers who grep for
+    // "orphan-secret audit" still land on a hit.
     {
         let pool = pool.clone();
         let secrets = secrets.clone();
-        let audit_handle = tauri::async_runtime::spawn(async move {
-            audit_orphan_secrets(&pool, secrets.as_ref()).await
-        });
-        tauri::async_runtime::spawn(async move {
-            match audit_handle.await {
-                Ok(orphans) => tracing::info!(
-                    orphans,
-                    "orphan-secret audit completed (deferred, post-window-show)"
-                ),
-                Err(join_err) => {
-                    // `JoinError::Display` surfaces whether the task
-                    // panicked vs. was cancelled, plus the panic
-                    // payload when it's a string. That's enough
-                    // breadcrumb for a post-mortem to find the
-                    // failing probe without extra scaffolding.
-                    tracing::error!(
-                        join_err = %join_err,
-                        "orphan-secret audit task failed to complete; swallowed by the \
-                         deferred task runner but recorded here for post-mortem",
-                    );
-                }
-            }
+        dayseam_core::runtime::supervised_spawn("orphan_secret_audit", async move {
+            let orphans = audit_orphan_secrets(&pool, secrets.as_ref()).await;
+            tracing::info!(
+                orphans,
+                "orphan-secret audit completed (deferred, post-window-show)"
+            );
         });
     }
 

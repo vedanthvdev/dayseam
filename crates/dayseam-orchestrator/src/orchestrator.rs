@@ -19,7 +19,9 @@ use std::sync::Arc;
 
 use chrono::NaiveDate;
 use connectors_sdk::{AuthStrategy, Clock, HttpClient, NoopRawStore, RawStore, SystemClock};
-use dayseam_core::{Person, RunId, SourceId, SourceIdentity, SourceKind};
+use dayseam_core::{
+    runtime::supervised_spawn, Person, RunId, SourceId, SourceIdentity, SourceKind,
+};
 use dayseam_events::AppBus;
 use sqlx::SqlitePool;
 use tokio::sync::Mutex;
@@ -287,7 +289,13 @@ impl Orchestrator {
             return;
         }
         let pool = self.pool.clone();
-        tokio::spawn(async move {
+        // DAY-113: supervised so a panic inside
+        // `sweep_with_resolved_cutoff` (e.g. an `sqlx` driver panic on a
+        // corrupt row) cannot silently detach the opportunistic
+        // post-run sweep. The startup sweep is still the guaranteed
+        // correctness floor; supervision here just ensures the failure
+        // is loud in the logs instead of invisible.
+        supervised_spawn("orchestrator::retention_post_run_sweep", async move {
             if let Err(err) = crate::retention::sweep_with_resolved_cutoff(&pool, now).await {
                 tracing::warn!(
                     ?err,

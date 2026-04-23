@@ -107,3 +107,16 @@ jobs:
         run: bash scripts/release/test-resolve-prev-version.sh
       - name: test-extract-release-notes.sh
         run: bash scripts/release/test-extract-release-notes.sh
+      # DAY-113 / F-10: enforce that no production file adds a bare
+      # `tokio::spawn` or `tauri::async_runtime::spawn` call. The
+      # workspace ships `dayseam_core::runtime::supervised_spawn`
+      # precisely so panic-eating fire-and-forget spawns (like the
+      # one F-10 found in `startup.rs`) become a gate failure at PR
+      # time rather than a silent production bug weeks later. The
+      # companion `test-no-bare-spawn.sh` fuzzes the gate itself
+      # against acceptance/rejection fixtures so a regression in the
+      # gate logic also fails CI.
+      - name: test-no-bare-spawn.sh (gate self-test)
+        run: bash scripts/ci/test-no-bare-spawn.sh
+      - name: no-bare-spawn.sh (workspace scan)
+        run: bash scripts/ci/no-bare-spawn.sh

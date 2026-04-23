@@ -152,6 +152,16 @@ pub async fn start(orch: Orchestrator, request: GenerateRequest) -> GenerateHand
         // emit.
         drop(progress_tx);
         drop(log_tx);
+        // DAY-113: the early-insert-failure path still returns a
+        // JoinHandle<GenerateOutcome>, which `supervised_spawn` cannot
+        // model because it constrains `Output = ()`. The future here
+        // is trivially panic-free (a `tracing::error!` plus a struct
+        // literal), so we retain a bare `tokio::spawn` with the
+        // marker comment the CI gate recognises. If the body ever
+        // grows any call that could panic (e.g. a serde map), move it
+        // into a wrapper that produces `()` and emits the outcome via
+        // a oneshot channel so supervision can be reintroduced.
+        // bare-spawn: intentional — typed JoinHandle required, body is panic-free, see DAY-113.
         let completion = tokio::spawn(async move {
             tracing::error!(
                 run_id = %run_id,
@@ -195,6 +205,19 @@ pub async fn start(orch: Orchestrator, request: GenerateRequest) -> GenerateHand
     let cancel_bg = cancel.clone();
     let progress_bg = progress_tx.clone();
 
+    // DAY-113: the caller (`GenerateHandle.completion`) awaits a
+    // `JoinHandle<GenerateOutcome>`, so this site cannot use
+    // `supervised_spawn` (which returns `JoinHandle<()>`). A panic
+    // inside `run_background` still surfaces to the caller as
+    // `JoinError { is_panic: true }` via
+    // `apps/desktop/src-tauri/src/ipc/commands.rs::dev_generate_report`,
+    // where the completion-task supervisor *is* in place and logs the
+    // panic with `context = "commands::report_completion"`. That
+    // means the panic is observable end-to-end even without
+    // supervision here; what supervision here would add is a
+    // log line *before* the `JoinError` surfaces to the caller,
+    // which duplicates what the caller's supervisor already does.
+    // bare-spawn: intentional — typed JoinHandle<GenerateOutcome> required, caller supervises, see DAY-113.
     let completion = tokio::spawn(async move {
         let outcome = run_background(
             orch_bg.clone(),

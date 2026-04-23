@@ -6,6 +6,57 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **DAY-113 / F-10 follow-up: panic-safe `supervised_spawn` helper +
+  no-bare-spawn CI gate.** F-10 found that v0.4's deferred
+  orphan-secret audit used a fire-and-forget `tauri::async_runtime::spawn`
+  that silently ate panics — a crash inside the audit would disappear
+  from logs and leave the app visibly healthy. DAY-103 patched that
+  one call site with a hand-written two-task supervisor; DAY-113
+  generalises the fix so every background task in the workspace
+  inherits the same guarantee by default. Ships three things:
+  (1) `dayseam_core::runtime::supervised_spawn(context, future)` —
+  a wrapper around `tokio::spawn` that logs panics at `error!`,
+  cancellations at `warn!`, clean completions at `debug!`, all keyed
+  by a caller-supplied `context` label; six unit tests pin the clean,
+  panic, cancel, context-propagation, and JoinHandle-semantics
+  invariants, and a manual revert probe confirms the panic-containment
+  test goes red if supervision is stripped. (2) Migration of every
+  dangerous production spawn site onto the helper —
+  [`startup.rs`](apps/desktop/src-tauri/src/startup.rs) (orphan-secret
+  audit; replaces the DAY-103 inline supervisor),
+  [`run_forwarder.rs`](apps/desktop/src-tauri/src/ipc/run_forwarder.rs)
+  (progress + log stream forwarders),
+  [`broadcast_forwarder.rs`](apps/desktop/src-tauri/src/ipc/broadcast_forwarder.rs)
+  (toast bus), [`commands.rs`](apps/desktop/src-tauri/src/ipc/commands.rs)
+  (report-completion task + dev demo-run producer), and
+  [`orchestrator.rs`](crates/dayseam-orchestrator/src/orchestrator.rs)
+  (post-run retention sweep). Three sites stay bare with
+  `// bare-spawn: intentional` markers and documented rationale: the
+  run reaper in [`state.rs`](apps/desktop/src-tauri/src/state.rs)
+  (itself the supervisor), the two trivial channel drains in
+  [`save.rs`](crates/dayseam-orchestrator/src/save.rs) (panic-free
+  loops), and the two `JoinHandle<GenerateOutcome>` sites in
+  [`generate.rs`](crates/dayseam-orchestrator/src/generate.rs) where
+  the helper's `Output = ()` constraint would erase the typed return.
+  (3) A portable `grep`/`awk` CI gate at
+  [`scripts/ci/no-bare-spawn.sh`](scripts/ci/no-bare-spawn.sh) that
+  fails the build if any new file adds a bare `tokio::spawn(` or
+  `tauri::async_runtime::spawn(` without either the canonical helper
+  call or the marker comment, plus a
+  [`test-no-bare-spawn.sh`](scripts/ci/test-no-bare-spawn.sh) harness
+  that fuzzes the gate against 13 acceptance/rejection fixtures
+  (same-line marker, preceding-line marker, doc-comment false
+  positive, `#[cfg(test)]`-module shape, etc.). Both run in the
+  existing `shell-scripts` job in
+  [`.github/workflows/ci.yml`](.github/workflows/ci.yml), so a
+  regression in either the helper's tests or the gate itself fails
+  CI at PR time. Net: any future spawn site is supervised by
+  default; any intentional exception is locally annotated and
+  reviewer-visible; any new bug that would have looked like F-10
+  fails the gate before it lands.
+
 ## [0.6.2]
 
 ### Fixed
