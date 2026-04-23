@@ -53,6 +53,32 @@ if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
   exit 1
 fi
 
+# DAY-120: preflight-validate `entitlements.plist` before the
+# 4-minute universal cargo build. `codesign` invokes macOS's
+# `AMFIUnserializeXML` parser on the entitlements file, and that
+# parser is stricter than either `plutil` or CoreFoundation: it
+# rejects XML comments (`<!-- … -->`) outright. v0.6.2 shipped with
+# a heavily-commented entitlements file that `plutil -lint` happily
+# approved but that broke the release job with
+# `AMFIUnserializeXML: syntax error near line 30`. This check mirrors
+# what `codesign` will enforce later so a regression fails fast (under
+# a second) rather than after the full Tauri build completes.
+ENTITLEMENTS_FILE="${REPO_ROOT}/apps/desktop/src-tauri/entitlements.plist"
+if [[ ! -f "$ENTITLEMENTS_FILE" ]]; then
+  echo "build-dmg.sh: entitlements file missing at ${ENTITLEMENTS_FILE}; tauri.conf.json references it and codesign will fail without it." >&2
+  exit 1
+fi
+if command -v plutil >/dev/null 2>&1; then
+  if ! plutil -lint "$ENTITLEMENTS_FILE" >/dev/null; then
+    echo "build-dmg.sh: entitlements.plist failed plutil -lint" >&2
+    exit 1
+  fi
+fi
+if grep -q '<!--' "$ENTITLEMENTS_FILE"; then
+  echo "build-dmg.sh: entitlements.plist contains XML comments; macOS's AMFI parser rejects them (see apps/desktop/src-tauri/entitlements.md for context)." >&2
+  exit 1
+fi
+
 echo "==> Installing rustup targets for universal-apple-darwin"
 rustup target add aarch64-apple-darwin x86_64-apple-darwin
 

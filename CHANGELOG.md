@@ -10,6 +10,26 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Fixed
 
+- **DAY-120: release-unblock for v0.6.2 — strip XML comments from
+  `entitlements.plist`.** The v0.6.2 release job built the universal
+  bundle cleanly but failed at `codesign` with
+  `AMFIUnserializeXML: syntax error near line 30` because macOS's
+  kernel-side entitlements parser (`AMFIUnserializeXML`) is stricter
+  than `plutil` or CoreFoundation and rejects XML comments. The
+  original `entitlements.plist` carried 50+ lines of in-file prose
+  that passed `plutil -lint` but tripped the AMFI parser at release
+  time, so v0.6.2 never shipped. DAY-120 strips every comment out of
+  [`entitlements.plist`](apps/desktop/src-tauri/entitlements.plist),
+  moves the prose into the sibling
+  [`entitlements.md`](apps/desktop/src-tauri/entitlements.md) (kept
+  next to the plist so a future editor sees it on the same `ls`),
+  and adds a preflight step in
+  [`scripts/release/build-dmg.sh`](scripts/release/build-dmg.sh) that
+  runs `plutil -lint` plus a `grep -q '<!--'` reject before the
+  4-minute universal cargo build, so a regressed plist fails in
+  under a second instead of after a 9-minute release job. All the
+  v0.6.2 behavioural fixes below landed in master when DAY-119 merged
+  — this release hotfix only re-enables the build pipeline.
 - **DAY-119: macOS folder-picker + keychain popup cascade reduced
   (partial root-cause fix).** v0.6.1 users reported 5–6 "allow
   access" TCC prompts when picking a local-git scan root under

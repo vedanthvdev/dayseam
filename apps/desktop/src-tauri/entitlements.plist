@@ -1,75 +1,9 @@
 <?xml version="1.0" encoding="UTF-8"?>
-<!--
-  DAY-119 — Entitlements for the ad-hoc-signed Dayseam release
-  bundle.
-
-  Why this file exists
-  ====================
-
-  v0.6.1 shipped completely unsigned. On macOS 13+ an unsigned app
-  that calls `NSOpenPanel` (the native folder picker behind Tauri's
-  `dialog.open`) gets a *scoped* grant that is not persisted across
-  launches. Worse, every child directory the bundle reads inside a
-  TCC-protected root (`~/Desktop`, `~/Documents`, `~/Downloads`,
-  `~/Public`) can trigger a *separate* consent prompt, which is the
-  "5 or 6 pop-ups" cascade users reported when picking a scan root
-  for the local-git connector. The connector's protected-name skip
-  list (see `crates/connectors/connector-local-git/src/discovery.rs`)
-  covers part of that, but without an entitlements grant the OS still
-  re-asks on every fresh launch.
-
-  Adding `com.apple.security.files.user-selected.read-write` tells
-  TCC that when the user picks a folder via the system picker, the
-  resulting grant should persist for the life of the bundle. For a
-  hardened-runtime + ad-hoc-signed binary this is the widest the
-  grant can be without a Developer ID identity — which we do not
-  have yet (see the "Phase 3.5 codesign" tracking issue referenced
-  in `.github/workflows/release.yml`).
-
-  Known limitation / follow-up
-  ----------------------------
-
-  Ad-hoc signing uses a cdhash-based Designated Requirement, so a
-  later release (v0.6.3+) will have a different cdhash from v0.6.2
-  and the Keychain may re-prompt once at upgrade time. A truly
-  stable DR tied to a bundle id + Team ID requires a Developer ID
-  signing identity and is tracked as follow-up work. For v0.6.2
-  this is a substantial improvement over v0.6.1 (which shipped
-  completely unsigned and therefore re-prompted on every single
-  launch, not just on upgrades).
-
-  Why no `app-sandbox`
-  ===================
-
-  Sandbox entitlements are intentionally *not* set. The Dayseam
-  desktop shell needs to walk user-selected code trees, launch the
-  system keyring (macOS Keychain), and open URLs via the `opener`
-  crate; all three of those paths break under the App Sandbox unless
-  we add temporary exception entitlements we do not want to maintain.
-  The shell is local-first and ships with a strict CSP
-  (`default-src 'self'`) plus a narrow IPC capability list, so the
-  marginal isolation the sandbox adds is not worth the loss of
-  legitimate filesystem access.
--->
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-    <!--
-        Persist grants the user gives through the native folder/file
-        picker (NSOpenPanel) so that we do not re-prompt on every
-        `dialog.open()` call and we do not re-prompt on every fresh
-        launch of the app once the user has approved a scan root.
-    -->
     <key>com.apple.security.files.user-selected.read-write</key>
     <true/>
-
-    <!--
-        The webview itself is a JIT-less runtime, but Tauri 2's
-        bundler links code that requires the standard hardened-runtime
-        allowances below. Keeping these explicit makes the security
-        posture self-documenting and matches the entitlements Tauri
-        ships in its own macOS examples.
-    -->
     <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
     <true/>
     <key>com.apple.security.cs.allow-jit</key>
