@@ -1,0 +1,6 @@
+error: `ArtifactPayload::CommitSet.event_count` is `#[serde(default)]` but carries no `#[serde_default_audit(...)]` annotation. Add either `#[serde_default_audit(repair = "NAME")]` (naming a registered `SerdeDefaultRepair` impl) or `#[serde_default_audit(no_repair = "reason")]` to document the deliberate waiver. Background: DOG-v0.2-04 / DAY-88 silent-failure sweep.
+  --> tests/trybuild/fail/artifact_payload_serde_default_without_audit.rs:27:9
+   |
+27 | /         #[serde(default)]
+28 | |         event_count: u32,
+   | |________________________^

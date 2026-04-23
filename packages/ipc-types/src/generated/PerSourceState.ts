@@ -9,6 +9,14 @@ import type { RunStatus } from "./RunStatus";
  * report level. Keeping them as two types means the orchestrator (pre-
  * render) and the report engine (post-render) can evolve
  * independently; the values themselves agree.
+ *
+ * DAY-109 TST-v0.4-01: carries `#[derive(SerdeDefaultAudit)]`. This
+ * struct rides inside `SyncRun::per_source_state` and round-trips
+ * through the same JSON column; an unaudited default added here
+ * (e.g. a `retried_count: u32` defaulting to zero on old rows) would
+ * silently break the orchestrator's "did this source actually run?"
+ * invariants. The derive lands on this nested type explicitly because
+ * the outer `SyncRun` derive does not recurse into struct fields.
  */
 export type PerSourceState = { source_id: string, status: RunStatus, started_at: string, finished_at: string | null, 
 /**

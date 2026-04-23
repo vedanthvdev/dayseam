@@ -10,6 +10,15 @@ import type { SyncRunTrigger } from "./SyncRunTrigger";
  * can recover from a crash: any row found with
  * `status == Running && finished_at IS NULL` is swept to [`SyncRunStatus::Failed`]
  * with a stable error code before the UI ever sees it.
+ *
+ * DAY-109 TST-v0.4-01: carries `#[derive(SerdeDefaultAudit)]` because
+ * `SyncRun` is the run-lifecycle row that survives across Dayseam
+ * upgrades — a back-compat default added to e.g. `superseded_by` (so
+ * pre-v0.5 rows deserialise without erroring) is the obvious DOG-v0.2-04
+ * shape, and the per-row crash-recovery semantics (any `Running` row
+ * without `finished_at` is swept to `Failed`) make a defaulted field
+ * extra-load-bearing — the sweep relies on the row's shape being what
+ * the writer wrote, not what an unaudited default reconstructs.
  */
 export type SyncRun = { id: RunId, started_at: string, 
 /**

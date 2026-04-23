@@ -11,6 +11,14 @@ import type { JsonValue } from "./serde_json/JsonValue";
  * A single piece of evidence from a source — one commit, one merge request
  * state change, one issue comment, etc. Everything the report engine sees
  * is an `ActivityEvent`.
+ *
+ * DAY-109 TST-v0.4-01: carries `#[derive(SerdeDefaultAudit)]` as a
+ * forward-looking guard. `ActivityEvent` rows round-trip through the
+ * `activity_events` table on every sync; a future author adding a
+ * `#[serde(default)]` field (e.g. a `dedup_token` with a back-compat
+ * default for rows written before the field existed) without a paired
+ * `#[serde_default_audit(...)]` annotation is exactly the DOG-v0.2-04
+ * silent-failure shape, and the derive is the class detector.
  */
 export type ActivityEvent = { 
 /**

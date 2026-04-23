@@ -1,0 +1,6 @@
+error: `PerSourceState.retried_count` is `#[serde(default)]` but carries no `#[serde_default_audit(...)]` annotation. Add either `#[serde_default_audit(repair = "NAME")]` (naming a registered `SerdeDefaultRepair` impl) or `#[serde_default_audit(no_repair = "reason")]` to document the deliberate waiver. Background: DOG-v0.2-04 / DAY-88 silent-failure sweep.
+  --> tests/trybuild/fail/per_source_state_serde_default_without_audit.rs:20:5
+   |
+20 | /     #[serde(default)]
+21 | |     retried_count: u32,
+   | |______________________^

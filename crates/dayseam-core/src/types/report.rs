@@ -115,7 +115,17 @@ pub enum RunStatus {
 
 /// One line in the in-app log drawer. Retained for troubleshooting;
 /// severity drives UI colour and whether the entry is shown by default.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+///
+/// DAY-109 TST-v0.4-01: carries `#[derive(SerdeDefaultAudit)]`. The
+/// log drawer persists across runs and the `level` filter dropdown
+/// depends on the field actually being present on every row — a
+/// `#[serde(default)]` on `level` (e.g. `default_level = "info"` for
+/// pre-existing rows) would silently re-bucket warnings as info and
+/// hide error-class events from the UI default view, exactly the
+/// silent-failure shape DOG-v0.2-04 named.
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, TS, dayseam_macros::SerdeDefaultAudit,
+)]
 #[ts(export)]
 pub struct LogEntry {
     pub timestamp: DateTime<Utc>,

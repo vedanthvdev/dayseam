@@ -24,7 +24,18 @@ use super::source::SourceId;
 /// can recover from a crash: any row found with
 /// `status == Running && finished_at IS NULL` is swept to [`SyncRunStatus::Failed`]
 /// with a stable error code before the UI ever sees it.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+///
+/// DAY-109 TST-v0.4-01: carries `#[derive(SerdeDefaultAudit)]` because
+/// `SyncRun` is the run-lifecycle row that survives across Dayseam
+/// upgrades — a back-compat default added to e.g. `superseded_by` (so
+/// pre-v0.5 rows deserialise without erroring) is the obvious DOG-v0.2-04
+/// shape, and the per-row crash-recovery semantics (any `Running` row
+/// without `finished_at` is swept to `Failed`) make a defaulted field
+/// extra-load-bearing — the sweep relies on the row's shape being what
+/// the writer wrote, not what an unaudited default reconstructs.
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, TS, dayseam_macros::SerdeDefaultAudit,
+)]
 #[ts(export)]
 pub struct SyncRun {
     pub id: RunId,
@@ -113,7 +124,17 @@ pub enum SyncRunCancelReason {
 /// report level. Keeping them as two types means the orchestrator (pre-
 /// render) and the report engine (post-render) can evolve
 /// independently; the values themselves agree.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+///
+/// DAY-109 TST-v0.4-01: carries `#[derive(SerdeDefaultAudit)]`. This
+/// struct rides inside `SyncRun::per_source_state` and round-trips
+/// through the same JSON column; an unaudited default added here
+/// (e.g. a `retried_count: u32` defaulting to zero on old rows) would
+/// silently break the orchestrator's "did this source actually run?"
+/// invariants. The derive lands on this nested type explicitly because
+/// the outer `SyncRun` derive does not recurse into struct fields.
+#[derive(
+    Debug, Clone, PartialEq, Serialize, Deserialize, TS, dayseam_macros::SerdeDefaultAudit,
+)]
 #[ts(export)]
 pub struct PerSourceState {
     pub source_id: SourceId,

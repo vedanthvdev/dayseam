@@ -176,7 +176,19 @@ pub enum MergeRequestProvider {
 /// carries the variant name and the database `kind` column agrees with
 /// the payload discriminator. Matches the `SourceConfig` precedent
 /// (`crates/dayseam-core/src/types/source.rs`) verbatim.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+///
+/// DAY-109 TST-v0.4-01: extends DAY-100's `SerdeDefaultAudit` coverage
+/// from the wrapper [`Artifact`] down into the variant-specific payload.
+/// This is where most schema growth actually lands — a future author
+/// adding a back-compat field like `event_count: u32` to one of the
+/// variants is exactly the DOG-v0.2-04 silent-failure shape — and an
+/// `Artifact`-level derive does not catch it because the payload is a
+/// nested enum. No field is currently `#[serde(default)]`; the derive
+/// is a no-op until one is added, at which point the build fails
+/// without a paired `#[serde_default_audit(...)]` annotation.
+#[derive(
+    Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS, dayseam_macros::SerdeDefaultAudit,
+)]
 #[ts(export)]
 pub enum ArtifactPayload {
     /// One repo, one local-timezone day. Carries the repo path so the

@@ -43,4 +43,24 @@ fn serde_default_audit_trybuild() {
     // Both empty-string shapes (`no_repair = ""` and `repair = ""`)
     // are audit-rejection cases and both must fail to compile.
     t.compile_fail("tests/trybuild/fail/empty_repair_name.rs");
+    // DAY-109 TST-v0.4-01 — extends DAY-100's class-detector to the
+    // five deeper persisted types in `dayseam-core` (`ArtifactPayload`,
+    // `ActivityEvent`, `SyncRun`, `PerSourceState`, `LogEntry`). Each
+    // production type carries the `SerdeDefaultAudit` derive as of
+    // DAY-109; the fixture pairs below pin that pinning — the fail
+    // case proves a future `#[serde(default)]` without a paired audit
+    // annotation breaks the build, the pass case proves the same
+    // shape with a documented `repair = "..."` or `no_repair = "..."`
+    // compiles. One pair per type; the per-type rationale lives in
+    // each fixture's module-doc.
+    t.compile_fail("tests/trybuild/fail/artifact_payload_serde_default_without_audit.rs");
+    t.pass("tests/trybuild/pass/artifact_payload_serde_default_with_audit.rs");
+    t.compile_fail("tests/trybuild/fail/activity_event_serde_default_without_audit.rs");
+    t.pass("tests/trybuild/pass/activity_event_serde_default_with_audit.rs");
+    t.compile_fail("tests/trybuild/fail/sync_run_serde_default_without_audit.rs");
+    t.pass("tests/trybuild/pass/sync_run_serde_default_with_audit.rs");
+    t.compile_fail("tests/trybuild/fail/per_source_state_serde_default_without_audit.rs");
+    t.pass("tests/trybuild/pass/per_source_state_serde_default_with_audit.rs");
+    t.compile_fail("tests/trybuild/fail/log_entry_serde_default_without_audit.rs");
+    t.pass("tests/trybuild/pass/log_entry_serde_default_with_audit.rs");
 }
