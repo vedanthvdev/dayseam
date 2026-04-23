@@ -105,12 +105,28 @@ NOTES_CONTENT="$(cat "$NOTES_FILE")"
 # arbitrary characters in the notes/sig safe — `jq` handles the
 # JSON escaping for us.
 #
-# The `platforms` key names a single bundle identity
-# (`darwin-universal`) that matches the `target` the frontend
-# reports. Adding Windows / Linux flavours later means appending
-# sibling keys here (e.g. `windows-x86_64`, `linux-x86_64`) with
-# their own signed archive URLs; the plugin resolves whichever
-# entry matches the running OS/arch.
+# Platform keys — why both `darwin-aarch64` and `darwin-x86_64`
+# instead of one `darwin-universal`:
+#
+# `tauri-plugin-updater` v2 resolves the platforms entry by
+# composing `{os}-{arch}` from the running binary. On Apple
+# Silicon it probes `darwin-aarch64-app` and then `darwin-aarch64`;
+# on Intel it probes `darwin-x86_64-app` and then `darwin-x86_64`.
+# The v1-era `darwin-universal` fallback was dropped in 2.x (see
+# tauri-plugin-updater 2.10.x — the error every v0.6.0 user saw,
+# "None of the fallback platforms [...] were found in the response
+# platforms object", is the plugin's literal message when it
+# looks for `darwin-aarch64-app` / `darwin-aarch64` and finds
+# only a `darwin-universal` key we wrote on its behalf).
+#
+# We publish one signed `.app.tar.gz` (the lipo-fused universal
+# binary) and list it under both arch keys. That is cheaper than
+# producing two thin tarballs and keeps the release-workflow
+# single-build path intact; the bytes on the wire are identical,
+# the only difference is which platform key the plugin looks up
+# before downloading them. Adding Windows / Linux flavours later
+# means appending sibling keys here (e.g. `windows-x86_64`,
+# `linux-x86_64`) with their own signed archive URLs.
 jq -n \
   --arg version "$VERSION" \
   --arg pub_date "$PUB_DATE" \
@@ -122,7 +138,11 @@ jq -n \
     notes: $notes,
     pub_date: $pub_date,
     platforms: {
-      "darwin-universal": {
+      "darwin-aarch64": {
+        signature: $signature,
+        url: $url
+      },
+      "darwin-x86_64": {
         signature: $signature,
         url: $url
       }

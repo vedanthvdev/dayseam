@@ -20,9 +20,18 @@
 #      an empty `version` string or an unescaped signature.
 #   2. Emits valid JSON with exactly the keys the Rust plugin
 #      parses: top-level `version` / `notes` / `pub_date` /
-#      `platforms`, and a `darwin-universal` child with
-#      `signature` / `url`. Missing either of the platform keys
-#      makes the plugin say "no update available" silently.
+#      `platforms`, and BOTH `darwin-aarch64` and `darwin-x86_64`
+#      children with matching `signature` / `url`. `tauri-plugin-
+#      updater` 2.x dropped the v1-era `darwin-universal` fallback;
+#      an installed client on Apple Silicon now probes
+#      `darwin-aarch64-app` then `darwin-aarch64` and errors out
+#      ("None of the fallback platforms ... were found in the
+#      response platforms object") if neither is present — even
+#      though the binary we ship is lipo-fused and would run on
+#      either arch. A regression that drops one of the two arch
+#      keys or reintroduces `darwin-universal` must fail here
+#      before it publishes a manifest that bricks installed
+#      clients' update check.
 #   3. Embeds the signature file contents verbatim, including
 #      the newline-separated trusted-comment + base64 payload
 #      the minisign format uses. A previous draft `tr -d '\n'`'d
@@ -119,12 +128,10 @@ test_happy_path_emits_expected_shape() {
   out="$("$SCRIPT" "0.6.0" "https://github.com/vedanthvdev/dayseam/releases/download/v0.6.0/Dayseam-v0.6.0.app.tar.gz" "$scratch/sig" "$scratch/notes")"
 
   # Parse with jq and assert every field matches.
-  local version notes pub_date sig_val url_val
+  local version notes pub_date
   version="$(jq -r '.version' <<<"$out")"
   notes="$(jq -r '.notes' <<<"$out")"
   pub_date="$(jq -r '.pub_date' <<<"$out")"
-  sig_val="$(jq -r '.platforms["darwin-universal"].signature' <<<"$out")"
-  url_val="$(jq -r '.platforms["darwin-universal"].url' <<<"$out")"
 
   if [[ "$version" != "0.6.0" ]]; then
     echo "  FAIL: version: expected 0.6.0 got '$version'" >&2
@@ -139,15 +146,47 @@ test_happy_path_emits_expected_shape() {
     echo "  FAIL: pub_date not RFC3339-UTC; got '$pub_date'" >&2
     return 1
   fi
-  # Signature must preserve the trusted-comment + base64 payload
-  # lines verbatim. A collapsed/normalised signature would make
-  # every verify() fail on the installed client.
-  if ! [[ "$sig_val" == *"untrusted comment"* && "$sig_val" == *"trusted comment"* ]]; then
-    echo "  FAIL: signature content was stripped; got '$sig_val'" >&2
-    return 1
-  fi
-  if [[ "$url_val" != "https://github.com/vedanthvdev/dayseam/releases/download/v0.6.0/Dayseam-v0.6.0.app.tar.gz" ]]; then
-    echo "  FAIL: url mismatch; got '$url_val'" >&2
+
+  # Both arch keys must be present — a manifest that publishes
+  # only one of them bricks update checks for every installed
+  # client on the other arch with exactly the error v0.6.0 users
+  # surfaced ("None of the fallback platforms [...] were found in
+  # the response platforms object"). Asserting each one explicitly
+  # (instead of a `keys | length == 2` check) is what pins the
+  # exact string the plugin composes from `{os}-{arch}` at runtime.
+  local expected_url="https://github.com/vedanthvdev/dayseam/releases/download/v0.6.0/Dayseam-v0.6.0.app.tar.gz"
+  local arch
+  for arch in darwin-aarch64 darwin-x86_64; do
+    local sig_val url_val
+    sig_val="$(jq -r --arg k "$arch" '.platforms[$k].signature' <<<"$out")"
+    url_val="$(jq -r --arg k "$arch" '.platforms[$k].url' <<<"$out")"
+    if [[ "$sig_val" == "null" || -z "$sig_val" ]]; then
+      echo "  FAIL: platforms.${arch}.signature missing; manifest would break updates for that arch" >&2
+      return 1
+    fi
+    # Signature must preserve the trusted-comment + base64 payload
+    # lines verbatim. A collapsed/normalised signature would make
+    # every verify() fail on the installed client.
+    if ! [[ "$sig_val" == *"untrusted comment"* && "$sig_val" == *"trusted comment"* ]]; then
+      echo "  FAIL: platforms.${arch}.signature content was stripped; got '$sig_val'" >&2
+      return 1
+    fi
+    if [[ "$url_val" != "$expected_url" ]]; then
+      echo "  FAIL: platforms.${arch}.url mismatch; got '$url_val'" >&2
+      return 1
+    fi
+  done
+
+  # Guard against a future "let me just add darwin-universal back
+  # as a belt-and-braces fallback" change. The plugin silently
+  # ignores it, so keeping it around is dead weight that pretends
+  # to be coverage. If the real fix is ever "add a third arch"
+  # (e.g. Windows), that key is named by the arch the plugin
+  # composes at runtime, not `universal`.
+  local universal
+  universal="$(jq -r '.platforms["darwin-universal"] // empty' <<<"$out")"
+  if [[ -n "$universal" ]]; then
+    echo "  FAIL: manifest still publishes the dropped-by-2.x 'darwin-universal' key; drop it — the plugin does not resolve it" >&2
     return 1
   fi
   return 0
