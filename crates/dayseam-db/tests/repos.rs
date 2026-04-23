@@ -762,6 +762,7 @@ async fn drafts_insert_list_recent_and_prune() {
             bullets: vec![RenderedBullet {
                 id: "b1".into(),
                 text: "Shipped the DB layer".into(),
+                source_kind: Some(dayseam_core::SourceKind::GitLab),
             }],
         }],
         evidence: vec![Evidence {

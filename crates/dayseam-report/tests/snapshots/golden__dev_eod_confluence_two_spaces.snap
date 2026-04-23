@@ -1,20 +1,21 @@
 ---
 source: crates/dayseam-report/tests/golden.rs
-assertion_line: 590
 expression: draft
 ---
 id: aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa
 date: 2026-04-18
 template_id: dayseam.dev_eod
-template_version: 2026-04-22
+template_version: 2026-04-24
 sections:
   - id: confluence_pages
     title: Confluence pages
     bullets:
       - id: b_ee63920f7ff2912b
         text: "**Engineering** (ENG) — Edited: Release runbook"
+        source_kind: Confluence
       - id: b_fd8862cec14f7c43
         text: "**Operations** (OPS) — Edited: On-call rotation"
+        source_kind: Confluence
 evidence:
   - bullet_id: b_ee63920f7ff2912b
     event_ids:

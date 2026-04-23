@@ -324,6 +324,9 @@ pub fn fixture_input() -> ReportInput {
         events: Vec::new(),
         artifacts: Vec::new(),
         per_source_state: HashMap::new(),
+        // Empty by default; tests that want per-source subheadings
+        // use [`fixture_input_with_source_kinds`] below.
+        source_kinds: HashMap::new(),
         verbose_mode: false,
         generated_at: generated_at(),
     }

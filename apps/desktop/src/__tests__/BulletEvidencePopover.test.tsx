@@ -37,7 +37,7 @@ describe("BulletEvidencePopover", () => {
     registerInvokeHandler("activity_events_get", async () => [EVENT]);
     render(
       <BulletEvidencePopover
-        bullet={{ id: "b1", text: "Shipped feature X" }}
+        bullet={{ id: "b1", text: "Shipped feature X", source_kind: "GitLab" }}
         eventIds={["ev-1"]}
         reason="1 commit"
         onClose={() => {}}
@@ -57,7 +57,7 @@ describe("BulletEvidencePopover", () => {
     registerInvokeHandler("shell_open", async () => null);
     render(
       <BulletEvidencePopover
-        bullet={{ id: "b1", text: "Shipped feature X" }}
+        bullet={{ id: "b1", text: "Shipped feature X", source_kind: "GitLab" }}
         eventIds={["ev-1"]}
         reason="1 commit"
         onClose={() => {}}
@@ -80,7 +80,7 @@ describe("BulletEvidencePopover", () => {
     const onClose = vi.fn();
     render(
       <BulletEvidencePopover
-        bullet={{ id: "b1", text: "Shipped feature X" }}
+        bullet={{ id: "b1", text: "Shipped feature X", source_kind: "GitLab" }}
         eventIds={["ev-gone"]}
         reason="n/a"
         onClose={onClose}
@@ -100,7 +100,7 @@ describe("BulletEvidencePopover", () => {
     registerInvokeHandler("activity_events_get", async () => []);
     render(
       <BulletEvidencePopover
-        bullet={{ id: "b1", text: "Shipped feature X" }}
+        bullet={{ id: "b1", text: "Shipped feature X", source_kind: "GitLab" }}
         eventIds={["ev-gone"]}
         reason="1 commit"
         onClose={() => {}}

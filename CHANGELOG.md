@@ -6,6 +6,39 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Added
+
+- **DAY-104: per-source subheadings in the rendered report
+  (DOGFOOD-v0.4-01 / bug 4 follow-up).** Every rendered bullet now
+  carries a [`source_kind`](crates/dayseam-core/src/types/report.rs)
+  — the forge or product it was derived from — and both the
+  markdown sink and the in-app `StreamingPreview` group bullets
+  inside each section by kind, emitting a `### <emoji> <Label>`
+  subheading per group (e.g. `### 💻 Local git`, `### 🐙 GitHub`,
+  `### 🦊 GitLab`, `### 📋 Jira`, `### 📄 Confluence`). Groups
+  render in a deterministic order — `LocalGit → GitHub → GitLab
+  → Jira → Confluence`, pinned by
+  [`SourceKind::render_order`](crates/dayseam-core/src/types/source.rs)
+  — so a day with mixed-forge activity produces byte-stable
+  output regardless of the order the orchestrator finished each
+  connector. The grouping policy is "always group" even for
+  single-kind sections, so a Jira-only section still reads
+  `## Jira issues` → `### 📋 Jira` → bullets; this mirrors what
+  users asked for during the DAY-103 bug-4 triage ("hybrid
+  display: icon/emoji clubber with `### Kind`"). In the preview,
+  each group is a `<section data-kind="<SourceKind>">` block so
+  RTL and E2E tests can scope per-group queries — the
+  `data-kind` anchor is the preview's analogue of the existing
+  `data-section` per-section anchor. Upgrade path:
+  `RenderedBullet.source_kind` is `Option<SourceKind>` with
+  `#[serde(default)]`, so pre-v0.5 drafts persisted in SQLite
+  deserialise cleanly and legacy bullets simply render below any
+  attributed groups without a `### <Kind>` subheading — visible
+  degradation, non-destructive. The dev-eod template version
+  bumps to `2026-04-24` because the rendered bytes for the same
+  input change (a new `### …` line per group), so any cached
+  golden from a pre-0.5 render would fail a byte-diff check.
+
 ## [0.4.2] - 2026-04-22
 
 ### Fixed

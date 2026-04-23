@@ -29,7 +29,13 @@ pub const DEV_EOD_TEMPLATE_ID: &str = "dayseam.dev_eod";
 ///   deduplication of `CommitSet` groups that share a repo/date.
 /// * `2026-04-22` — Phase 3 Task 2: cross-source `CommitAuthored`
 ///   dedup + `rolled_into_mr` annotation visible in verbose mode.
-pub const DEV_EOD_TEMPLATE_VERSION: &str = "2026-04-22";
+/// * `2026-04-24` — DAY-104: every bullet carries `source_kind` and
+///   the sink / preview emit `### <emoji> <Label>` per-kind
+///   subheadings under each section. Bumps because the rendered
+///   bytes for the same input change (a new `### …` line per
+///   group), so any cached golden from a pre-0.5 render would
+///   fail a byte-diff check.
+pub const DEV_EOD_TEMPLATE_VERSION: &str = "2026-04-24";
 
 /// Build a fresh [`Handlebars`] registry with every bundled template
 /// + partial registered.

@@ -413,6 +413,19 @@ async fn run_background(
         .flat_map(|s| s.source_identities.clone())
         .collect();
 
+    // DAY-104: materialise the `SourceId → SourceKind` map the
+    // render engine uses to stamp each bullet with its forge. The
+    // handles already carry both — we're just shaping them into
+    // the lookup the engine expects so it doesn't have to walk
+    // `request.sources` linearly per bullet. Collision is
+    // impossible: `SourceHandle.source_id` is a `Uuid` primary
+    // key, unique by construction.
+    let source_kinds: std::collections::HashMap<_, _> = request
+        .sources
+        .iter()
+        .map(|s| (s.source_id, s.kind))
+        .collect();
+
     let draft_id = Uuid::new_v4();
     let generated_at = Utc::now();
     let input = ReportInput {
@@ -425,6 +438,7 @@ async fn run_background(
         events,
         artifacts,
         per_source_state,
+        source_kinds,
         verbose_mode: request.verbose_mode,
         generated_at,
     };

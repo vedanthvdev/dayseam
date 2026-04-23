@@ -15,9 +15,76 @@ import type {
   ReportDraft,
   RenderedBullet,
   RenderedSection,
+  SourceKind,
 } from "@dayseam/ipc-types";
 import type { ReportStatus } from "../../ipc";
 import { BulletEvidencePopover } from "./BulletEvidencePopover";
+
+// DAY-104. Keep this ordering (and the emoji / label pair) in
+// lockstep with `dayseam_core::SourceKind::render_order` +
+// `display_emoji` / `display_label` — the Rust markdown sink and
+// this preview MUST emit identical per-kind groupings so users
+// see the same `### 🐙 GitHub` etc. in both surfaces. Changes
+// here without a Rust-side mirror are a rendering divergence and
+// will break the shared-ordering assertion in
+// `sink-markdown-file` tests.
+const SOURCE_KIND_ORDER: SourceKind[] = [
+  "LocalGit",
+  "GitHub",
+  "GitLab",
+  "Jira",
+  "Confluence",
+];
+
+const SOURCE_KIND_LABEL: Record<SourceKind, string> = {
+  LocalGit: "Local git",
+  GitHub: "GitHub",
+  GitLab: "GitLab",
+  Jira: "Jira",
+  Confluence: "Confluence",
+};
+
+const SOURCE_KIND_EMOJI: Record<SourceKind, string> = {
+  LocalGit: "💻",
+  GitHub: "🐙",
+  GitLab: "🦊",
+  Jira: "📋",
+  Confluence: "📄",
+};
+
+/** Group a section's bullets by `source_kind`, preserving the
+ *  bullet order inside each group and ordering the groups by
+ *  `SOURCE_KIND_ORDER`. Bullets with `source_kind == null`
+ *  (legacy drafts from <v0.5, see `RenderedBullet` doc) land in
+ *  a trailing `null` group so they still render but without a
+ *  subheading. */
+function groupBulletsByKind(
+  bullets: RenderedBullet[],
+): { kind: SourceKind | null; bullets: RenderedBullet[] }[] {
+  const groups = new Map<SourceKind | "__none__", RenderedBullet[]>();
+  for (const bullet of bullets) {
+    const key: SourceKind | "__none__" = bullet.source_kind ?? "__none__";
+    const list = groups.get(key);
+    if (list) {
+      list.push(bullet);
+    } else {
+      groups.set(key, [bullet]);
+    }
+  }
+
+  const ordered: { kind: SourceKind | null; bullets: RenderedBullet[] }[] = [];
+  for (const kind of SOURCE_KIND_ORDER) {
+    const list = groups.get(kind);
+    if (list && list.length > 0) {
+      ordered.push({ kind, bullets: list });
+    }
+  }
+  const noneList = groups.get("__none__");
+  if (noneList && noneList.length > 0) {
+    ordered.push({ kind: null, bullets: noneList });
+  }
+  return ordered;
+}
 
 export interface StreamingPreviewProps {
   status: ReportStatus;
@@ -258,6 +325,18 @@ function SectionView({
   // DOG-v0.2-04 caught. Values live on the section's outer
   // element so a Playwright locator can scope a `data-bullet`
   // count query to exactly one section without walking the tree.
+  //
+  // DAY-104. Inside each section, bullets are grouped by
+  // `source_kind` so the preview matches the markdown sink
+  // byte-for-byte in structure (`### <emoji> <Label>` per group).
+  // `data-kind="<kind>"` (or `"none"` for legacy un-attributed
+  // bullets) gives the RTL + E2E tests a stable anchor to scope
+  // per-group queries, mirroring how `data-section` scopes
+  // per-section ones.
+  const groups = useMemo(() => groupBulletsByKind(section.bullets), [
+    section.bullets,
+  ]);
+
   return (
     <section
       className="flex flex-col gap-1"
@@ -272,18 +351,35 @@ function SectionView({
           Nothing here.
         </p>
       ) : (
-        <ul className="flex flex-col gap-1">
-          {section.bullets.map((bullet) => (
-            <BulletRow
-              key={bullet.id}
-              bullet={bullet}
-              draft={draft}
-              isOpen={activeBulletId === bullet.id}
-              onOpen={() => onOpenBullet(bullet.id)}
-              onClose={onCloseBullet}
-            />
+        <div className="flex flex-col gap-2">
+          {groups.map(({ kind, bullets }) => (
+            <div
+              key={kind ?? "__none__"}
+              className="flex flex-col gap-1"
+              data-kind={kind ?? "none"}
+              data-kind-bullet-count={bullets.length}
+            >
+              {kind !== null ? (
+                <h4 className="flex items-center gap-1.5 text-xs font-medium text-neutral-500 dark:text-neutral-400">
+                  <span aria-hidden="true">{SOURCE_KIND_EMOJI[kind]}</span>
+                  <span>{SOURCE_KIND_LABEL[kind]}</span>
+                </h4>
+              ) : null}
+              <ul className="flex flex-col gap-1">
+                {bullets.map((bullet) => (
+                  <BulletRow
+                    key={bullet.id}
+                    bullet={bullet}
+                    draft={draft}
+                    isOpen={activeBulletId === bullet.id}
+                    onOpen={() => onOpenBullet(bullet.id)}
+                    onClose={onCloseBullet}
+                  />
+                ))}
+              </ul>
+            </div>
           ))}
-        </ul>
+        </div>
       )}
     </section>
   );

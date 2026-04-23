@@ -164,6 +164,72 @@ impl SourceConfig {
     }
 }
 
+impl SourceKind {
+    /// Stable, human-facing label for a [`SourceKind`]. Used in the
+    /// report's per-source subheadings (DAY-104) and anywhere else
+    /// we render the kind as prose.
+    ///
+    /// The serde wire form is still the PascalCase variant name
+    /// (`"GitLab"`, `"LocalGit"`, …); this helper is **display-only**
+    /// and intentionally diverges from serde for the `LocalGit` case
+    /// — the wire form is a programming identifier, the display form
+    /// is English.
+    #[must_use]
+    pub const fn display_label(&self) -> &'static str {
+        match self {
+            SourceKind::GitLab => "GitLab",
+            SourceKind::LocalGit => "Local git",
+            SourceKind::Jira => "Jira",
+            SourceKind::Confluence => "Confluence",
+            SourceKind::GitHub => "GitHub",
+        }
+    }
+
+    /// Single-glyph emoji used in the report's per-source subheadings
+    /// (DAY-104 — the "hybrid display" the v0.4 dogfood asked for).
+    /// Chosen to be unambiguous on modern macOS / Linux / Windows
+    /// markdown viewers and intentionally avoiding product logos so
+    /// we don't ship a trademark surface.
+    #[must_use]
+    pub const fn display_emoji(&self) -> &'static str {
+        match self {
+            SourceKind::GitLab => "🦊",
+            SourceKind::LocalGit => "💻",
+            SourceKind::Jira => "📋",
+            SourceKind::Confluence => "📄",
+            SourceKind::GitHub => "🐙",
+        }
+    }
+
+    /// Pre-joined "`<emoji> <label>`" form, used verbatim as the
+    /// `### ...` subheading text in both the markdown sink and the
+    /// in-app `StreamingPreview`. Kept as a single helper so the
+    /// emoji / label contract lives in one place — changing the
+    /// separator or dropping an emoji is a one-line diff.
+    #[must_use]
+    pub fn display_with_emoji(&self) -> String {
+        format!("{} {}", self.display_emoji(), self.display_label())
+    }
+
+    /// Iteration order for rendering per-kind subgroups inside a
+    /// report section (DAY-104). Matches the enum's declaration
+    /// order so the markdown output is deterministic and a future
+    /// variant addition is a single edit site. A `Vec` (not a
+    /// slice) because callers frequently want to `retain` or `map`
+    /// over it; the five-element `Vec` allocation is negligible
+    /// next to a report render.
+    #[must_use]
+    pub fn render_order() -> Vec<SourceKind> {
+        vec![
+            SourceKind::LocalGit,
+            SourceKind::GitHub,
+            SourceKind::GitLab,
+            SourceKind::Jira,
+            SourceKind::Confluence,
+        ]
+    }
+}
+
 /// Partial update payload for the `sources_update` IPC command. Both
 /// fields are optional so the frontend can update just the label,
 /// just the config, or both in one round-trip. The command enforces

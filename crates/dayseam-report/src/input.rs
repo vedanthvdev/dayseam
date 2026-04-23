@@ -10,7 +10,9 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, NaiveDate, Utc};
-use dayseam_core::{ActivityEvent, Artifact, Person, SourceId, SourceIdentity, SourceRunState};
+use dayseam_core::{
+    ActivityEvent, Artifact, Person, SourceId, SourceIdentity, SourceKind, SourceRunState,
+};
 use uuid::Uuid;
 
 /// Everything [`crate::render`] needs to produce a [`crate::ReportDraft`].
@@ -55,6 +57,23 @@ pub struct ReportInput {
     /// rendered draft so "I ran the report but source X failed" is
     /// never silent.
     pub per_source_state: HashMap<SourceId, SourceRunState>,
+    /// Map from [`SourceId`] to its [`SourceKind`] for every source
+    /// participating in this render. The orchestrator already holds
+    /// this information on each `SourceHandle`; `ReportInput`
+    /// materialises it as a map so the engine can stamp
+    /// `RenderedBullet::source_kind` without re-loading `Source`
+    /// rows from the database.
+    ///
+    /// Added in DAY-104 to power the `### <emoji> <Label>`
+    /// per-source subheadings. A missing entry is tolerated —
+    /// `render` falls back to `None` on the bullet, the sink and
+    /// preview render that bullet without a subheading, and the
+    /// engine logs a debug trace with the orphan `source_id`. This
+    /// mirrors the deliberately defensive stance on pre-DAY-104
+    /// drafts read from SQLite (`RenderedBullet::source_kind` is
+    /// `Option<SourceKind>` specifically so the UI degrades rather
+    /// than panics on orphan data).
+    pub source_kinds: HashMap<SourceId, SourceKind>,
     /// Verbose mode toggle. Additive-only: turning it on never
     /// changes an existing bullet's id or evidence (see invariant #2
     /// in the Phase 2 plan).

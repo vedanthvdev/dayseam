@@ -18,9 +18,12 @@
 //! Tests lean on this heavily — see `tests/golden.rs` +
 //! `tests/invariants.rs`.
 
+use std::collections::HashMap;
+
 use dayseam_core::{
     ActivityEvent, ArtifactId, ArtifactPayload, Evidence, MergeRequestProvider, Privacy,
-    RenderedBullet, RenderedSection, ReportDraft, SourceIdentity, SourceIdentityKind,
+    RenderedBullet, RenderedSection, ReportDraft, SourceId, SourceIdentity, SourceIdentityKind,
+    SourceKind,
 };
 use serde::Serialize;
 use sha2::{Digest, Sha256};
@@ -49,7 +52,13 @@ pub(crate) fn render(input: ReportInput) -> Result<ReportDraft, ReportError> {
     let (sections, evidence) = if groups.is_empty() {
         (vec![empty_section(input.date)], Vec::new())
     } else {
-        build_sections(&groups, &registry, &input.template_id, input.verbose_mode)?
+        build_sections(
+            &groups,
+            &registry,
+            &input.template_id,
+            input.verbose_mode,
+            &input.source_kinds,
+        )?
     };
 
     Ok(ReportDraft {
@@ -149,6 +158,7 @@ fn build_sections(
     registry: &handlebars::Handlebars<'_>,
     template_id: &str,
     verbose_mode: bool,
+    source_kinds: &HashMap<SourceId, SourceKind>,
 ) -> Result<(Vec<RenderedSection>, Vec<Evidence>), ReportError> {
     // DAY-98 / PERF-v0.3-01. Replaced a `BTreeMap<ReportSection,
     // Vec<RenderedBullet>>` with a fixed-size array indexed by
@@ -173,7 +183,15 @@ fn build_sections(
         // stable id — evidence popovers and the streaming preview
         // need that to stay in sync.
         let section = ReportSection::from_group(group);
-        let rendered = render_group(group, registry, template_id, section.id(), verbose_mode)?;
+        let source_kind = resolve_source_kind(source_kinds, group.artifact.source_id);
+        let rendered = render_group(
+            group,
+            registry,
+            template_id,
+            section.id(),
+            verbose_mode,
+            source_kind,
+        )?;
         let bucket = &mut buckets[section.index()];
         for (bullet, ev) in rendered {
             evidence.push(ev);
@@ -202,6 +220,28 @@ fn build_sections(
     Ok((sections, evidence))
 }
 
+/// Look up a source's kind, logging a debug trace when the
+/// orchestrator didn't supply one.
+///
+/// A missing entry is **not** a hard error: the bullet still
+/// renders, just without a per-source subheading. The one scenario
+/// where this fires in practice is a re-render of a pre-DAY-104
+/// draft whose `source_kinds` map the orchestrator built is
+/// incomplete (every current codepath populates it fully — see
+/// `GenerateOutcome` assembly in `dayseam-orchestrator`).
+///
+/// The engine is intentionally pure (no IO, no tracing, no
+/// clocks), so a missing entry degrades silently to
+/// `source_kind = None` and the sink / preview skip the subheading
+/// for that bullet. Callers that want to observe this degradation
+/// should do so upstream, where the map is assembled.
+fn resolve_source_kind(
+    source_kinds: &HashMap<SourceId, SourceKind>,
+    source_id: SourceId,
+) -> Option<SourceKind> {
+    source_kinds.get(&source_id).copied()
+}
+
 /// The fully-empty-day fallback.
 ///
 /// Rendered when the rollup produced zero groups *and* zero events
@@ -216,9 +256,15 @@ fn empty_section(date: chrono::NaiveDate) -> RenderedSection {
     RenderedSection {
         id: ReportSection::Commits.id().to_string(),
         title: ReportSection::Commits.title().to_string(),
+        // `source_kind: None` — the empty-state bullet has no
+        // underlying source; the sink and preview explicitly skip
+        // the `### <Kind>` subheading for unattributed bullets, so
+        // an all-quiet day still renders as `## Commits\n\n*No
+        // tracked activity…*` with no spurious subheading.
         bullets: vec![RenderedBullet {
             id: empty_state_bullet_id(date),
             text: format!("*No tracked activity for {}.*", format_date_long(date)),
+            source_kind: None,
         }],
     }
 }
@@ -242,6 +288,7 @@ fn render_group(
     template_id: &str,
     section_id: &str,
     verbose_mode: bool,
+    source_kind: Option<SourceKind>,
 ) -> Result<Vec<(RenderedBullet, Evidence)>, ReportError> {
     match &group.artifact.payload {
         ArtifactPayload::CommitSet { repo_path, .. } => {
@@ -255,6 +302,7 @@ fn render_group(
                     template_id,
                     section_id,
                     verbose_mode,
+                    source_kind,
                 )?);
             }
             Ok(out)
@@ -280,6 +328,7 @@ fn render_group(
                     template_id,
                     section_id,
                     verbose_mode,
+                    source_kind,
                 )?);
             }
             Ok(out)
@@ -306,6 +355,7 @@ fn render_group(
                 title,
                 template_id,
                 section_id,
+                source_kind,
             );
             Ok(vec![bullet])
         }
@@ -333,6 +383,7 @@ fn render_mr_bullet(
     title: &str,
     template_id: &str,
     section_id: &str,
+    source_kind: Option<SourceKind>,
 ) -> (RenderedBullet, Evidence) {
     let event_ids: Vec<Uuid> = events.iter().map(|e| e.id).collect();
     let id = bullet_id(template_id, section_id, *artifact_id, &event_ids);
@@ -349,6 +400,7 @@ fn render_mr_bullet(
     let bullet = RenderedBullet {
         id: id.clone(),
         text,
+        source_kind,
     };
     let evidence = Evidence {
         bullet_id: id,
@@ -388,6 +440,7 @@ fn merge_request_reason(count: usize, provider: MergeRequestProvider) -> String 
 /// DAY-97 is the first release that actually renders this; the
 /// DAY-78 annotate pass set `parent_external_id` but the render
 /// side never consumed it.
+#[allow(clippy::too_many_arguments)]
 fn render_atlassian_bullet(
     artifact_id: ArtifactId,
     group_kind: GroupKind,
@@ -395,6 +448,7 @@ fn render_atlassian_bullet(
     template_id: &str,
     section_id: &str,
     verbose_mode: bool,
+    source_kind: Option<SourceKind>,
 ) -> Result<(RenderedBullet, Evidence), ReportError> {
     let event_ids = vec![event.id];
     let id = bullet_id(template_id, section_id, artifact_id, &event_ids);
@@ -440,6 +494,7 @@ fn render_atlassian_bullet(
     let bullet = RenderedBullet {
         id: id.clone(),
         text,
+        source_kind,
     };
     let evidence = Evidence {
         bullet_id: id,
@@ -458,6 +513,7 @@ fn render_commit_bullet(
     template_id: &str,
     section_id: &str,
     verbose_mode: bool,
+    source_kind: Option<SourceKind>,
 ) -> Result<(RenderedBullet, Evidence), ReportError> {
     let event_ids = vec![event.id];
     let id = bullet_id(template_id, section_id, artifact_id, &event_ids);
@@ -498,6 +554,7 @@ fn render_commit_bullet(
     let bullet = RenderedBullet {
         id: id.clone(),
         text,
+        source_kind,
     };
     let evidence = Evidence {
         bullet_id: id,

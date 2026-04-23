@@ -48,8 +48,8 @@ const DRAFT: ReportDraft = {
       id: "completed",
       title: "Completed",
       bullets: [
-        { id: "b1", text: "Shipped feature X" },
-        { id: "b2", text: "Reviewed 3 MRs" },
+        { id: "b1", text: "Shipped feature X", source_kind: "GitLab" },
+        { id: "b2", text: "Reviewed 3 MRs", source_kind: "GitLab" },
       ],
     },
   ],
@@ -167,6 +167,97 @@ describe("StreamingPreview", () => {
     expect(label.getAttribute("title") ?? "").toContain(
       "schema revision 1.0.0",
     );
+  });
+
+  it("groups bullets by source_kind under per-kind subheadings in render_order", () => {
+    // DAY-104. Each section groups its bullets by `source_kind`
+    // and emits a `<h4>` subheading per group so the preview
+    // matches the markdown sink's `### <emoji> <Label>`
+    // structure. `data-kind` is the stable anchor the E2E and
+    // RTL tests use to scope per-group queries — it mirrors the
+    // per-section `data-section` attribute. The group order
+    // follows `dayseam_core::SourceKind::render_order`:
+    // LocalGit → GitHub → GitLab → Jira → Confluence.
+    const draft: ReportDraft = {
+      ...DRAFT,
+      sections: [
+        {
+          id: "commits",
+          title: "Commits",
+          bullets: [
+            { id: "b_gl", text: "gitlab commit", source_kind: "GitLab" },
+            { id: "b_lg", text: "local commit", source_kind: "LocalGit" },
+            { id: "b_gh", text: "github commit", source_kind: "GitHub" },
+          ],
+        },
+      ],
+      evidence: [],
+    };
+    const { container } = render(
+      <StreamingPreview
+        status="completed"
+        progress={[]}
+        draft={draft}
+        error={null}
+      />,
+    );
+    const groups = Array.from(
+      container.querySelectorAll<HTMLElement>(
+        "[data-section='commits'] [data-kind]",
+      ),
+    );
+    expect(groups.map((g) => g.dataset.kind)).toEqual([
+      "LocalGit",
+      "GitHub",
+      "GitLab",
+    ]);
+    expect(groups[0]).toHaveTextContent(/local git/i);
+    expect(groups[1]).toHaveTextContent(/github/i);
+    expect(groups[2]).toHaveTextContent(/gitlab/i);
+
+    expect(groups[0]?.dataset.kindBulletCount).toBe("1");
+
+    const localGitGroup = groups[0]!;
+    expect(
+      localGitGroup.querySelector("[data-testid='bullet-b_lg']"),
+    ).not.toBeNull();
+  });
+
+  it("renders legacy bullets without source_kind in a trailing no-subheading group", () => {
+    // DAY-104 back-compat branch. A pre-v0.5 draft persisted in
+    // SQLite has bullets whose `source_kind` deserialises to
+    // `null`. They must still render (non-destructive
+    // degradation), under a `data-kind="none"` group without a
+    // `<h4>` subheading, placed after any attributed groups.
+    const draft: ReportDraft = {
+      ...DRAFT,
+      sections: [
+        {
+          id: "commits",
+          title: "Commits",
+          bullets: [
+            { id: "b_new", text: "new-render bullet", source_kind: "LocalGit" },
+            { id: "b_old", text: "legacy bullet", source_kind: null },
+          ],
+        },
+      ],
+      evidence: [],
+    };
+    const { container } = render(
+      <StreamingPreview
+        status="completed"
+        progress={[]}
+        draft={draft}
+        error={null}
+      />,
+    );
+    const groups = Array.from(
+      container.querySelectorAll<HTMLElement>(
+        "[data-section='commits'] [data-kind]",
+      ),
+    );
+    expect(groups.map((g) => g.dataset.kind)).toEqual(["LocalGit", "none"]);
+    expect(groups[1]?.querySelector("h4")).toBeNull();
   });
 
   it("opens the evidence popover for a bullet with evidence and invokes activity_events_get", async () => {

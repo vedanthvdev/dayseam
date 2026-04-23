@@ -256,6 +256,7 @@ fn report_draft_round_trips() {
             bullets: vec![RenderedBullet {
                 id: "b1".into(),
                 text: "Merged !1234".into(),
+                source_kind: Some(dayseam_core::SourceKind::GitLab),
             }],
         }],
         evidence: vec![Evidence {

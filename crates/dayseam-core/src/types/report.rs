@@ -12,7 +12,7 @@ use uuid::Uuid;
 
 use crate::error::DayseamError;
 
-use super::source::SourceId;
+use super::source::{SourceId, SourceKind};
 
 /// One rendered report for a specific date.
 ///
@@ -53,11 +53,28 @@ pub struct RenderedSection {
 
 /// A single rendered bullet, carrying a stable id so evidence links never
 /// break when the user re-orders or edits prose.
+///
+/// `source_kind` (DAY-104) is the forge / product the bullet was derived
+/// from. It drives the `### <emoji> <Label>` per-source subheadings in
+/// both the markdown sink and the in-app `StreamingPreview`.
+///
+/// The field is `Option<SourceKind>` with `#[serde(default)]` specifically
+/// so pre-DAY-104 draft rows (persisted to SQLite by older builds)
+/// deserialise cleanly instead of hard-failing `list_recent` on
+/// upgrade. New bullets always carry `Some(..)` — every production
+/// codepath in `dayseam_report::render` populates it — so grouping
+/// works identically for any report generated on v0.5+. Legacy
+/// bullets with `None` fall through to a no-attribution group in
+/// both the markdown sink and `StreamingPreview`; the degradation
+/// is visible (no `### <Kind>` heading) but non-destructive, which
+/// matches the "silent-failure is a sin" stance from DOG-v0.2-04.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub struct RenderedBullet {
     pub id: String,
     pub text: String,
+    #[serde(default)]
+    pub source_kind: Option<SourceKind>,
 }
 
 /// Traceability edge from a rendered bullet back to the `ActivityEvent`s

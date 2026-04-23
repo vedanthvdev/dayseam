@@ -54,6 +54,12 @@ fn draft_for(date: NaiveDate, bullets: &[&str]) -> ReportDraft {
                 .map(|(i, t)| RenderedBullet {
                     id: format!("b{i}"),
                     text: (*t).to_string(),
+                    // Uniform kind across this test's synthetic
+                    // bullets — the sink's grouping behaviour is
+                    // already covered by its own unit tests; the
+                    // roundtrip's concern is marker-block stability,
+                    // and a single kind keeps the assertions focused.
+                    source_kind: Some(dayseam_core::SourceKind::LocalGit),
                 })
                 .collect(),
         }],

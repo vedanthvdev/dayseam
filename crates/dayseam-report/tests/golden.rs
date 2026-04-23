@@ -18,7 +18,7 @@ mod common;
 
 use chrono::TimeZone;
 use common::*;
-use dayseam_core::Privacy;
+use dayseam_core::{Privacy, SourceKind};
 
 /// One repo, three commits, one author (the self). Happy path.
 #[test]
@@ -59,6 +59,7 @@ fn dev_eod_single_repo_happy_path() {
     input.events = vec![e1, e2, e3];
     input.artifacts = vec![artifact];
     input.per_source_state.insert(src, succeeded_state(3));
+    input.source_kinds.insert(src, SourceKind::LocalGit);
 
     let draft = dayseam_report::render(input).expect("render must succeed");
     insta::assert_yaml_snapshot!("dev_eod_single_repo", draft);
@@ -105,6 +106,7 @@ fn dev_eod_multi_repo() {
     input.events = vec![a1, b1, b2];
     input.artifacts = vec![art_a, art_b];
     input.per_source_state.insert(src, succeeded_state(3));
+    input.source_kinds.insert(src, SourceKind::LocalGit);
 
     let draft = dayseam_report::render(input).expect("render must succeed");
     insta::assert_yaml_snapshot!("dev_eod_multi_repo", draft);
@@ -142,6 +144,7 @@ fn dev_eod_private_repo_redacted() {
     input.events = vec![p1, p2];
     input.artifacts = vec![art];
     input.per_source_state.insert(src, succeeded_state(2));
+    input.source_kinds.insert(src, SourceKind::LocalGit);
 
     let draft = dayseam_report::render(input.clone()).expect("render must succeed");
 
@@ -220,6 +223,7 @@ fn dev_eod_filters_non_self_commits() {
     input.events = vec![mine, theirs1, theirs2];
     input.artifacts = vec![art];
     input.per_source_state.insert(src, succeeded_state(3));
+    input.source_kinds.insert(src, SourceKind::LocalGit);
 
     let draft = dayseam_report::render(input).expect("render must succeed");
     insta::assert_yaml_snapshot!("dev_eod_filters_non_self", draft);
@@ -259,6 +263,7 @@ fn dev_eod_verbose_mode_is_additive() {
     input.artifacts = vec![art];
     input.verbose_mode = true;
     input.per_source_state.insert(src, succeeded_state(2));
+    input.source_kinds.insert(src, SourceKind::LocalGit);
 
     let draft = dayseam_report::render(input).expect("render must succeed");
     insta::assert_yaml_snapshot!("dev_eod_verbose", draft);
@@ -327,6 +332,8 @@ fn dev_eod_deduplicates_same_repo_across_sources() {
     input.artifacts = vec![art_a, art_b];
     input.per_source_state.insert(src_a, succeeded_state(2));
     input.per_source_state.insert(src_b, succeeded_state(2));
+    input.source_kinds.insert(src_a, SourceKind::LocalGit);
+    input.source_kinds.insert(src_b, SourceKind::LocalGit);
 
     let draft = dayseam_report::render(input).expect("render must succeed");
     let bullets: Vec<&str> = draft
@@ -425,6 +432,8 @@ fn dev_eod_dedups_commitauthored_across_sources() {
     input
         .per_source_state
         .insert(src_gitlab, succeeded_state(1));
+    input.source_kinds.insert(src_local, SourceKind::LocalGit);
+    input.source_kinds.insert(src_gitlab, SourceKind::GitLab);
 
     let draft = dayseam_report::render(input).expect("render must succeed");
     let bullets: Vec<&str> = draft
@@ -485,6 +494,7 @@ fn dev_eod_verbose_annotates_rolled_into_mr() {
     );
     input.events = events;
     input.per_source_state.insert(src, succeeded_state(2));
+    input.source_kinds.insert(src, SourceKind::LocalGit);
 
     let draft = dayseam_report::render(input).expect("render must succeed");
     let bullets: Vec<&str> = draft
@@ -550,6 +560,7 @@ fn dev_eod_jira_two_projects() {
     );
     input.events = vec![t1, t2, t3];
     input.per_source_state.insert(src, succeeded_state(3));
+    input.source_kinds.insert(src, SourceKind::Jira);
 
     let draft = dayseam_report::render(input).expect("render must succeed");
     insta::assert_yaml_snapshot!("dev_eod_jira_two_projects", draft);
@@ -585,6 +596,7 @@ fn dev_eod_confluence_two_spaces() {
     );
     input.events = vec![p_eng, p_ops];
     input.per_source_state.insert(src, succeeded_state(2));
+    input.source_kinds.insert(src, SourceKind::Confluence);
 
     let draft = dayseam_report::render(input).expect("render must succeed");
     insta::assert_yaml_snapshot!("dev_eod_confluence_two_spaces", draft);
@@ -677,6 +689,14 @@ fn dev_eod_mixed_commits_jira_confluence() {
     // sources' state is irrelevant. If `per_source_state` ever
     // stabilises on an ordered container, populate all three here.
     input.per_source_state.insert(git_src, succeeded_state(1));
+    // `source_kinds` is also a `HashMap`, but it's only *read* by
+    // the render layer (per-bullet lookup, single key at a time);
+    // no snapshot walks it, so populating all three entries stays
+    // deterministic. DAY-104: bullets now carry `source_kind`, and
+    // this test is the headline mixed-forge fixture for that.
+    input.source_kinds.insert(git_src, SourceKind::LocalGit);
+    input.source_kinds.insert(jira_src, SourceKind::Jira);
+    input.source_kinds.insert(conf_src, SourceKind::Confluence);
 
     let draft = dayseam_report::render(input).expect("render must succeed");
 
