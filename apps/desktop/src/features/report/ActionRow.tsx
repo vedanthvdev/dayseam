@@ -19,15 +19,23 @@ export interface ActionRowProps {
   /** Current status from `useReport()`. Controls whether we show
    *  "Generate" or "Cancel" and whether the inputs are disabled. */
   status: ReportStatus;
-  /** The most recent progress snippet (formatted message) so we can
-   *  surface "Merging events…" etc. while running. */
-  progressMessage?: string | null;
   /** Called when the user confirms they want to start a new run.
    *  The parent is responsible for wiring this to `useReport.generate`. */
   onGenerate: (date: string, sourceIds: string[]) => void;
   /** Called when the user clicks "Cancel" on an in-flight run. */
   onCancel: () => void;
 }
+
+// DAY-119: ActionRow used to render the last `ProgressEvent.message`
+// inline next to the date picker. `StreamingPreview` also renders that
+// same message directly beneath its progress bar, so users saw the
+// scanning folder twice in a row during a live sync (below the date
+// field + below the loading bar). The preview is the canonical home
+// — it is the surface the progress bar anchors on and it is already
+// `aria-live="polite"`. The action row now focuses on input state
+// (date picker, source chips, Generate/Cancel) and leaves live
+// narration to the preview. The former `action-row-progress-message`
+// testid is gone on purpose.
 
 /** YYYY-MM-DD for the user's local today. The `<input type="date">`
  *  element formats in local tz; using the ISO UTC date would cause a
@@ -46,7 +54,6 @@ function isRunning(status: ReportStatus): boolean {
 
 export function ActionRow({
   status,
-  progressMessage,
   onGenerate,
   onCancel,
 }: ActionRowProps) {
@@ -141,16 +148,6 @@ export function ActionRow({
           );
         })}
       </fieldset>
-
-      {running && progressMessage ? (
-        <span
-          aria-live="polite"
-          className="text-xs text-neutral-500 dark:text-neutral-400"
-          data-testid="action-row-progress-message"
-        >
-          {progressMessage}
-        </span>
-      ) : null}
 
       {running ? (
         <button

@@ -315,6 +315,21 @@ fn is_hidden_non_git(path: &Path) -> bool {
 /// Kept as a name-based check (rather than an absolute-path check) so
 /// it works on the synthetic `tempdir()` paths the test suite uses.
 /// DOGFOOD-v0.4-02.
+///
+/// DAY-119: expanded the list to cover the four modern TCC-protected
+/// top-level `$HOME` folders (`Desktop`, `Documents`, `Downloads`,
+/// `Public`). Starting in macOS Mojave the operating system prompts
+/// the user the first time an app reads any of these, and every
+/// additional protected folder the walker touches is a *separate*
+/// prompt. A user who picked `~/Code` as a scan root and whose
+/// `~/Code` tree contained symlinks or named children pointing into
+/// Desktop/Documents/Downloads would see exactly the "5 or 6
+/// pop-ups" cascade reported against v0.6.1. These names are also
+/// essentially never the interesting roots for a code tree — a
+/// scan root that legitimately lives inside `~/Documents` is picked
+/// explicitly via the folder picker and the filter does not apply
+/// there (it only skips *children* named this way, not the scan
+/// root itself).
 fn is_macos_protected_name(path: &Path) -> bool {
     let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
         return false;
@@ -330,6 +345,15 @@ fn is_macos_protected_name(path: &Path) -> bool {
             | "Pictures"
             | "Music"
             | "Movies"
+            // DAY-119: modern macOS TCC-protected homes. Apple
+            // started prompting for each of these in Mojave
+            // (10.14). Walking into any of them from a scan root
+            // the user did not explicitly pick produces a
+            // per-folder TCC prompt cascade.
+            | "Desktop"
+            | "Documents"
+            | "Downloads"
+            | "Public"
             // System/network mounts that are not in a user's home
             // but can be crossed via symlinks or by selecting `/` as
             // a scan root.
@@ -684,6 +708,61 @@ mod tests {
             paths,
             vec![base.join("code/dayseam")],
             "macOS TCC/media protected names must prune the walk",
+        );
+    }
+
+    /// DAY-119: users on v0.6.1 reported a cascade of 5-6 macOS
+    /// "allow access to Documents/Desktop/Downloads" pop-ups after
+    /// picking a scan root — one prompt per TCC-protected folder
+    /// the walker touched. The modern TCC protection list includes
+    /// `Desktop`, `Documents`, `Downloads`, and `Public` (in
+    /// addition to the Mojave-era `Pictures/Music/Movies`), so the
+    /// walker must prune all of them by name or every v0.6.x ship
+    /// will re-introduce the same prompt cascade.
+    ///
+    /// This test fails on a fix-revert: removing any one of those
+    /// four names from the `matches!` arm immediately lets a
+    /// child with that name appear in the results and the
+    /// assertion below flags it.
+    #[test]
+    fn discovery_skips_modern_macos_tcc_protected_names() {
+        let root = tempdir().unwrap();
+        let base = root.path();
+        make_repo(&base.join("code/dayseam"));
+        // Each of the four modern-TCC names hosts a `.git` child
+        // that WOULD be discovered if the walker descended into it.
+        for protected in ["Desktop", "Documents", "Downloads", "Public"] {
+            make_repo(&base.join(protected).join("should-not-appear"));
+        }
+
+        let out = discover_repos(&[base.to_path_buf()], DiscoveryConfig::default()).unwrap();
+        let paths: Vec<_> = out.repos.iter().map(|r| r.path.clone()).collect();
+        assert_eq!(
+            paths,
+            vec![base.join("code/dayseam")],
+            "modern macOS TCC-protected names (Desktop/Documents/Downloads/Public) must prune the walk to avoid the 5-6 pop-up cascade reported in v0.6.1",
+        );
+    }
+
+    /// DAY-119 companion: when the user *explicitly* picks a scan
+    /// root named one of the protected TCC names (e.g. they keep
+    /// their code in `~/Documents/Code`), the filter applies only
+    /// to children of the walk — not to the scan root itself.
+    /// This preserves the "user knows what they picked" contract.
+    #[test]
+    fn discovery_accepts_protected_name_as_explicit_scan_root() {
+        let root = tempdir().unwrap();
+        let base = root.path();
+        // The scan root itself is named `Documents`.
+        let scan_root = base.join("Documents");
+        make_repo(&scan_root.join("repo"));
+
+        let out = discover_repos(&[scan_root.clone()], DiscoveryConfig::default()).unwrap();
+        let paths: Vec<_> = out.repos.iter().map(|r| r.path.clone()).collect();
+        assert_eq!(
+            paths,
+            vec![scan_root.join("repo")],
+            "explicitly selecting a scan root whose name matches a protected name must still discover repos under it",
         );
     }
 }

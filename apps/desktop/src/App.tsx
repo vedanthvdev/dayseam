@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { Footer } from "./components/Footer";
 import { LogDrawer } from "./components/LogDrawer";
 import { TitleBar } from "./components/TitleBar";
@@ -16,16 +16,6 @@ import { useUpdater } from "./features/updater/useUpdater";
 import { useReport } from "./ipc";
 import { dismissSplash } from "./splash";
 import { ThemeProvider } from "./theme";
-
-function lastProgressMessage(
-  progress: ReturnType<typeof useReport>["progress"],
-): string | null {
-  const last = progress[progress.length - 1];
-  if (!last) return null;
-  const phase = last.phase;
-  if ("message" in phase) return phase.message;
-  return null;
-}
 
 export default function App() {
   const [logsOpen, setLogsOpen] = useState(false);
@@ -52,11 +42,6 @@ export default function App() {
 
   const toggleLogs = useCallback(() => setLogsOpen((prev) => !prev), []);
   const closeLogs = useCallback(() => setLogsOpen(false), []);
-
-  const progressMessage = useMemo(
-    () => lastProgressMessage(report.progress),
-    [report.progress],
-  );
 
   useEffect(() => {
     dismissSplash();
@@ -136,7 +121,6 @@ export default function App() {
         <UpdaterBanner state={updater} />
         <ActionRow
           status={report.status}
-          progressMessage={progressMessage}
           onGenerate={handleGenerate}
           onCancel={handleCancel}
         />
