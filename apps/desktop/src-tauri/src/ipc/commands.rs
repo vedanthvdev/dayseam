@@ -1153,21 +1153,83 @@ async fn upsert_discovered_repos(
     };
     let repo = LocalRepoRepo::new(state.pool.clone());
     let now = Utc::now();
-    for discovered in outcome.repos {
-        let row = LocalRepo {
+    // DOGFOOD-v0.4-03: build the full "keep" set first, then
+    // reconcile in one transaction. The previous per-row `upsert`
+    // loop never deleted stale rows, so the sidebar chip would show
+    // the cumulative high-water-mark of every repo ever discovered
+    // for the source — even ones the user had since moved or
+    // deleted. `reconcile_for_source` now diffs against the current
+    // table and prunes anything outside the fresh walk.
+    let keep: Vec<LocalRepo> = outcome
+        .repos
+        .into_iter()
+        .map(|discovered| LocalRepo {
             path: discovered.path,
             label: discovered.label,
             is_private: false,
             discovered_at: now,
-        };
-        repo.upsert(source_id, &row)
-            .await
-            .map_err(|e| internal("local_repos.upsert", e))?;
-    }
+        })
+        .collect();
+
+    // DAY-103 F-2: if discovery truncated at `max_roots`, `keep`
+    // only holds the first N repos and reconciling would delete
+    // every DB row beyond the cap — including user-set `is_private`
+    // flags that survive a normal rescan. Fall back to per-row
+    // `upsert` (add/refresh newly-seen rows, touch nothing else)
+    // and surface a warn so the user can raise the cap before the
+    // next scan. The cap itself is tuning, not a safety boundary —
+    // it's fine to leave the excess rows in place.
     if outcome.truncated {
         tracing::warn!(
             source_id = %source_id,
-            "discovery truncated at max_roots — some repos may be missing"
+            kept = keep.len(),
+            "local-git discovery truncated at max_roots; skipping reconcile and falling back \
+             to additive upsert so stale rows beyond the cap are not nuked"
+        );
+        for row in &keep {
+            repo.upsert(source_id, row)
+                .await
+                .map_err(|e| internal("local_repos.upsert", e))?;
+        }
+        return Ok(());
+    }
+
+    // DAY-103 F-3: a transient `read_dir` failure on the scan root
+    // now surfaces as `discover_repos -> Err(_)` (see the scan-root
+    // guard in `discovery.rs`), but even a clean walk that simply
+    // returns zero results is suspicious when the DB still thinks
+    // this source owned N repos a moment ago. Rather than commit
+    // the one-way delete, we refuse to reconcile an empty discovery
+    // against a non-empty DB and warn. The user can recover by
+    // rescanning once the transient condition clears, or by deleting
+    // the source deliberately if the empty result is intentional.
+    if keep.is_empty() {
+        let prior = repo
+            .list_for_source(source_id)
+            .await
+            .map_err(|e| internal("local_repos.list_for_source", e))?;
+        if !prior.is_empty() {
+            tracing::warn!(
+                source_id = %source_id,
+                prior_count = prior.len(),
+                "local-git discovery returned zero repos but DB has {prior} tracked row(s); \
+                 skipping reconcile (data-loss guard). Run rescan after verifying scan roots.",
+                prior = prior.len(),
+            );
+            return Ok(());
+        }
+    }
+
+    let removed = repo
+        .reconcile_for_source(source_id, &keep)
+        .await
+        .map_err(|e| internal("local_repos.reconcile", e))?;
+    if removed > 0 {
+        tracing::info!(
+            source_id = %source_id,
+            removed,
+            kept = keep.len(),
+            "reconciled local_repos table against fresh discovery pass"
         );
     }
     Ok(())
@@ -2200,6 +2262,131 @@ mod tests {
             }
             other => panic!("expected Auth, got {other:?}"),
         }
+    }
+
+    // --- DAY-103 F-3: reconcile data-loss guard -----------------------
+    //
+    // `upsert_discovered_repos` used to call
+    // `LocalRepoRepo::reconcile_for_source` unconditionally. A
+    // transient `read_dir` failure on a scan root's children (now
+    // only possible *below* the scan root after the scan-root
+    // guard in `discovery.rs`) could still produce an empty
+    // outcome for a source that had real rows a moment ago, and
+    // the reconcile would commit the delete. The guard makes
+    // "empty walk + non-empty DB" a no-op with a warn log instead
+    // of silent data loss.
+
+    #[tokio::test]
+    async fn upsert_discovered_repos_refuses_to_nuke_source_on_empty_walk() {
+        let (state, _dir) = make_state().await;
+        let source_id = Uuid::new_v4();
+
+        // Seed a LocalGit source row so the DB foreign-key is
+        // satisfied when we write to `local_repos`.
+        let source_repo = SourceRepo::new(state.pool.clone());
+        source_repo
+            .insert(&Source {
+                id: source_id,
+                kind: SourceKind::LocalGit,
+                label: "work repos".into(),
+                config: SourceConfig::LocalGit {
+                    scan_roots: vec![PathBuf::from("/ignored-by-this-test")],
+                },
+                secret_ref: None,
+                created_at: Utc::now(),
+                last_sync_at: None,
+                last_health: SourceHealth::unchecked(),
+            })
+            .await
+            .expect("seed source row");
+
+        // Plant two rows the user "owns" — including an
+        // `is_private = true` flag that regressed-behaviour would
+        // silently drop. These represent repos the user had the
+        // last time discovery ran cleanly.
+        let local_repos = LocalRepoRepo::new(state.pool.clone());
+        for (path, is_private) in [
+            (PathBuf::from("/home/user/Code/alpha"), false),
+            (PathBuf::from("/home/user/Code/private"), true),
+        ] {
+            local_repos
+                .upsert(
+                    &source_id,
+                    &LocalRepo {
+                        path,
+                        label: "stub".into(),
+                        is_private,
+                        discovered_at: Utc::now(),
+                    },
+                )
+                .await
+                .expect("seed local_repo");
+        }
+
+        // Simulate the "empty walk" failure mode by pointing the
+        // scan-roots list at an empty tempdir. The walker returns
+        // cleanly (no error) with zero repos, which is exactly the
+        // shape the guard has to refuse.
+        let empty_root = TempDir::new().expect("empty scan root");
+        let before = local_repos
+            .list_for_source(&source_id)
+            .await
+            .expect("list before");
+        assert_eq!(before.len(), 2);
+
+        upsert_discovered_repos(&state, &source_id, &[empty_root.path().to_path_buf()])
+            .await
+            .expect("guarded call must not error");
+
+        let after = local_repos
+            .list_for_source(&source_id)
+            .await
+            .expect("list after");
+        assert_eq!(
+            after.len(),
+            2,
+            "empty walk against a non-empty DB must be a no-op (data-loss guard)",
+        );
+        assert!(
+            after.iter().any(|r| r.is_private),
+            "is_private flag on the survivor must be preserved by the guard",
+        );
+    }
+
+    #[tokio::test]
+    async fn upsert_discovered_repos_allows_empty_walk_when_db_is_also_empty() {
+        // The guard should only refuse when there's data to lose.
+        // A fresh source with zero rows and an empty scan root is
+        // a legitimate "first walk found nothing" — no warn-worthy.
+        let (state, _dir) = make_state().await;
+        let source_id = Uuid::new_v4();
+        let source_repo = SourceRepo::new(state.pool.clone());
+        source_repo
+            .insert(&Source {
+                id: source_id,
+                kind: SourceKind::LocalGit,
+                label: "empty".into(),
+                config: SourceConfig::LocalGit {
+                    scan_roots: vec![PathBuf::from("/ignored")],
+                },
+                secret_ref: None,
+                created_at: Utc::now(),
+                last_sync_at: None,
+                last_health: SourceHealth::unchecked(),
+            })
+            .await
+            .expect("seed source");
+
+        let empty_root = TempDir::new().expect("empty scan root");
+        upsert_discovered_repos(&state, &source_id, &[empty_root.path().to_path_buf()])
+            .await
+            .expect("empty-on-empty path must be Ok");
+
+        let rows = LocalRepoRepo::new(state.pool.clone())
+            .list_for_source(&source_id)
+            .await
+            .expect("list");
+        assert!(rows.is_empty());
     }
 
     #[tokio::test]

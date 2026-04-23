@@ -96,6 +96,93 @@ impl LocalRepoRepo {
             .await?;
         Ok(())
     }
+
+    /// Reconcile the `local_repos` rows for a given source so the DB
+    /// exactly matches the `keep` set. Upserts every `keep` row and
+    /// deletes any existing row whose path is **not** in `keep`.
+    ///
+    /// DOGFOOD-v0.4-03: the IPC `upsert_discovered_repos` path used
+    /// to call [`Self::upsert`] in a loop, which meant repos that had
+    /// moved, been deleted, or were pruned by a tightened walker kept
+    /// their stale rows forever. The sidebar then displayed the
+    /// stale count (e.g. "12 repos") while the actual report only
+    /// rolled up whatever the connector's fresh discovery pass
+    /// returned (e.g. 7), confusing users. Reconciliation brings the
+    /// approved-repos table in line with the current walk.
+    ///
+    /// Returns the number of stale rows that were deleted so the
+    /// caller can log a reconciliation event for observability
+    /// (OBS-v0.4-01).
+    pub async fn reconcile_for_source(
+        &self,
+        source_id: &SourceId,
+        keep: &[LocalRepo],
+    ) -> DbResult<usize> {
+        // Everything runs in a single transaction so the table is
+        // never observed in a half-reconciled state.
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| DbError::classify_sqlx(e, "local_repos.reconcile.begin"))?;
+
+        // 1) Load the current set of paths for the source so we can
+        //    diff against `keep` without round-tripping N deletes
+        //    when nothing has changed.
+        let current_rows = sqlx::query("SELECT path FROM local_repos WHERE source_id = ?")
+            .bind(source_id.to_string())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| DbError::classify_sqlx(e, "local_repos.reconcile.list"))?;
+        let mut current: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for row in current_rows {
+            let p: String = row.try_get("path")?;
+            current.insert(p);
+        }
+
+        // 2) Upsert every `keep` row inside the transaction.
+        let mut keep_paths: std::collections::HashSet<String> =
+            std::collections::HashSet::with_capacity(keep.len());
+        for repo in keep {
+            let path_str = path_as_str(&repo.path)?;
+            let is_private = if repo.is_private { 1_i64 } else { 0_i64 };
+            sqlx::query(
+                "INSERT INTO local_repos (path, source_id, label, is_private, discovered_at)
+                 VALUES (?, ?, ?, ?, ?)
+                 ON CONFLICT(path) DO UPDATE SET
+                    source_id = excluded.source_id,
+                    label = excluded.label,
+                    discovered_at = excluded.discovered_at",
+            )
+            .bind(&path_str)
+            .bind(source_id.to_string())
+            .bind(&repo.label)
+            .bind(is_private)
+            .bind(repo.discovered_at.to_rfc3339())
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| DbError::classify_sqlx(e, "local_repos.reconcile.upsert"))?;
+            keep_paths.insert(path_str);
+        }
+
+        // 3) Delete any existing row whose path is no longer in
+        //    `keep`. Scoped to this `source_id` so deleting from one
+        //    LocalGit source cannot touch rows owned by another.
+        let stale: Vec<String> = current.difference(&keep_paths).cloned().collect();
+        for path in &stale {
+            sqlx::query("DELETE FROM local_repos WHERE source_id = ? AND path = ?")
+                .bind(source_id.to_string())
+                .bind(path)
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| DbError::classify_sqlx(e, "local_repos.reconcile.delete"))?;
+        }
+
+        tx.commit()
+            .await
+            .map_err(|e| DbError::classify_sqlx(e, "local_repos.reconcile.commit"))?;
+        Ok(stale.len())
+    }
 }
 
 fn row_to_local_repo(row: sqlx::sqlite::SqliteRow) -> DbResult<LocalRepo> {

@@ -6,6 +6,148 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-04-22
+
+### Fixed
+
+- **DAY-103: v0.4 dogfood patch batch — folder hygiene, repo count, keychain
+  prompts, sticky footer (DOGFOOD-v0.4-02..-07).** Five-bug sweep caught
+  during the first day of real v0.4.1 dogfood:
+  - **DOGFOOD-v0.4-02 / DOGFOOD-v0.4-04 / DOGFOOD-v0.4-05** —
+    local-git discovery produced phantom repos and triggered
+    unrelated-app TCC prompts. The walker in
+    [`crates/connectors/connector-local-git/src/discovery.rs`](crates/connectors/connector-local-git/src/discovery.rs)
+    now (a) skips symlinks via `DirEntry::file_type()` (the
+    non-chasing stat) so a user-controlled symlink can't escape the
+    scan root into `~/Pictures/Photos Library.photoslibrary` and
+    friends; (b) prunes by name before recursing — `Library`,
+    `Pictures`, `Music`, `Movies`, `Volumes`, `.Trash`,
+    `node_modules`, plus any directory whose lowercased suffix is
+    `.photoslibrary` / `.musiclibrary` / `.tvlibrary` /
+    `.imovielibrary` / `.app` / `.bundle` / `.framework`; and
+    (c) only counts a directory as a git repo if it matches one of
+    three well-formed layouts (worktree `.git` file; regular
+    `.git/HEAD`; or bare `HEAD + objects/ + refs/` triad) — an empty
+    `.git/` or a lone top-level `HEAD` no longer qualifies. Seven
+    new tests pin each predicate.
+  - **DOGFOOD-v0.4-03 / DOGFOOD-v0.4-05 (DB-side)** — the
+    `local_repos` table was additive-only, so the sidebar repo-count
+    chip diverged from the walker's ground-truth. New
+    [`LocalRepoRepo::reconcile_for_source`](crates/dayseam-db/src/repos/local_repos.rs)
+    does an all-or-nothing transactional diff — upserts every
+    `keep` row, deletes every row whose path is no longer in
+    `keep`, preserves user-set `is_private` on surviving rows.
+    [`upsert_discovered_repos`](apps/desktop/src-tauri/src/ipc/commands.rs)
+    now calls `reconcile_for_source` once per walk instead of
+    looping per-row `upsert`. Two new DB tests
+    (`local_repos_reconcile_prunes_stale_rows_and_keeps_private_flag`,
+    `local_repos_reconcile_is_scoped_to_its_source`) pin the
+    semantics.
+  - **DOGFOOD-v0.4-07** — `audit_orphan_secrets` no longer blocks
+    startup. Running the audit synchronously in
+    [`apps/desktop/src-tauri/src/startup.rs`](apps/desktop/src-tauri/src/startup.rs)
+    meant N PAT-backed sources produced up to N macOS Keychain
+    prompts *before the window appeared* — dogfooders described it
+    as "the app asks for my laptop password 4 times to open". The
+    audit is now `tauri::async_runtime::spawn`'d into a detached
+    task so the window renders immediately; audit output is
+    unchanged. Count-per-session is a known ad-hoc-signing
+    consequence (issue #108) and is deliberately out of scope for
+    this patch.
+  - **DOGFOOD-v0.4-06** — report footer slid off the viewport on
+    long reports because the shell used `min-h-screen` (unbounded)
+    and the preview's `flex-1 overflow-y-auto` lacked the
+    `min-h-0` pairing. [`apps/desktop/src/App.tsx`](apps/desktop/src/App.tsx)
+    now uses `h-dvh overflow-hidden` so only the streaming preview
+    itself scrolls, keeping the `<Footer>` action buttons pinned on
+    long reports. `StreamingPreview` carries
+    `flex min-h-0 flex-1 overflow-y-auto` on both idle and active
+    branches; `FirstRunEmptyState` picks up the same treatment for
+    consistency. A new RTL invariant test in
+    [`apps/desktop/src/__tests__/App.test.tsx`](apps/desktop/src/__tests__/App.test.tsx)
+    pins the layout classes so a future refactor can't silently
+    regress the sticky footer.
+
+### Hardened (DAY-103 adversarial-review pass)
+
+A tier-1 + tier-2 review pass over the dogfood batch surfaced eight
+follow-up issues, all of which ship in this release so the next
+dogfooder doesn't hit them:
+
+- **DAY-103 F-2 — truncation + reconcile no longer silently deletes
+  the tail of `local_repos`.** A user with more than
+  `DiscoveryConfig::max_roots` (default 512) repos under a single
+  LocalGit source would have lost every row beyond the cap on every
+  rescan, *including* the `is_private` flags the reconcile
+  transaction was meant to preserve. `upsert_discovered_repos` now
+  detects `outcome.truncated` and falls back to per-row `upsert`
+  (additive, no delete) plus a warn log so the user can raise the
+  cap before the next walk.
+- **DAY-103 F-3 — empty-walk data-loss guard.** A transient
+  `read_dir` failure on a scan root's children used to produce an
+  empty discovery outcome, which then reconciled-delete the entire
+  source. Scan-root-level `read_dir` failures now surface as
+  `DayseamError::Io` with `LOCAL_GIT_REPO_NOT_FOUND`, and even a
+  clean-but-empty walk is refused when the DB still has rows for
+  that source (warn log, zero deletes). Two new IPC tests
+  (`upsert_discovered_repos_refuses_to_nuke_source_on_empty_walk`
+  and `upsert_discovered_repos_allows_empty_walk_when_db_is_also_empty`)
+  pin the guard.
+- **DAY-103 F-4 — first-run checklist no longer clips on short
+  viewports.** The DOGFOOD-v0.4-06 fix left
+  `FirstRunEmptyState`'s `<main>` with `overflow-y-auto` **and**
+  `justify-center`, which on a flex-col container spills overflow
+  into negative scrollTop space that browsers won't expose — so the
+  top of the checklist became unreachable on ~700px-tall windows.
+  The scrolling element is now neutrally justified; the inner
+  wrapper centers itself with `m-auto`.
+- **DAY-103 F-5 — breadcrumb for pruned macOS-protected names.**
+  Discovery now emits one `tracing::debug!("pruned macos-protected
+  directory ...")` per pruned path so a user who expected a repo to
+  appear can get an answer from `RUST_LOG=debug` traces instead of
+  reading source.
+- **DAY-103 F-6 — `is_git_repo` stops chasing symlinks.** The walker
+  correctly refused to recurse into a symlinked *directory*, but
+  the repo predicate used `Path::is_file()` / `Path::is_dir()`
+  which *do* follow symlinks. A directory whose `.git` entry was a
+  symlink into a TCC-protected tree could still re-open the
+  DOGFOOD-v0.4-02 prompt class. All three predicate branches now
+  use `fs::symlink_metadata`; a new test
+  (`is_git_repo_rejects_dot_git_that_is_a_symlink_to_elsewhere`)
+  pins the behaviour.
+- **DAY-103 F-9 — stable test anchor for the shell layout
+  invariants.** The sticky-footer RTL test walked
+  `preview.parentElement` to find the shell, which would have
+  silently passed against a wrapper the moment a future refactor
+  nested the preview. Both App shell roots now carry
+  `data-testid="app-shell"` and the test uses `getByTestId` so the
+  invariants can't be bypassed by wrapper insertion.
+- **DAY-103 F-10 — deferred orphan-secret audit is now observable.**
+  The post-window-show `tauri::async_runtime::spawn` discarded both
+  the audit's orphan count and any panic inside the Keychain
+  probe. A supervising task now awaits the audit's `JoinHandle` and
+  logs at `info!` on clean completion or `error!` on panic — no
+  new dependency required.
+
+### Deferred
+
+- **Bug 4 (report source attribution via `### Local-git` / `### GitHub`
+  / `### GitLab` subheadings)** — reported during the same dogfood
+  pass but deferred to `DAY-104` as a dedicated feature PR. Shipping
+  it here would have required plumbing `SourceKind` through
+  `ReportInput` and `RenderedBullet`, adding subheading rendering
+  to the markdown sink and `StreamingPreview`, and re-goldening the
+  nine `dayseam-report` insta snapshots — a shape better suited to
+  `semver:minor` than a `semver:patch` dogfood batch.
+- **DAY-103 F-7 (perf) / F-8 (schema-level path collision between
+  two LocalGit sources)** — not shipped in this patch. F-7 is a
+  reconcile perf micro-opt (replace N per-row `DELETE` with one
+  batched `NOT IN`) that only matters at 100+ stale paths per
+  rescan, no correctness impact. F-8 requires a schema migration
+  to key `local_repos` on `(source_id, path)` instead of `path`
+  alone — that's a `semver:minor` shape and will be filed as its
+  own ticket.
+
 ## [0.4.1] - 2026-04-20
 
 ### Fixed

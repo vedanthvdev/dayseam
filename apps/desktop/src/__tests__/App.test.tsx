@@ -118,4 +118,57 @@ describe("App", () => {
     ).toHaveAttribute("aria-checked", "true");
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
   });
+
+  // DOGFOOD-v0.4-06: sticky footer regression. The bug was that
+  // the shell used `min-h-screen` (unbounded) and the scrolling
+  // `<section>` in `StreamingPreview` lacked `min-h-0`, so a tall
+  // draft made `<body>` the scroll container and pushed
+  // `<footer>` below the fold. The fix pins three invariants
+  // together — losing any one of them reopens the bug:
+  //
+  //   1. The shell is `h-dvh` + `overflow-hidden` so the column
+  //      height equals the viewport exactly (not "at least").
+  //   2. The preview is `flex-1 min-h-0 overflow-y-auto` so the
+  //      only scrollable axis lives inside the preview, not on
+  //      the body.
+  //   3. The footer is a direct flex child of the shell with no
+  //      positional overrides — it sits in the bottom strip.
+  //
+  // This test locks all three as a single guard so a future
+  // refactor that swaps `min-h-0` for "looks cleaner without it"
+  // (or reverts the shell to `min-h-screen`) red-fails here
+  // instead of in user dogfood.
+  it("pins the shell + preview + footer layout so the footer stays visible on long reports", async () => {
+    render(<App />);
+    const preview = await screen.findByRole("region", { name: /report preview/i });
+    const footer = screen.getByRole("contentinfo");
+    // DAY-103 F-9: anchor the assertion on a stable `data-testid`
+    // on the shell root instead of walking up from the preview.
+    // The `parentElement` walk would silently start matching the
+    // wrong node the moment a future refactor wraps the preview
+    // in a scroll-gradient helper / motion div / `<main>` — at
+    // which point the test would "pass" against a wrapper that
+    // doesn't even have the invariants we care about.
+    const shell = screen.getByTestId("app-shell");
+
+    // Invariant 1: shell is bounded to the viewport.
+    expect(shell.className).toMatch(/\bh-dvh\b/);
+    expect(shell.className).toMatch(/\boverflow-hidden\b/);
+    expect(shell.className).toMatch(/\bflex-col\b/);
+
+    // Invariant 2: preview is the scroll container, not the body.
+    expect(preview.className).toMatch(/\bflex-1\b/);
+    expect(preview.className).toMatch(/\bmin-h-0\b/);
+    expect(preview.className).toMatch(/\boverflow-y-auto\b/);
+
+    // Invariant 3: footer is a direct child of the shell, so it
+    // cannot be pushed out by a tall preview. We don't
+    // over-assert classnames on the footer itself because it's
+    // intentionally a normal flex child (no
+    // `position: sticky|fixed`); the layout does the work.
+    expect(footer.parentElement).toBe(shell);
+    // And the preview is a sibling of the footer inside that same
+    // shell, not nested inside some other scroll container.
+    expect(preview.parentElement).toBe(shell);
+  });
 });

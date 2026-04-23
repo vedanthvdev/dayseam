@@ -486,6 +486,107 @@ async fn local_repos_upsert_preserves_user_set_is_private_on_rescan() {
     );
 }
 
+/// DOGFOOD-v0.4-03 regression: `reconcile_for_source` must upsert
+/// every `keep` row, delete rows that were previously tracked for
+/// this source but are absent from `keep`, and preserve a
+/// user-toggled `is_private` flag on rows that are still in `keep`.
+#[tokio::test]
+async fn local_repos_reconcile_prunes_stale_rows_and_keeps_private_flag() {
+    let (pool, _dir) = test_pool().await;
+    let sources = SourceRepo::new(pool.clone());
+    let local = LocalRepoRepo::new(pool.clone());
+    let src = fixture_local_source();
+    sources.insert(&src).await.unwrap();
+
+    let kept = LocalRepo {
+        path: PathBuf::from("/Users/v/Code/kept"),
+        label: "kept".into(),
+        is_private: false,
+        discovered_at: fixed_now(),
+    };
+    let stale = LocalRepo {
+        path: PathBuf::from("/Users/v/Code/stale"),
+        label: "stale".into(),
+        is_private: false,
+        discovered_at: fixed_now(),
+    };
+    // Seed the table as it would look after the previous walk.
+    local.upsert(&src.id, &kept).await.unwrap();
+    local.upsert(&src.id, &stale).await.unwrap();
+    // User marks `kept` private before the rescan.
+    local.set_is_private(&kept.path, true).await.unwrap();
+
+    // Rescan sees `kept` only; `stale` is no longer discovered.
+    let removed = local
+        .reconcile_for_source(&src.id, std::slice::from_ref(&kept))
+        .await
+        .unwrap();
+
+    assert_eq!(removed, 1, "exactly one stale row should have been pruned");
+    let remaining = local.list_for_source(&src.id).await.unwrap();
+    assert_eq!(
+        remaining.len(),
+        1,
+        "table must match fresh walk size exactly (no high-water mark)"
+    );
+    assert_eq!(remaining[0].path, kept.path);
+    assert!(
+        remaining[0].is_private,
+        "reconcile must preserve user-set is_private"
+    );
+    assert!(
+        local.get(&stale.path).await.unwrap().is_none(),
+        "stale row must be deleted, not just hidden"
+    );
+}
+
+/// Reconciling with an empty `keep` set must clear every row for the
+/// source (but only for that source — other sources' rows are
+/// untouched).
+#[tokio::test]
+async fn local_repos_reconcile_is_scoped_to_its_source() {
+    let (pool, _dir) = test_pool().await;
+    let sources = SourceRepo::new(pool.clone());
+    let local = LocalRepoRepo::new(pool.clone());
+
+    // Two distinct LocalGit sources. `fixture_local_source` gives us
+    // one; build a second with a different id.
+    let src_a = fixture_local_source();
+    sources.insert(&src_a).await.unwrap();
+    let src_b = {
+        let mut s = fixture_local_source();
+        s.id = Uuid::parse_str("33333333-3333-3333-3333-333333333333").unwrap();
+        s.label = "Second local source".into();
+        s
+    };
+    sources.insert(&src_b).await.unwrap();
+
+    let a_repo = LocalRepo {
+        path: PathBuf::from("/Users/v/Code/source-a-repo"),
+        label: "a".into(),
+        is_private: false,
+        discovered_at: fixed_now(),
+    };
+    let b_repo = LocalRepo {
+        path: PathBuf::from("/Users/v/Code/source-b-repo"),
+        label: "b".into(),
+        is_private: false,
+        discovered_at: fixed_now(),
+    };
+    local.upsert(&src_a.id, &a_repo).await.unwrap();
+    local.upsert(&src_b.id, &b_repo).await.unwrap();
+
+    // Reconcile source A with an empty keep set.
+    let removed = local.reconcile_for_source(&src_a.id, &[]).await.unwrap();
+    assert_eq!(removed, 1);
+
+    assert!(local.list_for_source(&src_a.id).await.unwrap().is_empty());
+    // Source B is untouched.
+    let b_after = local.list_for_source(&src_b.id).await.unwrap();
+    assert_eq!(b_after.len(), 1);
+    assert_eq!(b_after[0].path, b_repo.path);
+}
+
 #[tokio::test]
 async fn activity_events_round_trip_and_reinsert_is_idempotent() {
     let (pool, _dir) = test_pool().await;
