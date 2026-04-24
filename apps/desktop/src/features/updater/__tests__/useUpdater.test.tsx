@@ -201,6 +201,43 @@ describe("useUpdater + UpdaterBanner", () => {
     expect(banner.textContent).toContain("Dayseam 0.6.3");
   });
 
+  // DAY-122 / C-5 regression: if a first `check()` resolves to an
+  // available `Update` and a later re-check (menu item, manual
+  // retry, post-install relaunch failure path) resolves to `null`,
+  // the first handle must be released. Pre-C-5, `runCheck` only
+  // swapped `updateRef.current` when a *new* `Update` arrived, so
+  // a null resolution silently left the prior resource open and
+  // leaked one Tauri bridge handle per poll.
+  it("closes the stale Update resource when a re-check resolves to null", async () => {
+    const first = new MockUpdate({
+      version: "0.6.3",
+      currentVersion: "0.6.2",
+    });
+    queueUpdaterCheck(first);
+    render(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByTestId("kind").textContent).toBe("available"),
+    );
+    expect(first.closeCalls).toBe(0);
+
+    // Second check: no update available. The hook must close the
+    // handle it captured from the first check before flipping to
+    // "up-to-date", not after an unmount that may never come in a
+    // long-lived session.
+    queueUpdaterCheck(null);
+    await act(async () => {
+      emitEvent("menu://check-for-updates", null);
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId("kind").textContent).toBe("up-to-date"),
+    );
+    // Would-have-caught: the pre-C-5 hook left `closeCalls` at 0
+    // here and only released the handle on component unmount. In
+    // a real session (a hook that never unmounts), that's a
+    // permanent resource leak.
+    expect(first.closeCalls).toBe(1);
+  });
+
   it("maps download failures into the error banner without a stray relaunch", async () => {
     queueUpdaterCheck(
       new MockUpdate({

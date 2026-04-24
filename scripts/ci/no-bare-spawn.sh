@@ -1,15 +1,32 @@
 #!/usr/bin/env bash
-# no-bare-spawn.sh — DAY-113 CI gate.
+# no-bare-spawn.sh — DAY-113 CI gate (DAY-122 / SF-3 hardening).
 #
 # Fails the build if any non-test production file contains a bare
-# `tokio::spawn` or `tauri::async_runtime::spawn` call that is not
-# either:
+# `tokio::spawn` or `tauri::async_runtime::spawn` call, or an aliased
+# import that pulls either into scope as a bare identifier, that is
+# not either:
 #
 #   - a call to `supervised_spawn(context, future)` from
 #     `dayseam-core::runtime` (the canonical shape), OR
 #   - a bare `tokio::spawn(...)` with a `// bare-spawn: intentional`
 #     marker comment on the same line or the immediately preceding
 #     line explaining why supervision is deliberately opted out.
+#
+# DAY-122 / SF-3 closed the aliased-import escape hatch: the literal-
+# string grep (`tokio::spawn(`, `tauri::async_runtime::spawn(`) used
+# to be trivially bypassable with `use tokio::task::spawn;` followed
+# by a bare `spawn(fut)`. The gate now also rejects
+#
+#   use tokio::spawn;
+#   use tokio::task::spawn;
+#   use tauri::async_runtime::spawn;
+#   use tokio::{spawn, …};                 (grouped form)
+#   use tauri::async_runtime::{spawn, …};  (grouped form)
+#
+# unless the importing line carries the same `// bare-spawn:
+# intentional` marker. The escape hatch exists at both the import and
+# the callsite so refactors that hoist the annotation to the `use`
+# line stay legible.
 #
 # The gate's job is structural: v0.4's F-10 discovered a panic-eating
 # fire-and-forget spawn in `startup.rs` that stayed invisible for
@@ -64,6 +81,11 @@ grep \
   --exclude-dir='scripts' \
   -e 'tokio::spawn(' \
   -e 'tauri::async_runtime::spawn(' \
+  -e 'use tokio::spawn' \
+  -e 'use tokio::task::spawn' \
+  -e 'use tauri::async_runtime::spawn' \
+  -e 'use tokio::{' \
+  -e 'use tauri::async_runtime::{' \
   crates/ apps/ >"$tmp" 2>/dev/null || true
 
 # Drop any paragraph whose match line comes from a `*tests.rs` file.
@@ -134,6 +156,31 @@ bad="$(printf '%s\n' "$raw" | awk '
     # classical Rust line-comment shape.
     if (body ~ /^[[:space:]]*\/\//) { ctx = ""; next }
 
+    # DAY-122 / SF-3: a `use tokio::{…}` or
+    # `use tauri::async_runtime::{…}` grouped import is only a
+    # policy violation when `spawn` actually appears inside the
+    # braces as a *standalone* identifier. Everything else that
+    # shape can import (JoinHandle, task::spawn_blocking,
+    # task::spawn_local, etc.) is fine. The other aliased-import
+    # patterns (`use tokio::spawn`, `use tokio::task::spawn`,
+    # `use tauri::async_runtime::spawn`) already name `spawn`
+    # directly in their grep pattern, so no extra guard is needed
+    # for those — they are unconditionally violations.
+    #
+    # POSIX note: `\b` is not portable across awk flavours (BSD
+    # awk on macOS silently treats it as a literal), so we build
+    # the word-boundary check explicitly from `[^[:alnum:]_]` on
+    # either side. This is POSIX ERE and runs identically under
+    # gawk, BSD awk, and mawk.
+    if (body ~ /^[[:space:]]*use[[:space:]]+tokio::\{/ && \
+        body !~ /(^|[^[:alnum:]_])spawn([^[:alnum:]_]|$)/) {
+      ctx = ""; next
+    }
+    if (body ~ /^[[:space:]]*use[[:space:]]+tauri::async_runtime::\{/ && \
+        body !~ /(^|[^[:alnum:]_])spawn([^[:alnum:]_]|$)/) {
+      ctx = ""; next
+    }
+
     # Canonical shape: a call to supervised_spawn is implicitly
     # fine (the helper IS a supervised tokio::spawn wrapper, so
     # grep matches its internals, but the production call site
@@ -157,6 +204,15 @@ bad="$(printf '%s\n' "$raw" | awk '
 
 if [[ -n "$bad" ]]; then
   echo "Error: bare tokio::spawn / tauri::async_runtime::spawn in production code." >&2
+  echo "" >&2
+  echo "This includes aliased imports (DAY-122 / SF-3) such as" >&2
+  echo "  use tokio::spawn;                     // then spawn(fut)" >&2
+  echo "  use tokio::task::spawn;               // then spawn(fut)" >&2
+  echo "  use tauri::async_runtime::spawn;      // then spawn(fut)" >&2
+  echo "  use tokio::{spawn, …};                // grouped form" >&2
+  echo "  use tauri::async_runtime::{spawn, …}; // grouped form" >&2
+  echo "A bare \`spawn(…)\` callsite after any of these imports bypasses" >&2
+  echo "the literal-string grep and escapes supervision by stealth." >&2
   echo "" >&2
   echo "Use runtime::supervised_spawn(\"context\", future) from dayseam-core," >&2
   echo "or add a '// bare-spawn: intentional — <reason>' comment on the spawn" >&2

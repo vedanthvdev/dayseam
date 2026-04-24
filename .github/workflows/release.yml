@@ -40,18 +40,145 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  release:
-    name: release
-    # Only run on merged PRs that carry a bump-worthy semver label,
-    # or on a manual dispatch. The label-presence check reads off
-    # `github.event.pull_request.labels`, which GitHub populates on
-    # the closed event when the PR had them at merge time.
+  # DAY-122 / R-2. Branch-protection is the primary gate for "don't
+  # release a commit with red CI", but an admin-merged PR can slip
+  # past it (GitHub lets branch-protection admins merge over a
+  # failing required check). This lightweight job polls the
+  # `ci.yml` and `e2e.yml` check-runs for the merge commit and
+  # refuses to proceed unless every required run is conclusive +
+  # successful. `workflow_dispatch` bypasses the poll because it
+  # is explicitly a maintainer-driven surface; the dry-run flag
+  # keeps that path safe.
+  wait-for-ci:
+    name: wait-for-ci (R-2)
     if: >
-      (github.event_name == 'workflow_dispatch') ||
       (github.event_name == 'pull_request' && github.event.pull_request.merged == true &&
         (contains(github.event.pull_request.labels.*.name, 'semver:patch') ||
          contains(github.event.pull_request.labels.*.name, 'semver:minor') ||
          contains(github.event.pull_request.labels.*.name, 'semver:major')))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+    steps:
+      - name: Poll required check-runs on the merge commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.event.pull_request.merge_commit_sha }}
+          # The required contexts we refuse to release without. If a
+          # new CI job becomes required, add it here AND to the
+          # branch-protection rules — this gate is defense-in-depth,
+          # not a replacement. The `shell-scripts` job is matrix'd
+          # across ubuntu-latest and macos-latest (DAY-122 / R-5),
+          # and GitHub reports each matrix leg as a distinct
+          # check-run named `<job> (<matrix value>)`.
+          REQUIRED_CHECKS: |
+            rust
+            rust-linux
+            frontend
+            shell-scripts (ubuntu-latest)
+            shell-scripts (macos-latest)
+          # Total wait: 10 × 60s = 10 minutes. CI should already be
+          # long-settled on a merged PR, so a 10-minute budget is
+          # generous; the job fails fast with a clear message if it
+          # runs out.
+          MAX_ATTEMPTS: 10
+          SLEEP_SECONDS: 60
+        run: |
+          set -euo pipefail
+          if [[ -z "$SHA" || "$SHA" == "null" ]]; then
+            echo "::error::merge_commit_sha unavailable on event payload; cannot poll CI status." >&2
+            exit 1
+          fi
+          echo "==> Waiting for required checks on $SHA in $REPO:"
+          echo "$REQUIRED_CHECKS" | sed 's/^/    - /'
+          required=()
+          while IFS= read -r name; do
+            [[ -n "$name" ]] && required+=("$name")
+          done <<<"$REQUIRED_CHECKS"
+
+          attempt=0
+          while (( attempt < MAX_ATTEMPTS )); do
+            attempt=$((attempt + 1))
+            echo "==> Attempt ${attempt}/${MAX_ATTEMPTS}"
+            # GitHub's check-runs API paginates; `--paginate` plus
+            # `-q` flattens every page's `.check_runs[]` into one
+            # stream so a CI job that ran on a pagination boundary
+            # is not silently invisible.
+            runs_json="$(gh api --paginate "repos/${REPO}/commits/${SHA}/check-runs" -q '.check_runs[] | {name, status, conclusion}' | jq -s '.')"
+            all_ok=true
+            missing=()
+            failing=()
+            for need in "${required[@]}"; do
+              entry="$(echo "$runs_json" | jq -c --arg n "$need" '[.[] | select(.name == $n)] | last')"
+              if [[ -z "$entry" || "$entry" == "null" ]]; then
+                missing+=("$need")
+                all_ok=false
+                continue
+              fi
+              status="$(echo "$entry" | jq -r '.status')"
+              conclusion="$(echo "$entry" | jq -r '.conclusion')"
+              if [[ "$status" != "completed" ]]; then
+                echo "    - $need: status=$status (waiting)"
+                all_ok=false
+                continue
+              fi
+              if [[ "$conclusion" != "success" ]]; then
+                failing+=("$need:$conclusion")
+                all_ok=false
+              else
+                echo "    - $need: success"
+              fi
+            done
+
+            if (( ${#failing[@]} > 0 )); then
+              echo "::error::Required checks failed on $SHA: ${failing[*]}. Refusing to release." >&2
+              exit 1
+            fi
+
+            if [[ "$all_ok" == "true" ]]; then
+              echo "==> All required checks green on $SHA."
+              exit 0
+            fi
+
+            if (( ${#missing[@]} > 0 )); then
+              echo "    (missing runs: ${missing[*]})"
+            fi
+            if (( attempt < MAX_ATTEMPTS )); then
+              sleep "$SLEEP_SECONDS"
+            fi
+          done
+
+          echo "::error::Timed out after ${MAX_ATTEMPTS} attempts waiting for required checks on $SHA. Re-run CI on master and retrigger the release workflow." >&2
+          exit 1
+
+  release:
+    name: release
+    # DAY-122 / R-2: `wait-for-ci` runs on the merged-PR path and
+    # refuses to let the release proceed unless every required CI
+    # check is green on the merge commit. `workflow_dispatch`
+    # bypasses the polling job (no merge commit exists to poll),
+    # so we allow `needs.wait-for-ci.result == 'skipped'` through.
+    # This is strictly defense-in-depth — branch protection is the
+    # primary gate — but an admin-merge that bypasses protection
+    # is exactly the failure mode we do not want to discover by
+    # shipping a broken DMG.
+    needs: [wait-for-ci]
+    # Combined job-level gate. The `always()` preamble is required
+    # so this job is evaluated even when `wait-for-ci` is skipped
+    # (manual dispatch); without it GitHub would treat "any upstream
+    # not successful" as a skip of the release.
+    if: >
+      always() &&
+      (needs.wait-for-ci.result == 'success' || needs.wait-for-ci.result == 'skipped') &&
+      (
+        (github.event_name == 'workflow_dispatch') ||
+        (github.event_name == 'pull_request' && github.event.pull_request.merged == true &&
+          (contains(github.event.pull_request.labels.*.name, 'semver:patch') ||
+           contains(github.event.pull_request.labels.*.name, 'semver:minor') ||
+           contains(github.event.pull_request.labels.*.name, 'semver:major')))
+      )
     runs-on: macos-latest
     steps:
       - name: Checkout (fetch tags so bump-version.sh can read previous release)
@@ -409,15 +536,51 @@ jobs:
       # Commit the version bump (if files changed) so the tagged SHA
       # carries the right `version` metadata. A pre-bumped tree (Task
       # 9 capstone) has nothing to commit and the step no-ops.
-      - name: Commit version bump (if any)
+      #
+      # DAY-122 / R-3. The push used to be a bare `git push origin
+      # HEAD:master`; plain git already rejects non-fast-forward
+      # pushes, so concurrent-merge scenarios fail safely rather
+      # than silently overwrite. This step tightens that further by
+      # capturing the expected master SHA at checkout and passing
+      # it to `--force-with-lease=master:<sha>`. The lease asserts
+      # "master must be exactly at this SHA before I push"; any
+      # drift (another PR merged while this release ran) aborts
+      # the push with an explicit error instead of a generic
+      # "non-fast-forward" message. The caller can then retry the
+      # release from the new master head without risking a half-
+      # applied release (tag pushed, bump commit missing, or vice
+      # versa).
+      - name: Capture expected master SHA before bump push
+        id: lease
         if: steps.level.outputs.dry_run != 'true'
         run: |
+          set -euo pipefail
+          git fetch origin master
+          expected="$(git rev-parse origin/master)"
+          echo "expected_master=$expected" >>"$GITHUB_OUTPUT"
+          echo "==> Expected master SHA for --force-with-lease: $expected"
+
+      - name: Commit version bump (if any)
+        if: steps.level.outputs.dry_run != 'true'
+        env:
+          EXPECTED_MASTER: ${{ steps.lease.outputs.expected_master }}
+        run: |
+          set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           if [[ -n "$(git status --porcelain VERSION Cargo.toml apps/desktop/src-tauri/tauri.conf.json 2>/dev/null || true)" ]]; then
             git add VERSION Cargo.toml apps/desktop/src-tauri/tauri.conf.json
             git commit -m "chore(release): v${{ steps.bump.outputs.version }}"
-            git push origin HEAD:master
+            # --force-with-lease=<ref>:<sha> is NOT a force push in the
+            # destructive sense; it asserts that master is exactly at
+            # $EXPECTED_MASTER (captured seconds earlier) and refuses
+            # the push if it isn't. A plain `git push` without
+            # --force-with-lease would also reject a non-FF push, but
+            # the lease surfaces the drift with an explicit "stale
+            # info" error that names the expected SHA in the output
+            # — which is what lets an operator diagnose a concurrent
+            # merge instead of chasing a vague rejection.
+            git push --force-with-lease="master:${EXPECTED_MASTER}" origin HEAD:master
           else
             echo "==> Version bump already present on master; nothing to commit."
           fi

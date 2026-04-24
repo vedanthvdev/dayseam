@@ -46,7 +46,13 @@ const LAG_WRITE_MIN_INTERVAL: Duration = Duration::from_millis(500);
 /// then returns [`ToastSubscribeError::Closed`] and the `run` loop
 /// returns. On shutdown the caller should drop `AppState` (which
 /// holds the last `AppBus`) and, if it needs a deterministic join,
-/// explicitly `.await` this handle or call `.abort()`.
+/// explicitly `.await` this handle.
+///
+/// `.abort()` on the returned handle is also a supported shutdown
+/// path: as of DAY-122 / C-1, [`supervised_spawn`] no longer nests
+/// two spawns, so the returned `JoinHandle` owns the forwarder
+/// future directly and `.abort()` actually cancels it rather than
+/// leaking it as a detached task.
 #[must_use]
 pub fn spawn<R: Runtime>(handle: AppHandle<R>, bus: AppBus, logs: LogRepo) -> JoinHandle<()> {
     // DAY-113: supervised so a panic inside the `broadcast`

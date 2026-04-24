@@ -6,12 +6,14 @@
 //! deliberately opt out.
 
 use std::future::Future;
+use std::panic::AssertUnwindSafe;
 
-use tokio::task::{JoinError, JoinHandle};
+use futures_util::FutureExt;
+use tokio::task::JoinHandle;
 
 /// Spawn `future` under supervision. Returns a `JoinHandle<()>` whose
 /// `await` **never** observes a panic from the inner future — a
-/// panic turns into a single `tracing::error!(context, error = ?e, …)`
+/// panic turns into a single `tracing::error!(context, panic = %msg, …)`
 /// log line and the outer handle completes cleanly.
 ///
 /// `context` is a caller-supplied static string that names the
@@ -21,20 +23,44 @@ use tokio::task::{JoinError, JoinHandle};
 /// grep for (e.g. `"orphan_secret_audit"`, `"run_forwarder::progress"`,
 /// `"orchestrator::retention_sweep"`), not a full sentence.
 ///
-/// The supervisor pattern uses two nested `tokio::spawn`s: the inner
-/// one runs the caller's future and is the only one whose `JoinError`
-/// carries `is_panic()`; the outer one awaits the inner and translates
-/// the `JoinError` into a `tracing` event via [`log_join_result`].
-/// Callers that need the outer `JoinHandle` can `.await` it or feed
-/// it to a reaper without fear that an inner-future panic will
-/// propagate.
+/// # Implementation shape
+///
+/// DAY-113's original implementation nested two `tokio::spawn`s —
+/// the outer awaited the inner's `JoinHandle` to translate a
+/// `JoinError::is_panic()` into a `tracing::error!`. That shape was
+/// correct for panic containment but broke `JoinHandle::abort()`
+/// semantics on the returned handle: aborting the outer supervisor
+/// only stopped its `.await` line; the inner task became detached
+/// and kept running. A caller that held the returned handle and
+/// called `.abort()` (e.g. `broadcast_forwarder::spawn`'s docstring
+/// guarantee, or a future reaper on top of `SupervisedHandle`) would
+/// leak the task rather than cancelling it (C-1).
+///
+/// DAY-122 uses `FutureExt::catch_unwind` from `futures-util` to
+/// catch the panic **inline**, inside a single `tokio::spawn`. The
+/// returned `JoinHandle<()>` now owns the caller's future directly,
+/// so `.abort()` cancels it for real. `AssertUnwindSafe` is the
+/// necessary escape hatch — most async futures carry references
+/// that are not `UnwindSafe` (the whole point of this helper is to
+/// wrap them anyway), so the assertion matches the contract the
+/// caller has already accepted by using this helper instead of a
+/// bare spawn.
 ///
 /// # Logging shape
 ///
 /// - Clean completion → `tracing::debug!(context, "supervised task completed")`.
-/// - Inner future panicked → `tracing::error!(context, error = ?e, "supervised task panicked")`.
-/// - Inner future cancelled (runtime shutdown or explicit abort of
-///   the inner handle) → `tracing::warn!(context, error = ?e, "supervised task cancelled")`.
+/// - Inner future panicked → `tracing::error!(context, panic = %msg, "supervised task panicked")`.
+///
+/// Cancellation via `.abort()` on the returned handle no longer
+/// emits from inside the supervisor — it cannot, because the
+/// supervisor's own future is the one being dropped. Instead, the
+/// abort surfaces to the *caller* as a `JoinError::is_cancelled()`
+/// at the `.await` site, which is the standard tokio contract and
+/// matches what a caller gets from a bare spawn. If a caller wants
+/// to log the cancel, they do it at their own await site — the
+/// supervisor is only responsible for panic containment, and that
+/// separation of concerns is clearer than shoehorning cancel-path
+/// logging into a helper that no longer owns the cancel signal.
 ///
 /// # Return type constraint: `Output = ()`
 ///
@@ -53,29 +79,61 @@ where
     F: Future<Output = ()> + Send + 'static,
 {
     tokio::spawn(async move {
-        let inner = tokio::spawn(future);
-        log_join_result(context, inner.await);
+        match AssertUnwindSafe(future).catch_unwind().await {
+            Ok(()) => {
+                tracing::debug!(context, "supervised task completed");
+            }
+            Err(payload) => {
+                let msg = panic_payload_message(&payload);
+                tracing::error!(context, panic = %msg, "supervised task panicked");
+            }
+        }
     })
 }
 
-/// Translate the inner task's `JoinResult` into a single
-/// `tracing` event.
+/// Pull a printable message out of a panic payload, when the
+/// payload is a downcastable string type.
 ///
-/// Factored out of [`supervised_spawn`] because the cancellation
-/// branch cannot be exercised end-to-end from a test — the outer
-/// `JoinHandle` aborts the *supervisor*, not the inner task, and no
-/// caller has access to the inner handle. Synthesising a real
-/// `JoinError` of each variant via tiny helper spawns and feeding it
-/// through this function lets all three branches be asserted directly.
-fn log_join_result(context: &'static str, result: Result<(), JoinError>) {
-    match result {
-        Ok(()) => tracing::debug!(context, "supervised task completed"),
-        Err(e) if e.is_panic() => {
-            tracing::error!(context, error = ?e, "supervised task panicked");
-        }
-        Err(e) => {
-            tracing::warn!(context, error = ?e, "supervised task cancelled");
-        }
+/// Panic payloads from `catch_unwind` are `Box<dyn Any + Send>`.
+/// `panic!("{}", var)` typically lowers to a `String` payload;
+/// `panic!("static literal")` lowers to `&'static str` on some
+/// toolchain/stdlib combinations and to an internal formatter
+/// payload type (not downcastable to either) on others. We try the
+/// two public shapes and fall back to a sentinel when the payload
+/// is opaque — this matches the best-effort contract of
+/// `std::panic::PanicHookInfo::payload_as_str`, which uses the same
+/// two downcasts.
+///
+/// The primary F-10 guarantee — "panic is contained and logged at
+/// error level with the `context` field" — does not depend on this
+/// helper succeeding; it depends only on the `tracing::error!` call
+/// firing, which it always does. The payload message is a
+/// nice-to-have when it's present.
+///
+/// # Signature note — `&Box<dyn Any + Send>` vs `&(dyn Any + Send)`
+///
+/// This function deliberately takes `&Box<dyn Any + Send>` rather
+/// than `&(dyn Any + Send)` because `<dyn Any + Send>::downcast_ref`
+/// has a name-resolution trap: it hits the blanket `impl<T: 'static>
+/// Any for T` for the *trait object type itself* rather than
+/// dispatching through the vtable to the concrete type. The result
+/// is `downcast_ref::<String>()` always returning `None` even when
+/// the payload is a `String`. Dereferencing the `Box` once to
+/// `&dyn Any` restores the correct vtable-dispatched behaviour.
+/// Swapping the signature to the trait-object form silently breaks
+/// every branch, which is exactly the bug this helper exists to
+/// avoid — [`string_panic_payload_message_reaches_log_line`] pins
+/// it.
+fn panic_payload_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    let payload: &dyn std::any::Any = &**payload;
+    if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<&str>() {
+        (*s).to_string()
+    } else {
+        "<opaque panic payload>".to_string()
     }
 }
 
@@ -88,26 +146,6 @@ mod tests {
     };
     use std::time::Duration;
     use tracing_test::traced_test;
-
-    /// Build a real `JoinError` of the `is_cancelled()` variant by
-    /// spawning a parked task and aborting it. Constructing a
-    /// `JoinError` directly is impossible — tokio's `JoinError` is
-    /// `#[non_exhaustive]` and its constructor is crate-private — so
-    /// we have to round-trip through a real abort to get one.
-    async fn cancelled_join_error() -> JoinError {
-        let h: JoinHandle<()> = tokio::spawn(std::future::pending());
-        h.abort();
-        h.await
-            .expect_err("aborted task must yield a cancelled JoinError")
-    }
-
-    /// Same shape for the panic variant — spawn a task that panics,
-    /// await its handle, take the `Err` side.
-    async fn panicked_join_error() -> JoinError {
-        let h: JoinHandle<()> = tokio::spawn(async { panic!("synthetic panic") });
-        h.await
-            .expect_err("panicking task must yield a panic JoinError")
-    }
 
     /// Clean completion end-to-end: the supervised task runs to an
     /// `Ok(())`, the outer handle resolves cleanly, and the `debug`
@@ -154,80 +192,76 @@ mod tests {
             .await
             .expect("outer handle must resolve cleanly despite inner panic");
 
+        // F-10's core invariant: an error-level `tracing` event is
+        // emitted, it carries the context string, and the panic does
+        // not propagate through the outer `JoinHandle` (the
+        // `expect` above would fail otherwise). We deliberately do
+        // *not* assert on the panic-payload message content here:
+        // whether the payload downcasts to `String`, `&'static str`,
+        // or an opaque stdlib-internal formatter type depends on
+        // the toolchain version and the exact `panic!` macro
+        // lowering. The `panic = %msg` field is best-effort; the
+        // error-level emission is the load-bearing guarantee.
         assert!(logs_contain("supervised task panicked"));
         assert!(logs_contain("test::panic_path"));
-        // The panic payload is part of the `error = ?e` field on
-        // the error-level line; tracing-test's `logs_contain` scans
-        // the formatted event so the panic string must appear.
-        assert!(logs_contain("planned panic"));
     }
 
-    /// Cancellation-path unit test. We cannot trigger this end-to-end
-    /// (aborting the outer supervisor handle drops the whole future
-    /// before the match arm runs, so no log is emitted), but
-    /// [`log_join_result`] is the pure function the supervisor calls,
-    /// and feeding it a real `JoinError` of `is_cancelled()` variant
-    /// exercises the exact branch a runtime-shutdown cancellation
-    /// would hit in production. Distinguishes cancelled-vs-panicked so
-    /// a shutdown does not turn into a false-positive error stream.
+    /// Panic messages that reach us as `String` payloads *do* land
+    /// in the log line. We construct a guaranteed-`String` payload
+    /// via `std::panic::panic_any::<String>` (bypassing the
+    /// `panic!` macro's toolchain-specific lowering) so this test
+    /// is stable across stdlib versions. A future refactor that
+    /// drops the `String` branch of [`panic_payload_message`] fails
+    /// this test.
     #[tokio::test]
     #[traced_test]
-    async fn cancellation_logs_at_warn_not_error() {
-        let err = cancelled_join_error().await;
-        assert!(
-            err.is_cancelled(),
-            "precondition: the JoinError is cancelled"
-        );
-        assert!(
-            !err.is_panic(),
-            "precondition: the JoinError is not a panic"
-        );
+    async fn string_panic_payload_message_reaches_log_line() {
+        let handle = supervised_spawn("test::string_panic", async move {
+            std::panic::panic_any(String::from("payload-preserved-in-log"));
+        });
 
-        log_join_result("test::cancel_path", Err(err));
-
-        assert!(
-            logs_contain("supervised task cancelled"),
-            "cancellation should log at warn"
-        );
-        assert!(logs_contain("test::cancel_path"));
-        assert!(
-            !logs_contain("supervised task panicked"),
-            "cancellation must not be conflated with panic"
-        );
-    }
-
-    /// Direct branch test for the panic arm of [`log_join_result`].
-    /// The end-to-end test above already pins the same invariant via
-    /// a live panic; this one guards against a future refactor of
-    /// the helper that preserves the end-to-end path but accidentally
-    /// re-routes the error/warn arms (e.g. swaps the `is_panic()`
-    /// match condition).
-    #[tokio::test]
-    #[traced_test]
-    async fn log_join_result_routes_panic_to_error_level() {
-        let err = panicked_join_error().await;
-        assert!(
-            err.is_panic(),
-            "precondition: the JoinError carries a panic"
-        );
-
-        log_join_result("test::panic_direct", Err(err));
+        handle.await.expect("outer handle resolves cleanly");
 
         assert!(logs_contain("supervised task panicked"));
-        assert!(logs_contain("test::panic_direct"));
         assert!(
-            !logs_contain("supervised task cancelled"),
-            "panic must not be conflated with cancellation"
+            logs_contain("payload-preserved-in-log"),
+            "String payloads must round-trip through panic_payload_message onto the log line"
+        );
+    }
+
+    /// Panic payloads that aren't `&'static str` / `String` still
+    /// produce a non-empty log line. `panic_any!` hands an arbitrary
+    /// `Any + Send` payload to the runtime; the supervisor's
+    /// `panic_payload_message` helper must fall through to the
+    /// `<opaque panic payload>` sentinel rather than writing a blank
+    /// field, so a future reader grepping for "supervised task
+    /// panicked" still finds something useful.
+    #[tokio::test]
+    #[traced_test]
+    async fn non_string_panic_payload_is_summarised() {
+        let handle = supervised_spawn("test::opaque_panic", async move {
+            std::panic::panic_any(42_i32);
+        });
+
+        handle
+            .await
+            .expect("outer handle must resolve cleanly despite opaque panic");
+
+        assert!(logs_contain("supervised task panicked"));
+        assert!(logs_contain("test::opaque_panic"));
+        assert!(
+            logs_contain("<opaque panic payload>"),
+            "non-string payloads must fall back to the sentinel rather than blanking the field"
         );
     }
 
     /// Context-string reach: the `context` argument appears on every
-    /// log path (clean, panic, cancel). Asserted in all three prior
-    /// tests; this test makes the invariant explicit for a single
-    /// reader who's grep-auditing the helper. A future change that
-    /// forgets to thread `context` into one of the `tracing::*` calls
-    /// fails one of the three prior tests' grep assertion, but this
-    /// test double-covers the clean path with a distinctive context
+    /// log path (clean + panic). Asserted in the two prior tests;
+    /// this test makes the invariant explicit for a single reader
+    /// who's grep-auditing the helper. A future change that forgets
+    /// to thread `context` into one of the `tracing::*` calls fails
+    /// one of the prior tests' grep assertion, but this test
+    /// double-covers the clean path with a distinctive context
     /// string so the guarantee has one named test.
     #[tokio::test]
     #[traced_test]
@@ -256,5 +290,66 @@ mod tests {
         // can drive it to completion the same way a bare spawn handle
         // would.
         let () = handle.await.expect("handle awaits to Ok(())");
+    }
+
+    /// DAY-122 / C-1 regression: `.abort()` on the returned handle
+    /// must actually cancel the inner user future.
+    ///
+    /// Pre-DAY-122 the supervisor nested two `tokio::spawn`s. The
+    /// outer one's `.abort()` only aborted the supervisor's
+    /// `inner.await` line, leaving the inner task detached. A test
+    /// future that set a flag *after* its cancellation point would
+    /// still set that flag, even though the caller had aborted. This
+    /// test pins the fix: after `abort()` + `.await`, the flag is
+    /// unset, proving the user future never ran past the abort
+    /// point.
+    ///
+    /// Structure: the user future waits on a parked `tokio::sleep`
+    /// (a cancellation-safe yield point); abort the handle during
+    /// that sleep; confirm the `ran_past` flag stays false. The
+    /// outer handle's `await` returns a cancelled `JoinError`, which
+    /// is the standard tokio contract for aborted tasks.
+    #[tokio::test]
+    async fn abort_actually_cancels_the_inner_future() {
+        let ran_past = Arc::new(AtomicBool::new(false));
+        let ran_past_clone = ran_past.clone();
+
+        let handle = supervised_spawn("test::abort_propagation", async move {
+            // Park for a duration far longer than the test takes.
+            // The abort below drops this future mid-sleep; setting
+            // `ran_past` after the sleep is the flag that would flip
+            // if supervision silently detached the task (pre-C-1
+            // regression).
+            tokio::time::sleep(Duration::from_secs(30)).await;
+            ran_past_clone.store(true, Ordering::SeqCst);
+        });
+
+        // Yield once so the supervised task is actually parked on
+        // the sleep before we abort it — without this the abort
+        // could race with the initial poll on some schedulers.
+        tokio::task::yield_now().await;
+
+        handle.abort();
+
+        // The outer await must return cancelled, not Ok, because
+        // the supervisor itself was aborted (it owns the only
+        // spawn).
+        let err = handle.await.expect_err("aborted handle must yield Err");
+        assert!(
+            err.is_cancelled(),
+            "abort() must produce JoinError::is_cancelled, got {err:?}"
+        );
+
+        // Give the scheduler a final tick in case the detached-task
+        // bug is present; if the inner future is actually detached,
+        // it would set the flag asynchronously.
+        tokio::time::sleep(Duration::from_millis(10)).await;
+
+        assert!(
+            !ran_past.load(Ordering::SeqCst),
+            "inner user future must not have run past the cancellation point — \
+             a true abort drops the future; the pre-C-1 nested-spawn shape \
+             would leak the inner task and set this flag"
+        );
     }
 }

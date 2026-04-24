@@ -191,6 +191,19 @@ pub const GITHUB_UPSTREAM_SHAPE_CHANGED: &str = "github.upstream_shape_changed";
 /// shape change.
 pub const GITHUB_RESOURCE_GONE: &str = "github.resource_gone";
 
+/// DAY-122 / C-2. The walker's `MAX_PAGES` cycle-guard tripped —
+/// the paginator kept advertising a `rel="next"` Link past the
+/// hard cap (30 pages × 100 rows = 3 000 rows, i.e. well past any
+/// realistic single-day output for one user). Surfaced as
+/// `DayseamError::Internal` so a non-terminating paginator is
+/// reported upstream instead of silently truncating the day's
+/// data. The pre-C-2 code simply `break`ed out of the loop, which
+/// produced a partial day window with no warning in the UI and no
+/// breadcrumb in the logs — exactly the silent-failure shape
+/// DAY-115 filed a Medium-severity finding against.
+pub const GITHUB_PAGINATION_CYCLE_GUARD_TRIPPED: &str =
+    "connector.github.pagination.cycle_guard_tripped";
+
 // -------- Local-git connector ----------------------------------------------
 
 pub const LOCAL_GIT_REPO_LOCKED: &str = "local_git.repo_locked";
@@ -494,6 +507,7 @@ pub const ALL: &[&str] = &[
     GITHUB_UPSTREAM_5XX,
     GITHUB_UPSTREAM_SHAPE_CHANGED,
     GITHUB_RESOURCE_GONE,
+    GITHUB_PAGINATION_CYCLE_GUARD_TRIPPED,
     LOCAL_GIT_REPO_LOCKED,
     LOCAL_GIT_REPO_UNREADABLE,
     LOCAL_GIT_REPO_CORRUPT,

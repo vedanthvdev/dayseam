@@ -291,11 +291,19 @@ describe("AddGitlabSourceDialog", () => {
     // changed — a stricter bar than "any input is valid".
     expect(saveBtn).toBeDisabled();
 
-    const labelInputs = screen.getAllByRole("textbox");
-    // The label input is the only non-readonly text field on the
-    // form (the base URL is read-only in edit mode).
-    const labelField = labelInputs.find(
-      (el) => !(el as HTMLInputElement).readOnly,
+    // DAY-122 / T-5: the pre-v0.6.5 shape of this assertion was
+    // `screen.getAllByRole("textbox").find(el => !el.readOnly)`,
+    // which relied on the base-URL input being the *only* readonly
+    // text field on the form. A future change that freezes any
+    // other input in edit mode (e.g. a "last-validated host" chip)
+    // would make the heuristic pick the wrong element and the test
+    // would silently rename the wrong field. `data-testid` is the
+    // stable contract — the component already declares
+    // `data-testid="add-gitlab-label"` on the label input, so we
+    // assert against it directly instead of inferring which field
+    // is editable.
+    const labelField = screen.getByTestId(
+      "add-gitlab-label",
     ) as HTMLInputElement;
     fireEvent.change(labelField, { target: { value: "Renamed Acme" } });
 

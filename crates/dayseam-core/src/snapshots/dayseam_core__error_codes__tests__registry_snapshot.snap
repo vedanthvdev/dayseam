@@ -31,6 +31,7 @@ expression: ALL
 - github.upstream_5xx
 - github.upstream_shape_changed
 - github.resource_gone
+- connector.github.pagination.cycle_guard_tripped
 - local_git.repo_locked
 - local_git.repo_unreadable
 - local_git.repo_corrupt

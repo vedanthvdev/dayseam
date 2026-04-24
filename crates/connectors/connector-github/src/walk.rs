@@ -315,6 +315,28 @@ async fn walk_user_events(
             .map(|u| u.to_string());
     }
 
+    // DAY-122 / C-2. If we exited the loop with `next_url` still
+    // carrying a URL, the paginator kept advertising `rel="next"`
+    // past `MAX_PAGES`. Pre-C-2 we silently broke out, truncating
+    // the day's data with no signal to the UI or logs. Emit a
+    // typed `Internal` error instead so the orchestrator surfaces
+    // the cap trip and the run fails visibly. `break` on
+    // `reached_window_floor` sets `next_url = None` implicitly
+    // (via the `let Some(url) = next_url.take() else { break };`
+    // pattern on the *next* iteration that never runs) — but the
+    // window-floor branch above `break`s *before* re-assigning
+    // `next_url`, so `next_url` can be `Some` here only if we
+    // hit the cap with more pages genuinely available.
+    if next_url.is_some() {
+        return Err(DayseamError::Internal {
+            code: error_codes::GITHUB_PAGINATION_CYCLE_GUARD_TRIPPED.to_string(),
+            message: format!(
+                "github events pagination cap hit: {MAX_PAGES} pages × {PAGE_SIZE} rows \
+                 exceeded for source_id={source_id} without a rel=\"next\" terminator"
+            ),
+        });
+    }
+
     Ok(())
 }
 
@@ -431,6 +453,23 @@ async fn walk_search_issues(
             .as_deref()
             .and_then(parse_next_from_link_header)
             .map(|u| u.to_string());
+    }
+
+    // DAY-122 / C-2. Same cycle-guard trip semantics as
+    // [`walk_user_events`] — a `search/issues` paginator that
+    // keeps advertising `rel="next"` past `MAX_PAGES` is almost
+    // certainly a bug (search queries with >3000 matching rows
+    // are far past realistic single-day activity for one user
+    // and hit the 1000-row API cap long before our cap). Surface
+    // it as `Internal` rather than silently truncating.
+    if next_url.is_some() {
+        return Err(DayseamError::Internal {
+            code: error_codes::GITHUB_PAGINATION_CYCLE_GUARD_TRIPPED.to_string(),
+            message: format!(
+                "github search/issues pagination cap hit: {MAX_PAGES} pages × {PAGE_SIZE} rows \
+                 exceeded for source_id={source_id} without a rel=\"next\" terminator"
+            ),
+        });
     }
 
     Ok(())

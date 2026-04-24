@@ -93,11 +93,37 @@ export function useUpdater(): UpdaterState {
     if (mountedRef.current) setStatus(next);
   }, []);
 
+  // Shared helper for releasing whatever `updateRef.current` holds
+  // and clearing the slot. Factored out so every branch that
+  // overwrites the ref — null resolution, fresh-handle replacement,
+  // unmount teardown — goes through the same code path. `close()`
+  // on an already-released handle is harmless, but calling it
+  // reliably is what keeps the C-5 bridge-handle leak shut.
+  const releaseHandle = useCallback(() => {
+    const held = updateRef.current;
+    updateRef.current = null;
+    if (held) {
+      void held.close().catch(() => {
+        // already-released handle; no-op
+      });
+    }
+  }, []);
+
   const runCheck = useCallback(async () => {
     setStatusIfMounted({ kind: "checking" });
     try {
       const update = await check();
       if (!update) {
+        // DAY-122 / C-5. A prior `check()` may have resolved to an
+        // `Update` and stashed the Tauri `Resource` in
+        // `updateRef.current` — a later re-check (e.g. the native
+        // "Check for Updates…" menu item, or the post-install
+        // relaunch path that never fires on relaunch failure)
+        // that resolves to `null` used to silently overwrite the
+        // ref and leak the prior handle on the Rust side. Close
+        // the stale handle *before* declaring up-to-date so the
+        // resource slot matches the UI state.
+        releaseHandle();
         setStatusIfMounted({ kind: "up-to-date" });
         return;
       }
@@ -119,7 +145,7 @@ export function useUpdater(): UpdaterState {
     } catch (err) {
       setStatusIfMounted({ kind: "error", message: formatError(err) });
     }
-  }, [setStatusIfMounted]);
+  }, [setStatusIfMounted, releaseHandle]);
 
   const install = useCallback(async () => {
     const update = updateRef.current;
@@ -176,16 +202,11 @@ export function useUpdater(): UpdaterState {
       // Release the underlying Tauri `Resource` so it doesn't
       // leak past the component lifecycle. `close()` is safe to
       // call even if the resource was never downloaded.
-      const held = updateRef.current;
-      updateRef.current = null;
-      if (held) {
-        void held.close().catch(() => {
-          // already-released handle; no-op
-        });
-      }
+      releaseHandle();
     };
-    // `runCheck` is stable (useCallback has no deps that change)
-    // so this effect really does run exactly once.
+    // `runCheck` and `releaseHandle` are stable (useCallback has
+    // no deps that change) so this effect really does run exactly
+    // once.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

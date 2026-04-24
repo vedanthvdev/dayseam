@@ -97,8 +97,23 @@ jobs:
   # caught here if the job had existed a PR earlier; this job
   # closes that loop for every release from v0.1.1 onward.
   shell-scripts:
-    name: shell-scripts
-    runs-on: ubuntu-latest
+    # DAY-122 / R-5. Pre-v0.6.5 this job only ran on ubuntu-latest,
+    # which left a whole class of silent regressions — BSD vs GNU
+    # awk (`\b` word-boundary portability, handled by the SF-3
+    # patch), BSD vs GNU `grep -E` differences, `mktemp -d` flag
+    # skew, `sed -i` in-place semantics — outside the CI matrix.
+    # Adding a `macos-latest` leg means any script in `scripts/ci`
+    # or `scripts/release` that silently uses a GNU-only flag
+    # fails here before it bites the release-only macOS runner.
+    # The self-tests for every gate run identically under both
+    # shells, so the cost of the extra matrix leg is a few minutes
+    # against the repo's eng-minute budget.
+    name: shell-scripts (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     steps:
       - uses: actions/checkout@v4
       - name: test-bump-version.sh
@@ -120,3 +135,20 @@ jobs:
         run: bash scripts/ci/test-no-bare-spawn.sh
       - name: no-bare-spawn.sh (workspace scan)
         run: bash scripts/ci/no-bare-spawn.sh
+      # DAY-122 / T-3: validate `apps/desktop/src-tauri/entitlements.plist`
+      # at PR time, not only at release time. The same two checks run
+      # later inside `scripts/release/build-dmg.sh` — moving them into
+      # a standalone script lets `ci.yml` enforce them on every PR so
+      # a regression (re-introducing an XML comment, or breaking the
+      # plist) fails fast instead of exploding four minutes into the
+      # universal cargo build on release day. On ubuntu-latest
+      # `plutil` isn't available, so the lint branch is skipped and
+      # the comment gate (plain `grep`) still runs — which is the
+      # check that catches the actual v0.6.2 regression mode. The
+      # release workflow keeps running the full gate on macOS via
+      # `build-dmg.sh`, which now delegates to the same script so
+      # there is a single source of truth.
+      - name: test-check-entitlements.sh (gate self-test)
+        run: bash scripts/ci/test-check-entitlements.sh
+      - name: check-entitlements.sh (entitlements.plist validity)
+        run: bash scripts/ci/check-entitlements.sh

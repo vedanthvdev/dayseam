@@ -44,7 +44,7 @@ use std::time::Duration;
 use chrono::{FixedOffset, NaiveDate};
 use connector_github::walk::{walk_day, WalkOutcome};
 use connectors_sdk::{AuthStrategy, HttpClient, PatAuth, RetryPolicy};
-use dayseam_core::{SourceId, SourceIdentity, SourceIdentityKind};
+use dayseam_core::{error_codes, DayseamError, SourceId, SourceIdentity, SourceIdentityKind};
 use serde_json::json;
 use tokio_util::sync::CancellationToken;
 use url::Url;
@@ -125,6 +125,29 @@ async fn run_walk(server: &MockServer) -> WalkOutcome {
     )
     .await
     .expect("walk succeeds")
+}
+
+/// Variant of [`run_walk`] that returns the raw `Result` instead of
+/// unwrapping. Introduced in DAY-122 / C-2 so the cycle-guard-trip
+/// test can assert on the returned error shape — pre-C-2 the walker
+/// silently truncated on cap trip and returned `Ok`, so the original
+/// `walker_terminates_at_max_pages_on_cycle` test only asserted
+/// request counts. The stricter error-shape assertion is what pins
+/// the fix.
+async fn run_walk_result(server: &MockServer) -> Result<WalkOutcome, DayseamError> {
+    walk_day(
+        &http_for_tests(),
+        auth_for_tests(),
+        &api_base(server),
+        source_id(),
+        &self_identity_both(),
+        day(),
+        utc(),
+        &CancellationToken::new(),
+        None,
+        None,
+    )
+    .await
 }
 
 /// Always-empty `/search/issues` stub so the pagination tests focus on
@@ -319,14 +342,27 @@ async fn walker_collects_events_across_link_header_pages() {
 // `Link: rel="next"` (cycle), the walker terminates after `MAX_PAGES`
 // requests and does not hang.
 //
-// What a revert would look like: replacing `for page in 0..MAX_PAGES`
-// at `src/walk.rs:205` with `loop { … }`. The test below would hang
-// inside `run_walk` until the outer `tokio::time::timeout` fires —
-// which is precisely the signal the plan's acceptance criterion calls
-// out (see `docs/plan/2026-04-20-v0.5-test-quality-hardening.md` §T4).
+// DAY-122 / C-2 strengthens the contract: when the walker exits the
+// loop because `MAX_PAGES` is exhausted *and* the server is still
+// advertising `rel="next"`, it now returns `DayseamError::Internal`
+// with `code = GITHUB_PAGINATION_CYCLE_GUARD_TRIPPED` instead of
+// silently truncating to `Ok`. Pre-C-2 production runs against a
+// cycling proxy produced a partial daily report with no UI warning
+// and no error log — a Medium-severity silent-failure flagged in
+// the DAY-115 v0.5 capstone review (#129 item C-2).
+//
+// What a revert would look like:
+//
+// * Replacing `for page in 0..MAX_PAGES` at `src/walk.rs:205` with
+//   `loop { … }` — the test hangs inside `run_walk_result` until the
+//   outer `tokio::time::timeout` fires.
+// * Deleting the `if next_url.is_some() { Err(Internal …) }` guard
+//   at `src/walk.rs:317` — the walker returns `Ok(WalkOutcome)` and
+//   the `expect_err` below fails, signalling the silent-truncation
+//   regression before it can ship.
 
 #[tokio::test]
-async fn walker_terminates_at_max_pages_on_cycle() {
+async fn walker_returns_internal_error_on_max_pages_cycle() {
     let server = MockServer::start().await;
 
     // The `Link` header points back to the same events path — GitHub
@@ -339,8 +375,6 @@ async fn walker_terminates_at_max_pages_on_cycle() {
 
     // One event per response, inside the day window, with a
     // page-counter-free id so every cycled response looks identical.
-    // The walker's `seen_event_ids` dedup collapses the event after
-    // page 1, but each response still counts as an HTTP request.
     let body = json!([pr_opened_event_in_window(
         "evt-cycle",
         /* pr number */ 7_777,
@@ -364,17 +398,28 @@ async fn walker_terminates_at_max_pages_on_cycle() {
     // takes on a warm box (~50 ms per mock round-trip, so ~1.5 s for
     // 30 requests). Reverting the MAX_PAGES guard would trip the
     // timeout long before the test suite's default 60 s hang budget.
-    let outcome = tokio::time::timeout(Duration::from_secs(30), run_walk(&server))
+    let err = tokio::time::timeout(Duration::from_secs(30), run_walk_result(&server))
         .await
-        .expect("walker must terminate on a cycle — MAX_PAGES guard missing?");
+        .expect("walker must terminate on a cycle — MAX_PAGES guard missing?")
+        .expect_err(
+            "DAY-122 / C-2: walker must return Err(Internal) on cycle, not silently truncate",
+        );
 
-    // The walker's own accounting: exactly MAX_PAGES responses were
-    // consumed off the events endpoint. Each cycled response carried
-    // one event, so fetched_count equals MAX_PAGES.
-    assert_eq!(
-        outcome.fetched_count, MAX_PAGES as u64,
-        "walker should process exactly MAX_PAGES pages on a cycle"
-    );
+    match err {
+        DayseamError::Internal { ref code, .. } => {
+            assert_eq!(
+                code,
+                error_codes::GITHUB_PAGINATION_CYCLE_GUARD_TRIPPED,
+                "cap-trip error must carry the stable code so the UI + log-router can route it; \
+                 got {code}"
+            );
+        }
+        other => panic!(
+            "cap trip must surface as DayseamError::Internal; got {other:?}. If a future refactor \
+             widens this to another variant, update the UI's log-router at the same time so the \
+             error is still shown to the user — the whole point of C-2 is no silent truncation."
+        ),
+    }
 
     // Belt-and-braces at the HTTP boundary: the mock server saw
     // exactly MAX_PAGES requests to the events path — no fewer (which
@@ -390,17 +435,5 @@ async fn walker_terminates_at_max_pages_on_cycle() {
     assert_eq!(
         events_requests, MAX_PAGES,
         "walker must stop at MAX_PAGES requests on a self-referential Link cycle"
-    );
-
-    // Dedup invariant: only one unique event id survives the walk
-    // even though 30 responses carried the same id. This pins the
-    // `seen_event_ids` guard at `src/walk.rs:203` — without it,
-    // every cycled response would append a duplicate event to
-    // `outcome.events`, masking the pagination cycle as a "30x
-    // multiplier" data-inflation bug in production reports.
-    assert_eq!(
-        outcome.events.len(),
-        1,
-        "same event id across 30 cycled pages should dedup to one event"
     );
 }

@@ -37,6 +37,16 @@ dayseam-macros = { path = "../dayseam-macros" }
 # only crate both already depend on.
 tokio = { workspace = true }
 tracing = { workspace = true }
+# DAY-122 / C-1. `FutureExt::catch_unwind` lets `supervised_spawn`
+# catch an inner-future panic *inline* instead of nesting two
+# `tokio::spawn`s. The nested-spawn shape (DAY-113's original) broke
+# `JoinHandle::abort()` semantics on the returned handle — aborting
+# only dropped the outer supervisor, detaching the inner task so the
+# user's future leaked instead of being cancelled. With
+# `catch_unwind` there is exactly one spawn, so the returned handle's
+# `abort()` cancels the actual user future. `default-features = false`
+# keeps the dep small; only `std` is needed for `FutureExt`.
+futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 insta = { version = "1", features = ["yaml"] }

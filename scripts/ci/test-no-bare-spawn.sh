@@ -206,6 +206,103 @@ run_fixture \
 }
 '
 
+# DAY-122 / SF-3: aliased-import coverage. The pre-SF-3 gate matched
+# the literal strings `tokio::spawn(` and `tauri::async_runtime::spawn(`,
+# so the following fixtures would have passed it — which is exactly
+# the hole this hardening closes.
+
+# Rejection: `use tokio::spawn;` followed by a bare `spawn(…)` call.
+run_fixture \
+  "aliased_use_tokio_spawn_is_rejected" \
+  1 \
+  "crates/x/src/lib.rs" \
+  'use tokio::spawn;
+
+fn start() {
+    spawn(async {});
+}
+'
+
+# Rejection: `use tokio::task::spawn;` alias.
+run_fixture \
+  "aliased_use_tokio_task_spawn_is_rejected" \
+  1 \
+  "crates/x/src/lib.rs" \
+  'use tokio::task::spawn;
+
+fn start() {
+    spawn(async {});
+}
+'
+
+# Rejection: `use tauri::async_runtime::spawn;` alias.
+run_fixture \
+  "aliased_use_tauri_async_runtime_spawn_is_rejected" \
+  1 \
+  "apps/desktop/src/lib.rs" \
+  'use tauri::async_runtime::spawn;
+
+fn start() {
+    spawn(async {});
+}
+'
+
+# Rejection: grouped import from `tokio` that includes `spawn`.
+run_fixture \
+  "grouped_use_tokio_with_spawn_is_rejected" \
+  1 \
+  "crates/x/src/lib.rs" \
+  'use tokio::{spawn, task::JoinHandle};
+
+fn start() {
+    let _: JoinHandle<()> = spawn(async {});
+}
+'
+
+# Acceptance: grouped import from `tokio` that does NOT include
+# `spawn`. The gate must not blow up on unrelated grouped imports
+# (e.g. pulling `JoinHandle` or `spawn_blocking` only).
+run_fixture \
+  "grouped_use_tokio_without_spawn_is_clean" \
+  0 \
+  "crates/x/src/lib.rs" \
+  'use tokio::{task::JoinHandle, sync::Mutex};
+
+fn start() {
+    let _ = (Mutex::new(()), None::<JoinHandle<()>>);
+}
+'
+
+# Acceptance: aliased import with an `// bare-spawn: intentional`
+# marker on the preceding line. The escape hatch exists at the
+# import layer too so a refactor that hoists the annotation to the
+# `use` line is still legible.
+run_fixture \
+  "aliased_use_with_preceding_marker_is_accepted" \
+  0 \
+  "crates/x/src/lib.rs" \
+  '// bare-spawn: intentional — trivial drain, no panic domain
+use tokio::task::spawn;
+
+fn start() {
+    spawn(async {});
+}
+'
+
+# Acceptance: aliased import with a same-line marker. Rust style
+# tolerates trailing comments on `use` statements, so the gate must
+# accept them too.
+run_fixture \
+  "aliased_use_with_same_line_marker_is_accepted" \
+  0 \
+  "crates/x/src/lib.rs" \
+  'use tokio::task::spawn; // bare-spawn: intentional — reaper-of-supervisors
+
+fn start() {
+    spawn(async {});
+}
+'
+
 # Acceptance: no spawn sites at all in the tree. This is the healthy
 # end-state for a workspace that has moved every caller to
 # `supervised_spawn`, and must return exit 0 — not 2 — so CI stays

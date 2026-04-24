@@ -452,16 +452,17 @@ fn build_source_auth(
 /// Validate the `pat` argument handed to `sources_update` against
 /// the `existing` source row. There are four relevant combinations:
 ///
-/// | kind       | existing.secret_ref | pat arg          | verdict      |
-/// |------------|---------------------|------------------|--------------|
-/// | LocalGit   | —                   | None             | OK (no-op)   |
-/// | LocalGit   | —                   | Some(_)          | KindMismatch |
-/// | GitLab     | Some(_)             | None             | OK (no-op)   |
-/// | GitLab     | Some(_)             | Some(empty)      | PatMissing   |
-/// | GitLab     | Some(_)             | Some(non-empty)  | OK (rotate)  |
-/// | GitLab     | None                | None             | PatMissing*  |
-/// | GitLab     | None                | Some(empty)      | PatMissing   |
-/// | GitLab     | None                | Some(non-empty)  | OK (seed)    |
+/// | kind       | existing.secret_ref | pat arg          | label-only | verdict      |
+/// |------------|---------------------|------------------|------------|--------------|
+/// | LocalGit   | —                   | None             | —          | OK (no-op)   |
+/// | LocalGit   | —                   | Some(_)          | —          | KindMismatch |
+/// | GitLab     | Some(_)             | None             | —          | OK (no-op)   |
+/// | GitLab     | Some(_)             | Some(empty)      | —          | PatMissing   |
+/// | GitLab     | Some(_)             | Some(non-empty)  | —          | OK (rotate)  |
+/// | GitLab     | None                | None             | true       | OK (rename)  |
+/// | GitLab     | None                | None             | false      | PatMissing*  |
+/// | GitLab     | None                | Some(empty)      | —          | PatMissing   |
+/// | GitLab     | None                | Some(non-empty)  | —          | OK (seed)    |
 ///
 /// The starred row is the defense-in-depth case: a GitLab row whose
 /// `secret_ref` is already null cannot *also* get a null `pat` from
@@ -474,7 +475,27 @@ fn build_source_auth(
 /// pre-DAY-70 `sources_update({id, patch})` shape would sail past
 /// this branch silently. Failing loud here turns a baffling cross-
 /// command bug into a local Save-button error.
-fn validate_pat_arg(existing: &Source, pat: Option<&IpcSecretString>) -> Result<(), DayseamError> {
+///
+/// DAY-122 / C-4 adds the `label_only` escape hatch. [`RenameSourceDialog`]
+/// — the uniform rename surface introduced in DAY-121 — always
+/// sends `patch { label, config: null }, pat: null`, which the
+/// pre-C-4 code rejected on GitLab orphan rows with
+/// `ipc.gitlab.pat.missing`. Even worse, the error fired *after*
+/// `update_label` had already written the new label to SQLite
+/// (the writes at `sources_update` happen before this validation),
+/// so the user saw an "error" toast while the chip silently kept
+/// the new name on the next reload. The table's new `label-only`
+/// column surfaces the legitimate "just renaming an orphan"
+/// branch as `OK (rename)`: no PAT operation intended, no
+/// downstream `persist_gitlab_pat` call to worry about, and the
+/// `ensure_gitlab_self_identity` below still runs because
+/// `existing.config` is a fully-populated `GitLab` variant (orphan
+/// means no secret, not no config).
+fn validate_pat_arg(
+    existing: &Source,
+    pat: Option<&IpcSecretString>,
+    label_only: bool,
+) -> Result<(), DayseamError> {
     match (existing.kind, pat, existing.secret_ref.as_ref()) {
         (SourceKind::LocalGit, Some(_), _) => Err(invalid_config(
             error_codes::IPC_SOURCE_CONFIG_KIND_MISMATCH,
@@ -489,6 +510,15 @@ fn validate_pat_arg(existing: &Source, pat: Option<&IpcSecretString>) -> Result<
                 "sources_update pat must be non-empty when provided",
             ))
         }
+        // DAY-122 / C-4. A label-only rename of a GitLab orphan row
+        // is a legitimate UI flow — no PAT operation is intended and
+        // no config is being replaced. Fall through to `Ok` rather
+        // than hitting the defense-in-depth branch below. The
+        // `label_only` flag is the caller's contract: it is only
+        // `true` when `patch.config` and `pat` are both `None`, so
+        // there is no reconnect-flow path that can accidentally slip
+        // through here.
+        (SourceKind::GitLab, None, None) if label_only => Ok(()),
         (SourceKind::GitLab, None, None) => Err(invalid_config(
             error_codes::IPC_GITLAB_PAT_MISSING,
             format!(
@@ -947,7 +977,16 @@ pub async fn sources_update(
         }
     }
 
-    validate_pat_arg(&existing, pat.as_ref())?;
+    // DAY-122 / C-4. `label_only` is the contract with
+    // [`validate_pat_arg`]: when the caller sends neither a new
+    // config nor a new PAT, they are only renaming the source in
+    // the UI. Skipping the `(GitLab, None, None)` defense-in-depth
+    // branch for that case is what unblocks [`RenameSourceDialog`]
+    // on GitLab orphan rows. Any other combination — a config
+    // patch without a PAT, or a PAT without a config — is still
+    // subject to the full table of checks.
+    let label_only = patch.config.is_none() && pat.is_none();
+    validate_pat_arg(&existing, pat.as_ref(), label_only)?;
     if let Some(new_pat) = pat.as_ref() {
         let secret_ref = persist_gitlab_pat(&state, id, new_pat)?;
         repo.update_secret_ref(&id, Some(&secret_ref))
@@ -3037,14 +3076,14 @@ mod tests {
     #[test]
     fn validate_pat_arg_local_git_allows_no_pat() {
         let src = local_git_source(Uuid::new_v4());
-        validate_pat_arg(&src, None).expect("LocalGit with no pat is OK");
+        validate_pat_arg(&src, None, false).expect("LocalGit with no pat is OK");
     }
 
     #[test]
     fn validate_pat_arg_local_git_rejects_pat() {
         let src = local_git_source(Uuid::new_v4());
         let pat = IpcSecretString::new("glpat-unexpected");
-        let err = validate_pat_arg(&src, Some(&pat)).expect_err("LocalGit + pat must error");
+        let err = validate_pat_arg(&src, Some(&pat), false).expect_err("LocalGit + pat must error");
         match err {
             DayseamError::InvalidConfig { code, .. } => {
                 assert_eq!(code, error_codes::IPC_SOURCE_CONFIG_KIND_MISMATCH);
@@ -3057,7 +3096,7 @@ mod tests {
     fn validate_pat_arg_gitlab_with_secret_allows_no_pat_for_label_edit() {
         let id = Uuid::new_v4();
         let src = gitlab_source(id, Some(gitlab_secret_ref(id)));
-        validate_pat_arg(&src, None)
+        validate_pat_arg(&src, None, false)
             .expect("GitLab with existing secret_ref must allow label/config-only edits");
     }
 
@@ -3066,7 +3105,7 @@ mod tests {
         let id = Uuid::new_v4();
         let src = gitlab_source(id, Some(gitlab_secret_ref(id)));
         let empty = IpcSecretString::new("   ");
-        let err = validate_pat_arg(&src, Some(&empty)).expect_err("empty pat must error");
+        let err = validate_pat_arg(&src, Some(&empty), false).expect_err("empty pat must error");
         match err {
             DayseamError::InvalidConfig { code, .. } => {
                 assert_eq!(code, error_codes::IPC_GITLAB_PAT_MISSING);
@@ -3080,7 +3119,7 @@ mod tests {
         let id = Uuid::new_v4();
         let src = gitlab_source(id, Some(gitlab_secret_ref(id)));
         let fresh = IpcSecretString::new("glpat-rotated");
-        validate_pat_arg(&src, Some(&fresh)).expect("rotation must be accepted");
+        validate_pat_arg(&src, Some(&fresh), false).expect("rotation must be accepted");
     }
 
     #[test]
@@ -3088,11 +3127,12 @@ mod tests {
         // The exact silent-no-op failure mode DAY-70 users hit when
         // running a fresh backend against a stale frontend: the row
         // already has `secret_ref: None` (legacy add path), and the
-        // IPC call arrives with `pat: None`. Without this guard
-        // sources_update happily returns Ok and the user loops on
-        // reconnect-then-generate forever.
+        // IPC call arrives with `pat: None` for a reconnect-flow
+        // patch (config supplied, pat missing — `label_only: false`).
+        // Without this guard sources_update happily returns Ok and
+        // the user loops on reconnect-then-generate forever.
         let src = gitlab_source(Uuid::new_v4(), None);
-        let err = validate_pat_arg(&src, None).expect_err("orphan + no pat must error");
+        let err = validate_pat_arg(&src, None, false).expect_err("orphan + no pat must error");
         match err {
             DayseamError::InvalidConfig { code, message } => {
                 assert_eq!(code, error_codes::IPC_GITLAB_PAT_MISSING);
@@ -3109,7 +3149,47 @@ mod tests {
     fn validate_pat_arg_gitlab_orphan_row_accepts_fresh_pat() {
         let src = gitlab_source(Uuid::new_v4(), None);
         let fresh = IpcSecretString::new("glpat-first-time");
-        validate_pat_arg(&src, Some(&fresh)).expect("orphan + fresh pat is the fix path");
+        validate_pat_arg(&src, Some(&fresh), false).expect("orphan + fresh pat is the fix path");
+    }
+
+    /// DAY-122 / C-4 regression: a label-only rename of a GitLab
+    /// orphan row must be accepted. Pre-C-4 this was the blocking
+    /// path — [`RenameSourceDialog`] sent `patch { label, config:
+    /// null }, pat: null` and `validate_pat_arg` rejected the call
+    /// with `ipc.gitlab.pat.missing` because `(GitLab, None, None)`
+    /// unconditionally errored. The `label_only: true` escape
+    /// hatch is what unblocks the rename. Deleting the new match
+    /// arm (or the `label_only` parameter) fails this test.
+    #[test]
+    fn validate_pat_arg_gitlab_orphan_row_accepts_label_only_rename() {
+        let src = gitlab_source(Uuid::new_v4(), None);
+        validate_pat_arg(&src, None, true).expect(
+            "DAY-122 / C-4: label-only rename of a GitLab orphan row must be accepted — \
+             the orphan is not a reconnect flow, it is a UI rename, and there is no PAT \
+             operation intended",
+        );
+    }
+
+    /// Defense-in-depth: the `label_only` flag must not widen the
+    /// `(GitLab, Some(empty), _)` branch. A reconnect-flow caller
+    /// that accidentally sends `pat: ""` must still be rejected
+    /// even when `label_only` is true (the flag should be `false`
+    /// whenever `pat` is `Some`, but a future refactor that
+    /// miscalculates the flag at the call site must not open a new
+    /// silent-fail path here).
+    #[test]
+    fn validate_pat_arg_label_only_does_not_bypass_empty_pat_guard() {
+        let id = Uuid::new_v4();
+        let src = gitlab_source(id, Some(gitlab_secret_ref(id)));
+        let empty = IpcSecretString::new("");
+        let err = validate_pat_arg(&src, Some(&empty), true)
+            .expect_err("empty pat must still error, even with label_only: true");
+        match err {
+            DayseamError::InvalidConfig { code, .. } => {
+                assert_eq!(code, error_codes::IPC_GITLAB_PAT_MISSING);
+            }
+            other => panic!("expected InvalidConfig, got {other:?}"),
+        }
     }
 
     // --- DAY-71: GitLab self-identity auto-seed ---------------------------

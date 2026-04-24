@@ -6,6 +6,205 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+## [0.6.5]
+
+### Fixed
+
+- **DAY-122 / C-1: `supervised_spawn` no longer detaches its inner
+  task on abort.** DAY-113's original implementation used a
+  double-`tokio::spawn`: an outer supervisor task awaited an inner
+  `JoinHandle` that owned the caller's future, translating
+  `JoinError::is_panic()` into a `tracing::error!`. That shape
+  contained panics correctly but broke the abort contract on the
+  returned `JoinHandle<()>` — calling `.abort()` on it cancelled
+  only the outer supervisor's `.await` line; the inner task
+  became detached and kept running to completion. Any caller that
+  held the handle for its cancel semantics (e.g.
+  `broadcast_forwarder::spawn`'s docstring guarantee, or a future
+  reaper on top of `SupervisedHandle`) was silently leaking tasks
+  instead of cancelling them. v0.6.5 replaces the nested-spawn
+  shape with inline panic containment via `FutureExt::catch_unwind`
+  from `futures-util` (wrapped in `AssertUnwindSafe`, which matches
+  the contract the caller has already accepted by using this helper
+  instead of a bare spawn). The returned `JoinHandle<()>` now owns
+  the caller's future directly, so `.abort()` cancels it for real.
+  The cancel-logging path moves out of the supervisor entirely:
+  cancellation surfaces to the caller's `.await` site as a
+  `JoinError::is_cancelled()`, which is the standard tokio
+  contract and matches what a caller gets from a bare spawn. A new
+  `abort_actually_cancels_the_inner_future` regression in
+  [`supervised_spawn.rs`](crates/dayseam-core/src/runtime/supervised_spawn.rs)
+  joins the existing `inner_panic_is_contained_and_logged_at_error`
+  test so both guarantees are pinned, and
+  [`broadcast_forwarder.rs`](apps/desktop/src-tauri/src/ipc/broadcast_forwarder.rs)
+  gets a docstring refresh explaining that aborting the returned
+  handle *does* now stop the supervised work.
+
+- **DAY-122 / C-2: GitHub pagination cycle guard now emits a
+  typed `DayseamError::Internal` instead of a silent `break`.**
+  `connector-github`'s [`walk`](crates/connectors/connector-github/src/walk.rs)
+  defends against servers returning a `Link: next` chain that
+  eventually revisits a previously-seen page by tracking a
+  `HashSet<Url>` and bailing out at `MAX_PAGES`. Previously a trip
+  of that guard silently truncated the result set with only a
+  `tracing::warn!` — on top of SF-1's missing subscriber it was
+  literally no output at all, and even post-SF-1 a user-visible
+  sync run would just quietly return fewer PRs than the repo
+  actually contains. v0.6.5 introduces the
+  `connector.github.pagination.cycle_guard_tripped` error code
+  (registered in [`dayseam-core`](crates/dayseam-core/src/error_codes.rs))
+  and returns it as `DayseamError::Internal` so the orchestrator
+  records a failed run instead of a successful-but-truncated one.
+  The matching fixture in
+  [`walk_pagination.rs`](crates/connectors/connector-github/tests/walk_pagination.rs)
+  was converted from "assert early return" to "assert the typed
+  error surfaces with the right code", and the existing duplicate-
+  URL fixture was reused to drive the cycle path end-to-end.
+
+- **DAY-122 / C-4: renaming a GitLab orphan source no longer toasts
+  `PatMissing`.** DAY-121 gave every source chip a Rename action
+  and wires it through `sources_update` with
+  `patch = { label: "new name", config: null }` and `pat: null`.
+  For GitLab sources that had their keychain entry wiped (the
+  "orphan row" state from DAY-119) that call path now hit
+  `validate_pat_arg`'s `(SourceKind::GitLab, None, None)` defense-
+  in-depth branch, which was designed to catch the v0.4-era
+  reconnect-dialog bug where a user saved a new PAT without
+  re-submitting it; the label-only rename has no reason to supply
+  a PAT and was being rejected *after* the SQL label update had
+  already committed — a successful rename accompanied by an
+  `ipc.gitlab.pat_missing` error toast. `validate_pat_arg` gains a
+  `label_only: bool` parameter, computed at the `sources_update`
+  call-site as `patch.config.is_none() && pat.is_none()`, and the
+  GitLab orphan branch short-circuits to `Ok(())` for that exact
+  shape. Two new regressions in
+  [`commands.rs`](apps/desktop/src-tauri/src/ipc/commands.rs)
+  cover "label-only rename on orphan succeeds" and "explicit empty
+  PAT is still rejected even in label-only mode", plus the
+  pre-existing table of negative cases was updated to pass
+  `label_only = false` so the reconnect-dialog guard still holds.
+
+- **DAY-122 / C-5: `useUpdater` stops leaking `Update` handles when
+  `check()` resolves to `null`.** The hook holds a
+  `updateRef.current: Update | null` so a successful
+  `downloadAndInstall()` has a handle to close. DAY-108's original
+  code only closed this handle when it was being *replaced* by a
+  new `Update` or on component unmount — but `check()` can return
+  `null` (meaning "no update available now") after a previous
+  call returned an `Update`, e.g. when the native "Check for
+  Updates…" menu item (DAY-108) is invoked after the user
+  previously dismissed an update. Every such transition silently
+  dropped the Rust-side `Resource` slot. The fix extracts a
+  `releaseHandle` `useCallback` that closes the held resource and
+  clears the ref, and calls it on the `null` branch as well as
+  the `useEffect` cleanup. A new
+  `closes_previous_handle_when_check_resolves_null` test in
+  [`useUpdater.test.tsx`](apps/desktop/src/features/updater/__tests__/useUpdater.test.tsx)
+  drives a `MockUpdate` through "first check returns an Update,
+  second check returns null" and asserts `close()` was invoked on
+  the first handle before the "up-to-date" state transition.
+
+### Changed
+
+- **DAY-122 / T-3: `entitlements.plist` validity gate runs at PR
+  time, not just release time.** DAY-120 added three checks to
+  [`build-dmg.sh`](scripts/release/build-dmg.sh) (file exists,
+  `plutil -lint` passes, no XML comments that would break
+  macOS's AMFI parser). Those checks only ran on release day,
+  so a PR that re-introduced a comment cleared CI and only blew
+  up four minutes into the universal `cargo build` of the
+  release workflow. v0.6.5 extracts the logic verbatim into
+  [`scripts/ci/check-entitlements.sh`](scripts/ci/check-entitlements.sh),
+  adds a matching
+  [`test-check-entitlements.sh`](scripts/ci/test-check-entitlements.sh)
+  self-test with four fixtures (clean/commented/malformed/missing),
+  and wires both into the `shell-scripts` job in `ci.yml` so the
+  regression fails fast at PR time. `build-dmg.sh` now delegates
+  to the same script, so there is exactly one source of truth
+  for the AMFI comment-rejection check. `plutil` is macOS-only;
+  the gate skips `plutil -lint` on non-macOS runners (warning
+  message explains) and still runs the pure-`grep` comment check.
+
+- **DAY-122 / T-5: `AddGitlabSourceDialog` tests target the label
+  input by `data-testid`.** The suite previously located the
+  editable label via
+  `getAllByRole("textbox").find(el => !el.readOnly)`, a heuristic
+  that silently broke the moment a second editable textbox
+  landed in the dialog. The production input already exposes
+  `data-testid="add-gitlab-label"` (DAY-121), so the tests now
+  use `getByTestId` directly. Assertion strength is preserved —
+  the tests still cover the same behaviours — but the selector
+  no longer couples to `readOnly` as a disambiguation signal.
+
+- **DAY-122 / SF-3: `no-bare-spawn.sh` rejects aliased
+  `spawn` imports.** DAY-113's CI gate was trivially bypassable
+  by writing `use tokio::task::spawn;` (or the grouped
+  equivalent `use tokio::{task::JoinHandle, spawn};`) and then
+  calling `spawn(...)` — the bare-function invocation site
+  doesn't mention `tokio::` at all. v0.6.5 extends the gate's
+  `grep` patterns to catch such `use` statements, then
+  re-validates each hit with a POSIX-portable `awk` regex
+  (`(^|[^[:alnum:]_])spawn([^[:alnum:]_]|$)`) so grouped
+  imports like `use tokio::{task::JoinHandle, timeout};` do
+  *not* trigger false positives. `test-no-bare-spawn.sh` grows
+  eight new fixtures covering aliased, grouped, marker-exempt,
+  and clean cases; the original 12 fixtures continue to pass
+  verbatim. The helper's docstring in
+  [`no-bare-spawn.sh`](scripts/ci/no-bare-spawn.sh) now
+  describes the aliased-import class of violation and the
+  opt-out marker's updated reach.
+
+- **DAY-122 / R-2: release workflow refuses to ship if required
+  CI is not green on the merge commit.** Branch protection
+  *should* prevent a merge while required checks are failing,
+  but admin-merge bypasses and `workflow_dispatch` backfills
+  were able to sidestep it. `release.yml` gains a `wait-for-ci`
+  job that polls GitHub's Checks API for the merge commit
+  (`github.event.pull_request.merge_commit_sha` on the normal
+  path) and requires the full required-check set —
+  `rust`, `rust-linux`, `frontend`,
+  `shell-scripts (ubuntu-latest)`,
+  `shell-scripts (macos-latest)` — to be `completed` with
+  conclusion `success`. Any non-success blocks the `release`
+  job. Manual `workflow_dispatch` invocations are still allowed
+  (they skip `wait-for-ci`) so incident-response reruns don't
+  regress.
+
+- **DAY-122 / R-3: version-bump push uses
+  `--force-with-lease`.** The auto-bump step in `release.yml`
+  runs on the merge ref and pushes to `master`; a bare
+  `git push origin HEAD:master` trusts the server-side
+  non-fast-forward check but provides no protection against
+  the edge case where a second merge raced in between
+  `actions/checkout` and the bump push. v0.6.5 captures the
+  expected master SHA before the bump commit and passes it
+  through
+  `git push --force-with-lease="master:${EXPECTED_MASTER}"`,
+  which causes the push to fail loudly with a diagnosable
+  error instead of silently overwriting concurrent work.
+
+- **DAY-122 / R-5: `shell-scripts` CI job runs on Ubuntu *and*
+  macOS.** POSIX-but-actually-GNU assumptions in shell
+  (e.g. `\b` in `awk`, `grep -P`, `sed -i` flag shapes) only
+  show up on BSD userland. The `shell-scripts` job now uses
+  a `matrix.os: [ubuntu-latest, macos-latest]` strategy so
+  every gate (`check-entitlements.sh`, `no-bare-spawn.sh`,
+  their self-tests, `extract-release-notes.sh`,
+  `resolve-prev-version.sh`, `bump-version.sh`) runs on both
+  platforms before merge. The `wait-for-ci` gate above has
+  been updated to require both matrix legs explicitly.
+
+### Notes
+
+- This release clears the "must-fix before v0.6" tier of meta-issue
+  [#129](https://github.com/vedanthvdev/dayseam/issues/129)
+  (DAY-115 capstone deferrals): the four Critical findings (C-1, C-2,
+  C-4, C-5), the two Medium test-quality findings (T-3, T-5), the
+  silent-failure class item SF-3, and the three release-process
+  hardening items (R-2, R-3, R-5). The remaining open checkboxes on
+  #129 are lower-severity and will be folded into v0.6/v0.7 phase
+  planning.
+
 ## [0.6.4]
 
 ### Fixed
