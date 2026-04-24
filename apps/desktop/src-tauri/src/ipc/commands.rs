@@ -1520,6 +1520,41 @@ pub async fn sinks_add(
 /// `draft_id` to fetch the persisted draft via [`report_get`].
 const REPORT_COMPLETED_EVENT: &str = "report:completed";
 
+/// DAY-115 / SF-2. Build the `report:completed` payload from the
+/// outcome of [`dayseam_orchestrator::GenerateHandle::completion`].
+///
+/// The `Ok` branch is a straight field copy. The `Err(JoinError)`
+/// branch — orchestrator task panicked, was aborted, or the runtime
+/// shut down under it — synthesises a terminal `Failed` payload so
+/// the frontend's `useGenerateReport` state machine can leave the
+/// `generating` state. Pre-DAY-115 this branch only logged (and SF-1
+/// ate that log) and *never emitted the event*, which left the UI
+/// wedged with no way to recover short of restarting the app.
+///
+/// Extracted out of the `supervised_spawn` body so the failure branch
+/// is unit-testable without a live Tauri runtime — a `JoinError` is
+/// constructible in an `#[tokio::test]` by `.await`ing a panicking
+/// task, see `tests::completion_payload_on_panic_is_failed_status`.
+pub(crate) fn completion_payload(
+    run_id: RunId,
+    result: Result<dayseam_orchestrator::GenerateOutcome, tokio::task::JoinError>,
+) -> ReportCompletedEvent {
+    match result {
+        Ok(outcome) => ReportCompletedEvent {
+            run_id: outcome.run_id,
+            status: outcome.status,
+            draft_id: outcome.draft_id,
+            cancel_reason: outcome.cancel_reason,
+        },
+        Err(_e) => ReportCompletedEvent {
+            run_id,
+            status: dayseam_core::SyncRunStatus::Failed,
+            draft_id: None,
+            cancel_reason: None,
+        },
+    }
+}
+
 #[tauri::command]
 pub async fn report_generate(
     date: chrono::NaiveDate,
@@ -1601,22 +1636,24 @@ pub async fn report_generate(
     // `Err(JoinError)` from the orchestrator's completion future, but
     // nothing caught a panic in the `emit()` call itself — the new
     // outer supervision covers that gap.
+    //
+    // DAY-115 / SF-2: the pre-DAY-115 `Err(e)` branch of the inner
+    // `match` only logged and returned, which left the frontend
+    // stuck on "generating…" forever whenever the orchestrator's
+    // own completion future panicked or was aborted. That was
+    // invisible in production because SF-1 ate the `error!` log on
+    // a null subscriber. The fix is [`completion_payload`] below,
+    // which always produces a terminal `ReportCompletedEvent` — the
+    // `JoinError` branch synthesises a `Failed` payload so the UI
+    // state machine can transition out of `generating`.
     let completion_task = supervised_spawn("commands::report_completion", async move {
-        match handle.completion.await {
-            Ok(outcome) => {
-                let payload = ReportCompletedEvent {
-                    run_id: outcome.run_id,
-                    status: outcome.status,
-                    draft_id: outcome.draft_id,
-                    cancel_reason: outcome.cancel_reason,
-                };
-                if let Err(e) = app_handle.emit(REPORT_COMPLETED_EVENT, &payload) {
-                    tracing::warn!(error = %e, "failed to emit report:completed");
-                }
-            }
-            Err(e) => {
-                tracing::error!(error = %e, %run_id, "generate completion task panicked");
-            }
+        let result = handle.completion.await;
+        if let Err(ref e) = result {
+            tracing::error!(error = %e, %run_id, "generate completion task panicked");
+        }
+        let payload = completion_payload(run_id, result);
+        if let Err(e) = app_handle.emit(REPORT_COMPLETED_EVENT, &payload) {
+            tracing::warn!(error = %e, "failed to emit report:completed");
         }
     });
 
@@ -3362,5 +3399,114 @@ mod tests {
             .await
             .expect("resolve");
         assert_eq!(resolved, Some(person.id));
+    }
+}
+
+/// DAY-115 / SF-2 regression tests for [`completion_payload`].
+///
+/// Kept in a separate `#[cfg(test)]` module (not the `dev-commands`-
+/// gated one above) so the failure-path assertion runs on every CI
+/// leg, including release builds where `dev-commands` is off.
+#[cfg(test)]
+mod completion_payload_tests {
+    use super::*;
+    use dayseam_core::{SyncRunCancelReason, SyncRunStatus};
+    use dayseam_orchestrator::GenerateOutcome;
+
+    #[tokio::test]
+    async fn completion_payload_on_success_copies_outcome_fields() {
+        let run_id = RunId::new();
+        let draft_id = Uuid::new_v4();
+        let outcome = GenerateOutcome {
+            run_id,
+            status: SyncRunStatus::Completed,
+            draft_id: Some(draft_id),
+            cancel_reason: None,
+        };
+
+        let payload = completion_payload(run_id, Ok(outcome));
+
+        assert_eq!(payload.run_id, run_id);
+        assert_eq!(payload.status, SyncRunStatus::Completed);
+        assert_eq!(payload.draft_id, Some(draft_id));
+        assert!(payload.cancel_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn completion_payload_on_user_cancel_preserves_reason() {
+        // `Cancelled` with a reason must round-trip so the UI can
+        // distinguish "user pressed Cancel" from a silent failure
+        // in its toast copy.
+        let run_id = RunId::new();
+        let outcome = GenerateOutcome {
+            run_id,
+            status: SyncRunStatus::Cancelled,
+            draft_id: None,
+            cancel_reason: Some(SyncRunCancelReason::User),
+        };
+
+        let payload = completion_payload(run_id, Ok(outcome));
+
+        assert_eq!(payload.status, SyncRunStatus::Cancelled);
+        assert_eq!(payload.cancel_reason, Some(SyncRunCancelReason::User));
+    }
+
+    /// The SF-2 regression guarantee: a `JoinError` (orchestrator
+    /// task panicked or was aborted) must produce a terminal
+    /// `Failed` payload so the frontend's `useGenerateReport` state
+    /// machine leaves the `generating` state. Pre-fix the
+    /// supervisor only logged and returned without emitting,
+    /// wedging the UI until app restart.
+    #[tokio::test]
+    async fn completion_payload_on_panic_is_failed_status() {
+        let run_id = RunId::new();
+        // Construct a genuine `JoinError` by awaiting a task that
+        // panics. This is the only way to build one — `JoinError`
+        // has no public constructor. Supervision would swallow the
+        // panic and make the error impossible to capture.
+        // bare-spawn: intentional — test-only JoinError factory
+        let handle: tokio::task::JoinHandle<GenerateOutcome> = tokio::spawn(async {
+            panic!("simulated orchestrator panic");
+        });
+        let join_err = handle
+            .await
+            .expect_err("panicking task must yield JoinError");
+
+        let payload = completion_payload(run_id, Err(join_err));
+
+        assert_eq!(payload.run_id, run_id, "run_id must survive the panic path");
+        assert_eq!(
+            payload.status,
+            SyncRunStatus::Failed,
+            "panicking completion task must synthesise a Failed terminal event"
+        );
+        assert!(payload.draft_id.is_none());
+        assert!(payload.cancel_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn completion_payload_on_abort_is_failed_status() {
+        // Aborting the completion task (shutdown path) also yields
+        // a `JoinError` whose kind is `Cancelled` rather than
+        // `Panic`. The UI cannot tell the two apart and does not
+        // need to — both are terminal non-success outcomes and the
+        // fix must behave identically.
+        let run_id = RunId::new();
+        // bare-spawn: intentional — test-only JoinError factory
+        let handle: tokio::task::JoinHandle<GenerateOutcome> = tokio::spawn(async {
+            // Park forever; the abort below tears us down.
+            std::future::pending().await
+        });
+        handle.abort();
+        let join_err = handle.await.expect_err("aborted task must yield JoinError");
+        assert!(
+            join_err.is_cancelled(),
+            "sanity check: abort path should produce JoinError::is_cancelled"
+        );
+
+        let payload = completion_payload(run_id, Err(join_err));
+
+        assert_eq!(payload.status, SyncRunStatus::Failed);
+        assert!(payload.draft_id.is_none());
     }
 }

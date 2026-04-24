@@ -6,6 +6,72 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+## [0.6.4]
+
+### Fixed
+
+- **DAY-115 / SF-1: production `tracing` subscriber is now actually
+  installed.** The desktop binary shipped a call to
+  [`dayseam_core::runtime::supervised_spawn`](crates/dayseam-core/src/runtime/supervised_spawn.rs)
+  from DAY-113 onwards, whose whole purpose was to replace a silent
+  panic-eating `tokio::spawn` with one that logs a panic via
+  `tracing::error!` before the task frees. What we missed: nothing in
+  [`apps/desktop/src-tauri/src/main.rs`](apps/desktop/src-tauri/src/main.rs)
+  ever initialised a `tracing` subscriber, so every
+  `tracing::error!`, `warn!`, `info!`, and `debug!` in the process —
+  including that panic-capture log — routed to the null global
+  dispatcher. F-10 ("panics in spawned tasks silently detach the
+  future") was effectively re-introduced the moment DAY-113 shipped;
+  the helper was doing its job, but the evidence never left the
+  process. v0.6.4 introduces
+  [`dayseam_desktop::tracing_init::init`](apps/desktop/src-tauri/src/tracing_init.rs),
+  called as the very first statement in `main`, which installs a
+  stderr `EnvFilter` subscriber (default
+  `dayseam_desktop=info,dayseam=info,warn`, `RUST_LOG` still wins).
+  `try_init` keeps it idempotent so tests that bring their own
+  subscriber via `tracing-test` don't panic the process. Two unit
+  tests in [`tracing_init.rs`](apps/desktop/src-tauri/src/tracing_init.rs)
+  pin both guarantees: `init_installs_a_global_dispatcher` asserts
+  `tracing::dispatcher::has_been_set()` after the call — which was
+  `false` pre-fix — and `init_is_idempotent` asserts three back-to-
+  back `init()` calls do not panic.
+
+- **DAY-115 / SF-2: `report_generate` now always emits a terminal
+  `report:completed` event.** The `Err(JoinError)` branch of the
+  supervised completion task in
+  [`apps/desktop/src-tauri/src/ipc/commands.rs`](apps/desktop/src-tauri/src/ipc/commands.rs)
+  used to only `tracing::error!` and return. Combined with SF-1 that
+  meant a panicking or aborted orchestrator completion future
+  produced zero output: the frontend's `useGenerateReport` state
+  machine sat on `generating` forever, no toast, no failed draft,
+  no way to recover short of relaunching the app. The fix extracts
+  a pure `completion_payload(run_id, Result<GenerateOutcome,
+  JoinError>) -> ReportCompletedEvent` helper which synthesises a
+  `SyncRunStatus::Failed` payload (with `draft_id: None`,
+  `cancel_reason: None`) on the `Err` branch, and the supervisor
+  now always forwards the resulting payload to
+  `app_handle.emit(REPORT_COMPLETED_EVENT, …)`. Four
+  `#[tokio::test]` regressions in
+  [`completion_payload_tests`](apps/desktop/src-tauri/src/ipc/commands.rs)
+  cover success, user-cancel (reason round-trips), panic
+  (`JoinError::panic`), and abort (`JoinError::cancelled`) — the
+  latter two both produce `Failed`. The success / cancel tests
+  also pin the `Ok` branch so a future refactor cannot accidentally
+  synthesise `Failed` for every call.
+
+### Notes
+
+- Both SF-1 and SF-2 were caught during the DAY-115 v0.5 capstone
+  review, not by a user report. The review was scheduled as the
+  documentation-only close-out of the v0.5 phase; because these
+  surfaced as confirmed production bugs that directly contradict
+  v0.5's "silent failures cannot happen again" hardening theme, the
+  `day_115_capstone_only` plan's inline-Medium-or-higher policy
+  kicks in and they ship as a patch before the review artefact
+  lands. The review document ([`docs/review/v0.5-review.md`](docs/review/v0.5-review.md))
+  records the same findings with their severity, disposition, and
+  what the regression test guards against.
+
 ## [0.6.3]
 
 ### Added

@@ -2,11 +2,20 @@
 
 use dayseam_db::LogRepo;
 use dayseam_desktop::ipc::{atlassian, broadcast_forwarder, commands, github};
-use dayseam_desktop::startup;
+use dayseam_desktop::{startup, tracing_init};
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager};
 
 fn main() {
+    // DAY-115 / SF-1. Install the `tracing` subscriber *before*
+    // anything else can log. `supervised_spawn`'s panic-capture
+    // `error!` call (DAY-113), the broadcast forwarder, every IPC
+    // command, and every plugin all route through this dispatcher;
+    // if it is not set they write to a null subscriber and the
+    // supervisor looks like it swallowed panics silently — exactly
+    // the F-10 regression DAY-113 was supposed to fix.
+    tracing_init::init();
+
     // One multi-threaded Tokio runtime powers the whole app: the
     // database pool, the broadcast forwarder, and per-run forwarders
     // all share it. `tauri::async_runtime` wraps the same machinery

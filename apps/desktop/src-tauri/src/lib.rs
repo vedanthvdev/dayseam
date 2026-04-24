@@ -7,5 +7,6 @@
 pub mod ipc;
 pub mod startup;
 pub mod state;
+pub mod tracing_init;
 
 pub use state::{AppState, RunHandle, RunRegistry};

@@ -31,6 +31,14 @@ sqlx = { version = "0.8", default-features = false, features = [
     "sqlite",
 ] }
 tracing = { workspace = true }
+# DAY-115/SF-1. Without a subscriber every `tracing::error!` /
+# `warn!` / `info!` written anywhere in the process — including the
+# panic-capture log in `dayseam_core::runtime::supervised_spawn` —
+# goes to the null dispatcher. That silently reinstated F-10 even
+# though DAY-113 added the panic-capture scaffolding, because the
+# desktop binary never installed a subscriber. `tracing_init::init`
+# wires one up at startup before any other Tauri plugin can log.
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tauri = { version = "2", features = [] }
 dayseam-core = { path = "../../../crates/dayseam-core" }
 dayseam-db = { path = "../../../crates/dayseam-db" }
