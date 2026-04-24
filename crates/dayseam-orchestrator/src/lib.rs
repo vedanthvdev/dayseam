@@ -61,6 +61,7 @@ pub mod orchestrator;
 pub mod registries;
 pub mod retention;
 pub mod save;
+pub mod schedule;
 pub mod startup;
 
 pub use orchestrator::{
@@ -70,5 +71,9 @@ pub use registries::{default_registries, ConnectorRegistry, DefaultRegistryConfi
 pub use retention::{
     resolve_cutoff, sweep as retention_sweep, sweep_with_resolved_cutoff, RetentionSchedule,
     SweepReport, DEFAULT_RETENTION_DAYS, POST_RUN_SWEEP_MIN_INTERVAL, RETENTION_DAYS_SETTING_KEY,
+};
+pub use schedule::{
+    plan_next_actions, run_scheduled_action, SatisfactionKind, ScheduleRunError, ScheduleState,
+    ScheduledAction, SchedulerRunRow, CATCH_UP_DAYS_HARD_CAP, SCHEDULE_CONFIG_KEY,
 };
 pub use startup::StartupReport;

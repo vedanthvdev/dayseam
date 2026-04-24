@@ -134,6 +134,14 @@ pub struct AppState {
     /// and avoids the trait-object shape there's no second
     /// implementation to justify.
     pub http: HttpClient,
+    /// DAY-130 session-scoped catch-up skip set. The cold-start
+    /// catch-up scan emits `scheduler:catch-up-suggested` so the UI
+    /// can render a banner; when the user clicks *Skip* we stash the
+    /// dismissed dates here so a subsequent scan on the same boot
+    /// (e.g. the hourly tick) does not re-surface them. Not
+    /// persisted on purpose — "skip once" should not mean "skip
+    /// forever".
+    pub scheduler_skip: crate::ipc::scheduler::SchedulerSkipSet,
 }
 
 impl AppState {
@@ -155,6 +163,7 @@ impl AppState {
             runs: Arc::new(RwLock::new(RunRegistry::new())),
             orchestrator,
             http,
+            scheduler_skip: crate::ipc::scheduler::SchedulerSkipSet::new(),
         }
     }
 

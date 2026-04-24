@@ -94,6 +94,10 @@ pub const PROD_COMMANDS: &[&str] = &[
     "github_validate_credentials",
     "github_sources_add",
     "github_sources_reconnect",
+    "scheduler_get_config",
+    "scheduler_set_config",
+    "scheduler_run_catch_up",
+    "scheduler_skip_catch_up",
 ];
 
 /// Dev-only Tauri command identifiers. Compiled in only when the
@@ -294,7 +298,7 @@ pub(crate) fn secret_store_key(sr: &SecretRef) -> String {
 /// arm still stubbed to `Err(Unsupported)`, so every Atlassian
 /// source the dialog added came back "connector unsupported" at
 /// report time.
-fn build_source_auth(
+pub(crate) fn build_source_auth(
     state: &AppState,
     source: &Source,
 ) -> Result<Arc<dyn AuthStrategy>, DayseamError> {

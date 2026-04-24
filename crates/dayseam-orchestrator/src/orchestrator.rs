@@ -236,6 +236,24 @@ impl Orchestrator {
         crate::generate::start(self.clone(), request).await
     }
 
+    /// Kick off a scheduled `generate_report` run (DAY-130). The only
+    /// difference from [`Self::generate_report`] is that the persisted
+    /// `sync_runs.trigger_json` column records
+    /// [`dayseam_core::SyncRunTrigger::Scheduler`] rather than
+    /// `User` — supersede-on-retry, fan-out, and the streaming
+    /// pipeline are all identical because a scheduled run is
+    /// user-facing in every other respect.
+    pub async fn generate_scheduled_report(
+        &self,
+        request: GenerateRequest,
+        trigger_kind: dayseam_core::SchedulerTriggerKind,
+    ) -> crate::generate::GenerateHandle {
+        let trigger = dayseam_core::SyncRunTrigger::Scheduler {
+            action: trigger_kind,
+        };
+        crate::generate::start_with_trigger(self.clone(), request, trigger).await
+    }
+
     /// Request that a live run be cancelled. If `run_id` is not
     /// currently in-flight (already terminated or never existed),
     /// this is a no-op — the state machine at the repo layer will

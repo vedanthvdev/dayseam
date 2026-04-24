@@ -105,6 +105,10 @@ fn main() {
         "github_validate_credentials",
         "github_sources_add",
         "github_sources_reconnect",
+        "scheduler_get_config",
+        "scheduler_set_config",
+        "scheduler_run_catch_up",
+        "scheduler_skip_catch_up",
     ];
     const DEV_COMMANDS: &[&str] = &[
         "settings_get",
@@ -138,6 +142,10 @@ fn main() {
         "github_validate_credentials",
         "github_sources_add",
         "github_sources_reconnect",
+        "scheduler_get_config",
+        "scheduler_set_config",
+        "scheduler_run_catch_up",
+        "scheduler_skip_catch_up",
         "dev_emit_toast",
         "dev_start_demo_run",
     ];

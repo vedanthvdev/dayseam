@@ -79,6 +79,9 @@ export type { Settings } from "./generated/Settings";
 export type { SettingsPatch } from "./generated/SettingsPatch";
 export type { ThemePreference } from "./generated/ThemePreference";
 
+export type { ScheduleConfig } from "./generated/ScheduleConfig";
+export type { SchedulerTriggerKind } from "./generated/SchedulerTriggerKind";
+
 export type { DayseamError } from "./generated/DayseamError";
 
 export type { JsonValue } from "./generated/serde_json/JsonValue";
@@ -128,6 +131,7 @@ import type { GitlabValidationResult as GitlabValidationResultT } from "./genera
 import type { AtlassianValidationResult as AtlassianValidationResultT } from "./generated/AtlassianValidationResult";
 import type { GithubValidationResult as GithubValidationResultT } from "./generated/GithubValidationResult";
 import type { SecretRef as SecretRefT } from "./generated/SecretRef";
+import type { ScheduleConfig as ScheduleConfigT } from "./generated/ScheduleConfig";
 
 /** Opaque handle used at the TS boundary for Tauri's `Channel<T>`. */
 export interface TauriChannel<T> {
@@ -385,6 +389,35 @@ export interface Commands {
     args: { sourceId: string; pat: string };
     result: string;
   };
+  /** DAY-130. Read the persisted scheduler configuration. Returns
+   *  `ScheduleConfig::default()` when the user has never opened the
+   *  Preferences dialog so the frontend always has a shape to bind
+   *  to. */
+  scheduler_get_config: {
+    args: Record<string, never>;
+    result: ScheduleConfigT;
+  };
+  /** DAY-130. Persist the scheduler configuration the Preferences
+   *  dialog built. Returns the stored value so the frontend can
+   *  replace its local cache with the exact JSON round-trip. */
+  scheduler_set_config: {
+    args: { config: ScheduleConfigT };
+    result: ScheduleConfigT;
+  };
+  /** DAY-130. Run the catch-up batch the user confirmed in the
+   *  banner. Dates are processed in chronological order; one
+   *  failure does not short-circuit the rest. */
+  scheduler_run_catch_up: {
+    args: { dates: string[] };
+    result: WriteReceiptT[];
+  };
+  /** DAY-130. Record a banner dismissal. The passed dates are added
+   *  to an in-memory, session-scoped skip set so a subsequent catch-
+   *  up scan does not re-surface them until the app restarts. */
+  scheduler_skip_catch_up: {
+    args: { dates: string[] };
+    result: null;
+  };
   /** Dev-only. Compiled out of release builds via `cfg(feature = "dev-commands")`. */
   dev_emit_toast: {
     args: { event: ToastEvent };
@@ -442,6 +475,10 @@ export const PROD_COMMANDS: readonly CommandName[] = [
   "github_validate_credentials",
   "github_sources_add",
   "github_sources_reconnect",
+  "scheduler_get_config",
+  "scheduler_set_config",
+  "scheduler_run_catch_up",
+  "scheduler_skip_catch_up",
 ] as const;
 
 /** Dev-only command identifiers. Gated behind the Rust

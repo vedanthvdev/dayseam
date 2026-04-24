@@ -81,6 +81,20 @@ struct PerSourceResult {
 }
 
 pub async fn start(orch: Orchestrator, request: GenerateRequest) -> GenerateHandle {
+    start_with_trigger(orch, request, SyncRunTrigger::User).await
+}
+
+/// Entry point variant used by the scheduler (DAY-130). Behaves
+/// identically to [`start`] except that the `sync_runs` row is
+/// stamped with the caller-supplied [`SyncRunTrigger`] — the hourly
+/// loop uses [`SyncRunTrigger::Scheduler`] so the frontend and the
+/// retention sweep can tell a scheduled run apart from a user one
+/// without re-deriving it from timestamps.
+pub async fn start_with_trigger(
+    orch: Orchestrator,
+    request: GenerateRequest,
+    trigger: SyncRunTrigger,
+) -> GenerateHandle {
     let run_id = RunId::new();
     // Canonical orchestrator stream construction (ARC-03): both
     // `generate_report` and `save_report` obtain their four channel
@@ -126,7 +140,7 @@ pub async fn start(orch: Orchestrator, request: GenerateRequest) -> GenerateHand
         id: run_id,
         started_at,
         finished_at: None,
-        trigger: SyncRunTrigger::User,
+        trigger,
         status: SyncRunStatus::Running,
         cancel_reason: None,
         superseded_by: None,

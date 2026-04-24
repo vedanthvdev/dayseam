@@ -24,6 +24,10 @@ connector-local-git = { path = "../connectors/connector-local-git" }
 sink-markdown-file = { path = "../sinks/sink-markdown-file" }
 
 chrono = { workspace = true }
+# DAY-130 scheduler's `ScheduleRunError` uses `thiserror` for typed
+# error surfaces the Tauri layer can match on. The `ScheduleConfig`
+# itself is defined in `dayseam-core`, so serde derives live there.
+thiserror = { workspace = true }
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 tracing = { workspace = true }
 uuid = { workspace = true }
@@ -52,6 +56,7 @@ cargo_metadata = "0.19"
 # Task 2's multi-source dedup test constructs an MR event with a
 # `commit_shas` metadata array so the orchestrator's rollup pass
 # observes the same shape the future GitLab MR enrichment will emit.
+# Also used by the DAY-130 schedule config JSON round-trip test.
 serde_json = { workspace = true }
 # DAY-89 CONS-v0.2-06. The `server_error_symmetry` test asserts the
 # atlassian + gitlab `map_status` helpers produce symmetric

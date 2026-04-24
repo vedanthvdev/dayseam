@@ -2,6 +2,11 @@ interface FooterProps {
   onOpenLogs?: () => void;
   onOpenIdentities?: () => void;
   onOpenSinks?: () => void;
+  /** DAY-130: opens the Preferences dialog (View + Scheduler).
+   *  The native macOS *Dayseam > Preferences…* menu item is the
+   *  other entry point; both route through the same state in
+   *  `App`. */
+  onOpenPreferences?: () => void;
   /** Optional — renders a "Save report" entry once a completed draft
    *  is available. Hidden while no draft exists so the status bar
    *  doesn't advertise an action that can't succeed. */
@@ -26,6 +31,7 @@ export function Footer({
   onOpenLogs,
   onOpenIdentities,
   onOpenSinks,
+  onOpenPreferences,
   onOpenSave,
 }: FooterProps) {
   return (
@@ -62,6 +68,17 @@ export function Footer({
             className="rounded px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-900"
           >
             Sinks
+          </button>
+        ) : null}
+        {onOpenPreferences ? (
+          <button
+            type="button"
+            onClick={onOpenPreferences}
+            title="Open preferences (⌘,)"
+            data-testid="footer-preferences"
+            className="rounded px-2 py-0.5 text-xs text-neutral-600 hover:bg-neutral-100 dark:text-neutral-300 dark:hover:bg-neutral-900"
+          >
+            Preferences
           </button>
         ) : null}
         {onOpenSave ? (

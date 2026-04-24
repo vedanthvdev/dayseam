@@ -27,7 +27,11 @@ pub use types::{
         Evidence, LogEntry, LogLevel, RenderedBullet, RenderedSection, ReportDraft, RunStatus,
         SourceRunState,
     },
-    run::{PerSourceState, SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger},
+    run::{
+        PerSourceState, SchedulerTriggerKind, SyncRun, SyncRunCancelReason, SyncRunStatus,
+        SyncRunTrigger,
+    },
+    schedule::{ScheduleConfig, SCHEDULE_CONFIG_KEY},
     settings::{Settings, SettingsPatch, ThemePreference},
     sink::{CapabilityConflict, Sink, SinkCapabilities, SinkConfig, SinkKind, WriteReceipt},
     source::{

@@ -36,6 +36,10 @@
     "allow-github-validate-credentials",
     "allow-github-sources-add",
     "allow-github-sources-reconnect",
+    "allow-scheduler-get-config",
+    "allow-scheduler-set-config",
+    "allow-scheduler-run-catch-up",
+    "allow-scheduler-skip-catch-up",
     "dialog:allow-open"
   ]
 }

@@ -6,4 +6,5 @@ pub mod broadcast_forwarder;
 pub mod commands;
 pub mod github;
 pub mod run_forwarder;
+pub mod scheduler;
 pub mod secret;

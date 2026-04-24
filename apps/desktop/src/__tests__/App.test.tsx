@@ -3,10 +3,27 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import App from "../App";
 import { THEME_STORAGE_KEY } from "../theme";
 import {
+  emitEvent,
   registerInvokeHandler,
   registerOnboardingComplete,
   resetTauriMocks,
 } from "./tauri-mock";
+
+// DAY-130 default scheduler config so every test here can render
+// `<PreferencesDialog>` without a 15-line fixture repeat. Tests that
+// care about a specific scheduler shape override this handler in
+// their body.
+function registerDefaultSchedulerConfig(): void {
+  registerInvokeHandler("scheduler_get_config", async () => ({
+    enabled: false,
+    days_of_week: [],
+    target_time: "18:00:00",
+    earliest_start: "12:00:00",
+    catch_up_days: 7,
+    sink_id: null,
+    template_id: null,
+  }));
+}
 
 describe("App", () => {
   beforeEach(() => {
@@ -20,6 +37,7 @@ describe("App", () => {
     // the "first-run" test override one input to flip the gate.
     resetTauriMocks();
     registerOnboardingComplete();
+    registerDefaultSchedulerConfig();
   });
 
   afterEach(async () => {
@@ -73,50 +91,40 @@ describe("App", () => {
     ).toBeNull();
   });
 
-  it("renders a theme radio group with Light / System / Dark", async () => {
+  // DAY-130: the theme control moved from the persistent header
+  // into the Preferences dialog and the native *View > Theme*
+  // menu. The header no longer renders a theme radio group; the
+  // deeper coverage lives in `PreferencesDialog.test.tsx`.
+  it("does not render a theme radio group in the header", async () => {
     render(<App />);
-    await screen.findByRole("radiogroup", { name: /theme/i });
-    const group = screen.getByRole("radiogroup", { name: /theme/i });
-    expect(group).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /^light$/i })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /^system$/i })).toBeInTheDocument();
-    expect(screen.getByRole("radio", { name: /^dark$/i })).toBeInTheDocument();
+    await screen.findByRole("heading", { level: 1, name: /dayseam/i });
+    expect(
+      screen.queryByRole("radiogroup", { name: /theme/i }),
+    ).not.toBeInTheDocument();
   });
 
-  it("writes data-theme on <html> when the user picks a concrete theme", async () => {
+  it("opens the Preferences dialog (with the theme control) via the footer button", async () => {
     render(<App />);
-    await screen.findByRole("radio", { name: /^dark$/i });
-    fireEvent.click(screen.getByRole("radio", { name: /^dark$/i }));
+    const prefsButton = await screen.findByTestId("footer-preferences");
+    fireEvent.click(prefsButton);
+    const dialog = await screen.findByTestId("preferences-dialog");
+    expect(dialog).toBeInTheDocument();
+    // The Theme radio group is now inside the dialog.
+    expect(
+      screen.getByRole("radiogroup", { name: /theme/i }),
+    ).toBeInTheDocument();
+  });
+
+  it("updates the theme when the native View menu fires view:set-theme", async () => {
+    render(<App />);
+    await screen.findByRole("heading", { level: 1, name: /dayseam/i });
+    // The native macOS *View > Theme > Dark* item emits this event;
+    // `ThemeProvider` listens for it and routes it to `setTheme`.
+    await act(async () => {
+      emitEvent("view:set-theme", "dark");
+    });
     expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
-    expect(document.documentElement.classList.contains("dark")).toBe(true);
     expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("dark");
-
-    fireEvent.click(screen.getByRole("radio", { name: /^light$/i }));
-    expect(document.documentElement.getAttribute("data-theme")).toBe("light");
-    expect(document.documentElement.classList.contains("dark")).toBe(false);
-    expect(localStorage.getItem(THEME_STORAGE_KEY)).toBe("light");
-  });
-
-  it("marks the selected theme option via aria-checked", async () => {
-    render(<App />);
-    await screen.findByRole("radio", { name: /^dark$/i });
-    fireEvent.click(screen.getByRole("radio", { name: /^dark$/i }));
-    expect(
-      screen.getByRole("radio", { name: /^dark$/i }),
-    ).toHaveAttribute("aria-checked", "true");
-    expect(
-      screen.getByRole("radio", { name: /^light$/i }),
-    ).toHaveAttribute("aria-checked", "false");
-  });
-
-  it("restores the last persisted theme on mount", async () => {
-    localStorage.setItem(THEME_STORAGE_KEY, "dark");
-    render(<App />);
-    await screen.findByRole("radio", { name: /^dark$/i });
-    expect(
-      screen.getByRole("radio", { name: /^dark$/i }),
-    ).toHaveAttribute("aria-checked", "true");
-    expect(document.documentElement.getAttribute("data-theme")).toBe("dark");
   });
 
   // DOGFOOD-v0.4-06: sticky footer regression. The bug was that

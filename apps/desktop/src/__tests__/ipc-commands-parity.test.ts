@@ -81,6 +81,10 @@ const commandSurface: Record<keyof Commands, true> = {
   github_validate_credentials: true,
   github_sources_add: true,
   github_sources_reconnect: true,
+  scheduler_get_config: true,
+  scheduler_set_config: true,
+  scheduler_run_catch_up: true,
+  scheduler_skip_catch_up: true,
   dev_emit_toast: true,
   dev_start_demo_run: true,
 };

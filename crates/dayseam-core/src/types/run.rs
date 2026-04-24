@@ -61,9 +61,15 @@ pub struct SyncRun {
     pub per_source_state: Vec<PerSourceState>,
 }
 
-/// What started this run. Phase 2 only ever emits
-/// [`SyncRunTrigger::User`] and [`SyncRunTrigger::Retry`]; scheduler and
-/// startup triggers land when the scheduler ships (v0.3).
+/// What started this run. Phase 2 only ever emitted
+/// [`SyncRunTrigger::User`] and [`SyncRunTrigger::Retry`];
+/// DAY-130 promoted [`SyncRunTrigger::Scheduler`] to a real variant so
+/// the hourly scheduler loop can stamp its runs with a kind the
+/// frontend can filter by and the retention / report views can label
+/// as "scheduled". The optional `kind` discriminator carries which
+/// scheduler action produced the row so planner tests and post-mortem
+/// log readers can tell an in-day tick apart from a final pass or a
+/// catch-up sweep without parsing timestamps.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[ts(export)]
@@ -73,6 +79,29 @@ pub enum SyncRunTrigger {
     /// User retried a previous run from the UI. Carries the prior
     /// `run_id` so the orchestrator can link the two for audit.
     Retry { previous_run_id: RunId },
+    /// Fired by the background scheduler (DAY-130). The scheduler
+    /// owns re-running a day when the window has already passed;
+    /// `action` tells observability which flavour of action landed
+    /// this row (the field name avoids colliding with serde's
+    /// external `kind` tag).
+    Scheduler { action: SchedulerTriggerKind },
+}
+
+/// Which scheduler action produced a [`SyncRunTrigger::Scheduler`]
+/// row. Kept on the persisted trigger blob so an integration test
+/// can assert the 7-day simulation produced the exact sequence
+/// `InDay, InDay, …, FinalPass, CatchUp`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[serde(rename_all = "snake_case")]
+#[ts(export)]
+pub enum SchedulerTriggerKind {
+    /// Rolling in-window tick, target is today.
+    InDay,
+    /// First tick of a new calendar day re-running the previous
+    /// scheduled day to catch late edits.
+    FinalPass,
+    /// Cold-start catch-up after a multi-day absence.
+    CatchUp,
 }
 
 /// Terminal lifecycle status for a [`SyncRun`]. The state machine

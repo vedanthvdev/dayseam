@@ -5,6 +5,7 @@
 //! IPC plumbing without booting an actual Tauri runtime.
 
 pub mod ipc;
+pub mod scheduler_task;
 pub mod startup;
 pub mod state;
 pub mod tracing_init;

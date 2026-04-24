@@ -1,8 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use dayseam_db::LogRepo;
-use dayseam_desktop::ipc::{atlassian, broadcast_forwarder, commands, github};
-use dayseam_desktop::{startup, tracing_init};
+use dayseam_desktop::ipc::{atlassian, broadcast_forwarder, commands, github, scheduler};
+use dayseam_desktop::{scheduler_task, startup, tracing_init};
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
 use tauri::{Emitter, Manager};
 
@@ -57,7 +57,15 @@ fn main() {
 
             let handle = app.handle().clone();
             let logs = LogRepo::new(pool);
-            let _broadcast_task = broadcast_forwarder::spawn(handle, app_bus, logs);
+            let _broadcast_task = broadcast_forwarder::spawn(handle.clone(), app_bus, logs);
+
+            // DAY-130: spawn the scheduler background loop after
+            // `app.manage(state)` so the task's `AppHandle::state()`
+            // lookups find the live `AppState`. The first tick fires
+            // immediately so a cold boot surfaces the catch-up
+            // banner on first paint instead of popping up an hour
+            // later.
+            scheduler_task::spawn(handle);
 
             // DAY-119: install a native application menu. The macOS
             // build used to ship with Tauri's default window menu
@@ -75,6 +83,12 @@ fn main() {
             // behave like every other Mac app.
             let check_updates =
                 MenuItemBuilder::with_id("check_for_updates", "Check for Updates…").build(app)?;
+            // DAY-130: Preferences… under the Dayseam submenu. The
+            // item emits `menu://open-preferences` which the
+            // frontend listens for and opens `PreferencesDialog`.
+            let preferences = MenuItemBuilder::with_id("open_preferences", "Preferences…")
+                .accelerator("Cmd+,")
+                .build(app)?;
             let about_metadata = AboutMetadataBuilder::new()
                 .name(Some("Dayseam"))
                 .version(Some(env!("CARGO_PKG_VERSION")))
@@ -83,6 +97,8 @@ fn main() {
             let app_submenu = SubmenuBuilder::new(app, "Dayseam")
                 .about(Some(about_metadata))
                 .item(&check_updates)
+                .separator()
+                .item(&preferences)
                 .separator()
                 .services()
                 .separator()
@@ -101,6 +117,26 @@ fn main() {
                 .paste()
                 .select_all()
                 .build()?;
+            // DAY-130 part 1: native *View > Theme* submenu. Moving
+            // the Light/System/Dark control out of the always-visible
+            // header reclaims screen real estate for a setting users
+            // touch once and forget. The menu items carry stable ids
+            // `view_theme_{light,system,dark}`; selecting one emits
+            // `view:set-theme` with the matching payload so the
+            // existing `ThemeProvider.setTheme` stays the single
+            // source of truth for theme state.
+            let theme_light = MenuItemBuilder::with_id("view_theme_light", "Light").build(app)?;
+            let theme_system =
+                MenuItemBuilder::with_id("view_theme_system", "System").build(app)?;
+            let theme_dark = MenuItemBuilder::with_id("view_theme_dark", "Dark").build(app)?;
+            let theme_submenu = SubmenuBuilder::new(app, "Theme")
+                .item(&theme_light)
+                .item(&theme_system)
+                .item(&theme_dark)
+                .build()?;
+            let view_submenu = SubmenuBuilder::new(app, "View")
+                .item(&theme_submenu)
+                .build()?;
             let window_submenu = SubmenuBuilder::new(app, "Window")
                 .minimize()
                 .maximize()
@@ -108,13 +144,18 @@ fn main() {
                 .close_window()
                 .build()?;
             let menu = MenuBuilder::new(app)
-                .items(&[&app_submenu, &edit_submenu, &window_submenu])
+                .items(&[&app_submenu, &edit_submenu, &view_submenu, &window_submenu])
                 .build()?;
             app.set_menu(menu)?;
 
             let check_updates_id = check_updates.id().clone();
+            let preferences_id = preferences.id().clone();
+            let theme_light_id = theme_light.id().clone();
+            let theme_system_id = theme_system.id().clone();
+            let theme_dark_id = theme_dark.id().clone();
             app.on_menu_event(move |app_handle, event| {
-                if event.id() == &check_updates_id {
+                let id = event.id();
+                if id == &check_updates_id {
                     // The frontend's `useUpdater` hook listens for
                     // this event and calls `check()` — which drives
                     // the same code path the automatic check on
@@ -125,6 +166,14 @@ fn main() {
                     // side; emitting keeps a single source of truth
                     // for updater status.
                     let _ = app_handle.emit("menu://check-for-updates", ());
+                } else if id == &preferences_id {
+                    let _ = app_handle.emit("menu://open-preferences", ());
+                } else if id == &theme_light_id {
+                    let _ = app_handle.emit("view:set-theme", "light");
+                } else if id == &theme_system_id {
+                    let _ = app_handle.emit("view:set-theme", "system");
+                } else if id == &theme_dark_id {
+                    let _ = app_handle.emit("view:set-theme", "dark");
                 }
             });
 
@@ -169,6 +218,10 @@ fn main() {
         github::github_validate_credentials,
         github::github_sources_add,
         github::github_sources_reconnect,
+        scheduler::scheduler_get_config,
+        scheduler::scheduler_set_config,
+        scheduler::scheduler_run_catch_up,
+        scheduler::scheduler_skip_catch_up,
         commands::dev_emit_toast,
         commands::dev_start_demo_run,
     ]);
@@ -206,6 +259,10 @@ fn main() {
         github::github_validate_credentials,
         github::github_sources_add,
         github::github_sources_reconnect,
+        scheduler::scheduler_get_config,
+        scheduler::scheduler_set_config,
+        scheduler::scheduler_run_catch_up,
+        scheduler::scheduler_skip_catch_up,
     ]);
 
     builder

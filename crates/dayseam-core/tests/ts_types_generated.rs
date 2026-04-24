@@ -20,10 +20,10 @@ use dayseam_core::{
     GithubValidationResult, GitlabValidationResult, Identity, Link, LocalRepo, LogEntry, LogEvent,
     LogLevel, PerSourceState, Person, Privacy, ProgressEvent, ProgressPhase, RawRef,
     RenderedBullet, RenderedSection, ReportCompletedEvent, ReportDraft, RunId, RunStatus,
-    SecretRef, Settings, SettingsPatch, Sink, SinkCapabilities, SinkConfig, SinkKind, Source,
-    SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind, SourcePatch,
-    SourceRunState, SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger, ThemePreference,
-    ToastEvent, ToastSeverity, WriteReceipt,
+    ScheduleConfig, SecretRef, Settings, SettingsPatch, Sink, SinkCapabilities, SinkConfig,
+    SinkKind, Source, SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind,
+    SourcePatch, SourceRunState, SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger,
+    ThemePreference, ToastEvent, ToastSeverity, WriteReceipt,
 };
 use ts_rs::{Config, TS};
 
@@ -99,6 +99,8 @@ fn export_all(out_dir: &Path) {
     Settings::export_all(&cfg).expect("export Settings");
     SettingsPatch::export_all(&cfg).expect("export SettingsPatch");
     ThemePreference::export_all(&cfg).expect("export ThemePreference");
+
+    ScheduleConfig::export_all(&cfg).expect("export ScheduleConfig");
 
     DayseamError::export_all(&cfg).expect("export DayseamError");
 
