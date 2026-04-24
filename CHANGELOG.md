@@ -49,7 +49,7 @@ All notable changes to Dayseam are documented in this file. The format follows
        the typed URL diverges from the existing source we auto-flip
        `tokenMode` to `"paste"` and disable the reuse radio so the
        submit never tries to reuse a secret from a different
-       workspace. The `"modulrfinance"` placeholder/error copy has
+       workspace. The `"company"` placeholder/error copy has
        been replaced with neutral `"yourcompany"` across
        `atlassian-workspace-url.ts`. (b) the add flow now exposes an
        optional **Label** input; when filled, a best-effort
@@ -1231,7 +1231,7 @@ dogfooder doesn't hit them:
   surface closes in `e2e/features/github/connect-and-report.feature`,
   which drives the real `AddGithubSourceDialog` end-to-end
   (validate → add-source → generate-report) and asserts the
-  deterministic "Opened modulr/foo#42" bullet lands under
+  deterministic "Opened company/foo#42" bullet lands under
   `## Completed`; the mock IPC's `report_get` now appends a
   catalogue-seeded GitHub bullet whenever a GitHub source is
   registered, mirroring the Atlassian bullet-emission arms in
@@ -1715,7 +1715,7 @@ dogfooder doesn't hit them:
   who typoed a hostname — or pasted a phishing link — would ship
   their PAT to `https://evil.com/rest/api/3/myself` on the Validate
   button press, carrying `Authorization: Basic <base64(email:token)>`.
-  New error reason: *"Only Atlassian Cloud hosts (e.g. `modulrfinance.atlassian.net`)
+  New error reason: *"Only Atlassian Cloud hosts (e.g. `company.atlassian.net`)
   are supported."* **CORR-v0.2-01 — `confluence_page` entity on
   `ConfluenceComment` events.** `normalise_comment` now pushes a
   `confluence_page` entity onto every comment event via a new
@@ -2889,7 +2889,7 @@ tagged release — nothing has shipped to a user before now.
   (`features/`, `steps/ui-steps/`, `page-objects/<domain>/`,
   `fixtures/`) and naming conventions (`<domain>-steps.ts`,
   `<domain>-page.ts`, `<domain>-page-locators.ts`, `@tag` scenarios)
-  match Modulr's `customer-portal-v2` Playwright suite so any
+  match company's `customer-portal-v2` Playwright suite so any
   reader familiar with one can navigate the other immediately;
   page objects keep selectors out of step bodies and the single
   `mergeTests` entry point in `fixtures/base-fixtures.ts` is the

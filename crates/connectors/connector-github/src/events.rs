@@ -496,7 +496,7 @@ mod tests {
             "id": "12345",
             "type": "PullRequestEvent",
             "actor": { "id": 17, "login": "vedanth" },
-            "repo": { "id": 99, "name": "modulr/foo" },
+            "repo": { "id": 99, "name": "company/foo" },
             "created_at": "2026-04-20T10:00:00Z",
             "payload": {
                 "action": "opened",
@@ -505,7 +505,7 @@ mod tests {
                     "id": 777,
                     "number": 42,
                     "title": "Add payments slice",
-                    "html_url": "https://github.com/modulr/foo/pull/42",
+                    "html_url": "https://github.com/company/foo/pull/42",
                     "state": "open",
                     "user": { "id": 17, "login": "vedanth" },
                     "merged": false,
@@ -516,7 +516,7 @@ mod tests {
         let ev: GithubEvent = serde_json::from_value(raw).unwrap();
         assert_eq!(ev.event_type, "PullRequestEvent");
         assert_eq!(ev.actor.login, "vedanth");
-        assert_eq!(ev.repo.name, "modulr/foo");
+        assert_eq!(ev.repo.name, "company/foo");
 
         let payload = GithubEventPayload::from_raw(&ev.event_type, &ev.payload);
         match payload {

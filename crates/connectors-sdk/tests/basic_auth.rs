@@ -40,7 +40,7 @@ fn client() -> HttpClient {
 async fn basic_auth_attaches_authorization_header_on_live_request() {
     let server = MockServer::start().await;
 
-    let email = "user@modulrfinance.com";
+    let email = "user@company.com";
     let token = "api-token-123";
     let expected = format!(
         "Basic {}",
@@ -157,7 +157,7 @@ async fn basic_auth_403_surfaces_as_raw_response_not_pre_classified_error() {
 #[tokio::test]
 async fn basic_auth_shared_handle_produces_equal_headers_live() {
     let server = MockServer::start().await;
-    let email = "shared@modulrfinance.com";
+    let email = "shared@company.com";
     let token = "shared-token";
     let expected = format!(
         "Basic {}",
@@ -229,14 +229,14 @@ async fn basic_auth_shared_handle_produces_equal_headers_live() {
 async fn basic_auth_separate_handles_produce_distinct_headers_live() {
     let server = MockServer::start().await;
 
-    let jira_email = "jira-bot@modulrfinance.com";
+    let jira_email = "jira-bot@company.com";
     let jira_token = "jira-token";
     let jira_header = format!(
         "Basic {}",
         BASE64_STANDARD.encode(format!("{jira_email}:{jira_token}"))
     );
 
-    let conf_email = "confluence-bot@modulrfinance.com";
+    let conf_email = "confluence-bot@company.com";
     let conf_token = "confluence-token";
     let conf_header = format!(
         "Basic {}",

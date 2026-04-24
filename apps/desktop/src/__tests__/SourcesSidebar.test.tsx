@@ -311,10 +311,10 @@ describe("SourcesSidebar", () => {
     const BROKEN_JIRA: Source = {
       id: "jira-1",
       kind: "Jira",
-      label: "modulrfinance Jira",
+      label: "company Jira",
       config: {
         Jira: {
-          workspace_url: "https://modulrfinance.atlassian.net",
+          workspace_url: "https://company.atlassian.net",
           email: "ved@example.com",
         },
       },
@@ -361,7 +361,7 @@ describe("SourcesSidebar", () => {
     // URL and email prefill from the source config.
     expect(
       screen.getByTestId("add-atlassian-workspace-url"),
-    ).toHaveValue("https://modulrfinance.atlassian.net");
+    ).toHaveValue("https://company.atlassian.net");
     expect(screen.getByTestId("add-atlassian-email")).toHaveValue(
       "ved@example.com",
     );

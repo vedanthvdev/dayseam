@@ -180,7 +180,7 @@ fn gitlab_mrs_render_under_merge_requests_section() {
 
     let opened = mr_opened_event(
         src,
-        "modulr/payments",
+        "company/payments",
         321,
         "17",
         9,
@@ -219,7 +219,7 @@ fn gitlab_mrs_render_under_merge_requests_section() {
     assert!(
         mr_section.bullets[0]
             .text
-            .contains("**modulr/payments!321**"),
+            .contains("**company/payments!321**"),
         "bullet must use `**project!iid**` prefix, got {:?}",
         mr_section.bullets[0].text,
     );
@@ -245,11 +245,11 @@ fn github_prs_render_under_merge_requests_section() {
     let mut input = fixture_input();
     input.source_identities = vec![self_github_identity(src, "vedanth")];
 
-    let opened = github_pr_opened_event(src, "modulr/api", 42, "vedanth", 9, "fix: null tax code");
+    let opened = github_pr_opened_event(src, "company/api", 42, "vedanth", 9, "fix: null tax code");
     let mut reviewed = opened.clone();
     reviewed.id = ActivityEvent::deterministic_id(
         &src.to_string(),
-        "modulr/api#42",
+        "company/api#42",
         "GitHubPullRequestReviewed",
     );
     reviewed.kind = ActivityKind::GitHubPullRequestReviewed;
@@ -267,7 +267,7 @@ fn github_prs_render_under_merge_requests_section() {
         .expect("MR section must render for GitHub PRs");
     assert_eq!(mr_section.bullets.len(), 1);
     assert!(
-        mr_section.bullets[0].text.contains("**modulr/api#42**"),
+        mr_section.bullets[0].text.contains("**company/api#42**"),
         "bullet must use `**owner/repo#number**` prefix, got {:?}",
         mr_section.bullets[0].text,
     );
@@ -300,7 +300,7 @@ fn commits_rolled_into_mr_render_once() {
     );
     let mr_event = mr_opened_event(
         src,
-        "modulr/payments",
+        "company/payments",
         321,
         "17",
         10,

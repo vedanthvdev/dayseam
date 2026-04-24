@@ -26,10 +26,10 @@ fn http() -> HttpClient {
 
 fn auth() -> BasicAuth {
     BasicAuth::atlassian(
-        "vedanth@modulrfinance.com",
+        "vedanth@company.com",
         "api-token-xyz",
         "dayseam.atlassian",
-        "vedanth@modulrfinance.com",
+        "vedanth@company.com",
     )
 }
 
@@ -49,7 +49,7 @@ async fn discover_cloud_returns_account_triple_on_200() {
         .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
             "accountId": "5d53f3cbc6b9320d9ea5bdc2",
             "displayName": "Vedanth Vasudev",
-            "emailAddress": "vedanth@modulrfinance.com",
+            "emailAddress": "vedanth@company.com",
         })))
         .expect(1)
         .mount(&server)
@@ -65,10 +65,7 @@ async fn discover_cloud_returns_account_triple_on_200() {
 
     assert_eq!(cloud.account.account_id, "5d53f3cbc6b9320d9ea5bdc2");
     assert_eq!(cloud.account.display_name, "Vedanth Vasudev");
-    assert_eq!(
-        cloud.account.email.as_deref(),
-        Some("vedanth@modulrfinance.com")
-    );
+    assert_eq!(cloud.account.email.as_deref(), Some("vedanth@company.com"));
     // Under Basic auth, `cloud_id` is intentionally `None` — this is
     // the OAuth-era placeholder the plan reserved in DAY-73.
     assert!(cloud.account.cloud_id.is_none());

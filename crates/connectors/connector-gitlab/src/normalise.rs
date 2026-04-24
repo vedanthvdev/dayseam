@@ -639,7 +639,7 @@ mod tests {
     /// repo rather than falling back to the `/` sentinel.
     #[test]
     fn push_event_emits_repo_entity_when_path_known() {
-        let paths = paths_with(42, "modulr/modulo-local-infra");
+        let paths = paths_with(42, "company/modulo-local-infra");
         let e = normalise_event(source(), "https://gitlab.example", &push_event(), &paths).unwrap();
 
         let repo_entity = e
@@ -647,7 +647,7 @@ mod tests {
             .iter()
             .find(|r| r.kind == EntityKind::Repo)
             .expect("normalised event must carry a repo entity when the lookup succeeded");
-        assert_eq!(repo_entity.external_id, "modulr/modulo-local-infra");
+        assert_eq!(repo_entity.external_id, "company/modulo-local-infra");
         assert_eq!(repo_entity.label.as_deref(), Some("modulo-local-infra"));
     }
 

@@ -1,7 +1,7 @@
 // Single entry point a step definition uses to reach every page
 // object. `pages.report.clickGenerate()` reads naturally in a step
 // body and keeps each page object's constructor out of the step
-// code. Modulr's customer-portal-v2 suite uses the same factory
+// code. company's customer-portal-v2 suite uses the same factory
 // pattern; we keep the shape familiar while only instantiating the
 // pages this repo actually needs.
 

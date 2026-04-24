@@ -192,7 +192,7 @@ async fn unreachable_host_surfaces_transport_connect_with_hostname_in_message() 
     // `reqwest::Error` into `http.transport.connect` (still prefixed
     // `http.transport.*` so existing log parsers keep matching) and
     // splice the host into the message so "couldn't reach
-    // `git.modulrfinance.io`" appears in the error card, pointing the
+    // `git.company.io`" appears in the error card, pointing the
     // user straight at their VPN.
     //
     // Port 1 is reliably unbound on every dev host, so this exercises

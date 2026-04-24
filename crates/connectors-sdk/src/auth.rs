@@ -563,7 +563,7 @@ mod tests {
     async fn basic_auth_header_is_base64_email_colon_token() {
         let strat = BasicAuth::atlassian("foo@example.com", "bar", "svc", "acct");
         let client = reqwest::Client::new();
-        let req = client.get("https://modulr.atlassian.net/rest/api/3/myself");
+        let req = client.get("https://company.atlassian.net/rest/api/3/myself");
         let out = strat.authenticate(req).await.expect("ok");
         let built = out.build().expect("build");
         assert_eq!(
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn basic_auth_debug_does_not_leak_token_or_encoded_header() {
         let strat = BasicAuth::atlassian(
-            "user@modulrfinance.com",
+            "user@company.com",
             "super-secret-api-token",
             "dayseam.atlassian",
             "acme",
@@ -595,8 +595,8 @@ mod tests {
             "plain api_token leaked via Debug: {rendered}"
         );
         // The full `Basic <base64>` header value must also not appear.
-        // We check the canonical base64 of `user@modulrfinance.com:super-secret-api-token`.
-        let plain = "user@modulrfinance.com:super-secret-api-token";
+        // We check the canonical base64 of `user@company.com:super-secret-api-token`.
+        let plain = "user@company.com:super-secret-api-token";
         let encoded = BASE64_STANDARD.encode(plain);
         assert!(
             !rendered.contains(&encoded),
@@ -607,7 +607,7 @@ mod tests {
         // the descriptor; spell that out so a future refactor that
         // moves email into the SecretString has to justify why.
         assert!(
-            rendered.contains("user@modulrfinance.com"),
+            rendered.contains("user@company.com"),
             "descriptor should still render the (non-secret) email: {rendered}"
         );
     }
@@ -620,14 +620,9 @@ mod tests {
     /// case and shape-distinct in the separate case.
     #[test]
     fn basic_auth_same_keychain_handle_produces_equal_descriptors() {
-        let a = BasicAuth::atlassian(
-            "shared@modulrfinance.com",
-            "token-A",
-            "dayseam.atlassian",
-            "acme",
-        );
+        let a = BasicAuth::atlassian("shared@company.com", "token-A", "dayseam.atlassian", "acme");
         let b = BasicAuth::atlassian(
-            "shared@modulrfinance.com",
+            "shared@company.com",
             "token-B", // different live token value, same keychain handle
             "dayseam.atlassian",
             "acme",
@@ -649,13 +644,13 @@ mod tests {
     #[test]
     fn basic_auth_different_keychain_handles_stay_independent() {
         let jira = BasicAuth::atlassian(
-            "jira-bot@modulrfinance.com",
+            "jira-bot@company.com",
             "jira-token",
             "dayseam.atlassian",
             "acme-jira",
         );
         let confluence = BasicAuth::atlassian(
-            "confluence-bot@modulrfinance.com",
+            "confluence-bot@company.com",
             "confluence-token",
             "dayseam.atlassian",
             "acme-confluence",
@@ -669,13 +664,13 @@ mod tests {
         // a product-specific service-account email.
         match jira.descriptor() {
             AuthDescriptor::Basic { email, .. } => {
-                assert_eq!(email, "jira-bot@modulrfinance.com");
+                assert_eq!(email, "jira-bot@company.com");
             }
             other => panic!("expected Basic descriptor, got {other:?}"),
         }
         match confluence.descriptor() {
             AuthDescriptor::Basic { email, .. } => {
-                assert_eq!(email, "confluence-bot@modulrfinance.com");
+                assert_eq!(email, "confluence-bot@company.com");
             }
             other => panic!("expected Basic descriptor, got {other:?}"),
         }
@@ -704,7 +699,7 @@ mod tests {
     /// at the wrong root cause.
     #[tokio::test]
     async fn basic_auth_preserves_utf8_in_email_and_token() {
-        let email = "vedanth.vasudev+🌊@modulrfinance.com";
+        let email = "vedanth.vasudev+🌊@company.com";
         let token = "token-with-🔑-emoji";
         let strat = BasicAuth::atlassian(email, token, "svc", "acct");
         let client = reqwest::Client::new();

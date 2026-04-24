@@ -121,7 +121,7 @@ fn parse_workspace_url(input: &str) -> Result<Url, DayseamError> {
     // is the shape wiremock hands out, and nothing in production
     // ever parses one. Both scheme and host are checked together so
     // the existing DOG-v0.2-03 guard still rejects
-    // `http://modulrfinance.atlassian.net` (downgrade over cleartext)
+    // `http://company.atlassian.net` (downgrade over cleartext)
     // and `https://attacker.example` (wrong tenant) in every build —
     // the loopback carve-out is the *only* relaxation.
     let is_test_loopback = workspace_host_is_test_loopback(&host_lower);
@@ -895,31 +895,31 @@ mod tests {
 
     #[test]
     fn parse_workspace_url_accepts_canonical_form() {
-        let url = parse_workspace_url("https://modulrfinance.atlassian.net").unwrap();
+        let url = parse_workspace_url("https://company.atlassian.net").unwrap();
         assert_eq!(
             canonical_workspace_url(&url),
-            "https://modulrfinance.atlassian.net"
+            "https://company.atlassian.net"
         );
     }
 
     #[test]
     fn parse_workspace_url_strips_trailing_slash() {
-        let url = parse_workspace_url("https://modulrfinance.atlassian.net/").unwrap();
+        let url = parse_workspace_url("https://company.atlassian.net/").unwrap();
         assert_eq!(
             canonical_workspace_url(&url),
-            "https://modulrfinance.atlassian.net"
+            "https://company.atlassian.net"
         );
     }
 
     #[test]
     fn parse_workspace_url_rejects_non_https() {
-        let err = parse_workspace_url("http://modulrfinance.atlassian.net").unwrap_err();
+        let err = parse_workspace_url("http://company.atlassian.net").unwrap_err();
         assert_eq!(err.code(), error_codes::IPC_ATLASSIAN_INVALID_WORKSPACE_URL);
     }
 
     #[test]
     fn parse_workspace_url_rejects_path_segments() {
-        let err = parse_workspace_url("https://modulrfinance.atlassian.net/wiki").unwrap_err();
+        let err = parse_workspace_url("https://company.atlassian.net/wiki").unwrap_err();
         assert_eq!(err.code(), error_codes::IPC_ATLASSIAN_INVALID_WORKSPACE_URL);
     }
 
@@ -932,7 +932,7 @@ mod tests {
     #[test]
     fn parse_workspace_url_rejects_scheme_missing() {
         // URLs without a scheme fail `Url::parse` with "relative URL without a base".
-        let err = parse_workspace_url("modulrfinance.atlassian.net").unwrap_err();
+        let err = parse_workspace_url("company.atlassian.net").unwrap_err();
         assert_eq!(err.code(), error_codes::IPC_ATLASSIAN_INVALID_WORKSPACE_URL);
     }
 

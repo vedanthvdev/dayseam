@@ -393,7 +393,7 @@ mod tests {
     fn repo() -> GithubRepo {
         GithubRepo {
             id: 99,
-            name: "modulr/foo".into(),
+            name: "company/foo".into(),
             url: None,
         }
     }
@@ -417,7 +417,7 @@ mod tests {
                 "id": 7000 + number,
                 "number": number,
                 "title": title,
-                "html_url": format!("https://github.com/modulr/foo/pull/{number}"),
+                "html_url": format!("https://github.com/company/foo/pull/{number}"),
                 "state": if merged { "closed" } else { "open" },
                 "user": { "id": 17, "login": "vedanth" },
                 "merged": merged,
@@ -435,14 +435,14 @@ mod tests {
         let out = normalise_event(source(), &ev).unwrap();
         assert_eq!(out.kind, ActivityKind::GitHubPullRequestOpened);
         assert_eq!(out.title, "Opened PR: Add payments slice");
-        assert_eq!(out.external_id, "modulr/foo#42");
-        assert_eq!(out.links[0].url, "https://github.com/modulr/foo/pull/42");
+        assert_eq!(out.external_id, "company/foo#42");
+        assert_eq!(out.links[0].url, "https://github.com/company/foo/pull/42");
         let repo = out
             .entities
             .iter()
             .find(|e| e.kind == EntityKind::GitHubRepo)
             .unwrap();
-        assert_eq!(repo.external_id, "modulr/foo");
+        assert_eq!(repo.external_id, "company/foo");
         assert_eq!(repo.label.as_deref(), Some("foo"));
     }
 
@@ -474,7 +474,7 @@ mod tests {
                 "id": 7000,
                 "number": 1,
                 "title": "Review target",
-                "html_url": "https://github.com/modulr/foo/pull/1",
+                "html_url": "https://github.com/company/foo/pull/1",
                 "state": "open",
                 "merged": false,
                 "draft": false
@@ -508,7 +508,7 @@ mod tests {
                 "id": 11,
                 "number": 42,
                 "title": "Add payments",
-                "html_url": "https://github.com/modulr/foo/pull/42",
+                "html_url": "https://github.com/company/foo/pull/42",
                 "state": "open",
                 "pull_request": { "url": "..." }
             },
@@ -536,7 +536,7 @@ mod tests {
                 "id": 11,
                 "number": 7,
                 "title": "Paginator 404s on empty inputs",
-                "html_url": "https://github.com/modulr/foo/issues/7",
+                "html_url": "https://github.com/company/foo/issues/7",
                 "state": "open"
             },
             "comment": {
@@ -566,7 +566,7 @@ mod tests {
                     "id": 11,
                     "number": 7,
                     "title": "A bug",
-                    "html_url": "https://github.com/modulr/foo/issues/7",
+                    "html_url": "https://github.com/company/foo/issues/7",
                     "state": if action == "opened" { "open" } else { "closed" }
                 }
             });
@@ -586,7 +586,7 @@ mod tests {
                 "id": 11,
                 "number": 7,
                 "title": "A bug",
-                "html_url": "https://github.com/modulr/foo/issues/7",
+                "html_url": "https://github.com/company/foo/issues/7",
                 "state": "open"
             },
             "assignee": { "id": 17, "login": "vedanth" }
@@ -601,7 +601,7 @@ mod tests {
                 "id": 11,
                 "number": 7,
                 "title": "A bug",
-                "html_url": "https://github.com/modulr/foo/issues/7",
+                "html_url": "https://github.com/company/foo/issues/7",
                 "state": "open"
             },
             "assignee": { "id": 42, "login": "someone-else" }

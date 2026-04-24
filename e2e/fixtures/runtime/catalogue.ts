@@ -104,7 +104,7 @@ export const CATALOGUE = {
     // regression that drops the bullet surfaces as a failing count;
     // a regression that drifts the copy fails the substring
     // assertion.
-    githubPullRequestBullet: "Opened modulr/foo#42 — Orchestrator-level GitHub PR",
+    githubPullRequestBullet: "Opened company/foo#42 — Orchestrator-level GitHub PR",
   },
 
   // DAY-83 — fixture for the Add-Atlassian-source flow. The Atlassian

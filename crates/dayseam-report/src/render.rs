@@ -829,7 +829,7 @@ mod tests {
     #[test]
     fn commit_headline_renders_bold_repo_prefix_for_real_paths() {
         let event = fixture_event("feat: land payments slice");
-        let got = commit_headline(Path::new("modulr/modulo-local-infra"), &event);
+        let got = commit_headline(Path::new("company/modulo-local-infra"), &event);
         assert_eq!(got, "**modulo-local-infra** — feat: land payments slice");
     }
 

@@ -51,7 +51,7 @@ struct GitlabProject {
     path_with_namespace: Option<String>,
 }
 
-/// Fetch the `path_with_namespace` (e.g. `"modulr/modulo-local-infra"`)
+/// Fetch the `path_with_namespace` (e.g. `"company/modulo-local-infra"`)
 /// for a single project id. Returns `Ok(None)` on every non-success
 /// outcome — see module docs for the rationale.
 ///
@@ -159,8 +159,8 @@ mod tests {
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "id": 42,
                 "name": "modulo-local-infra",
-                "path_with_namespace": "modulr/modulo-local-infra",
-                "web_url": "https://gitlab.example/modulr/modulo-local-infra"
+                "path_with_namespace": "company/modulo-local-infra",
+                "web_url": "https://gitlab.example/company/modulo-local-infra"
             })))
             .mount(&server)
             .await;
@@ -176,7 +176,7 @@ mod tests {
         )
         .await
         .expect("200 should not be an error");
-        assert_eq!(got.as_deref(), Some("modulr/modulo-local-infra"));
+        assert_eq!(got.as_deref(), Some("company/modulo-local-infra"));
     }
 
     #[tokio::test]

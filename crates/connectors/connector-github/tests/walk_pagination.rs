@@ -184,8 +184,8 @@ fn pr_opened_event_in_window(
         },
         "repo": {
             "id": 1,
-            "name": "modulr/foo",
-            "url": "https://api.github.com/repos/modulr/foo"
+            "name": "company/foo",
+            "url": "https://api.github.com/repos/company/foo"
         },
         "created_at": created_at,
         "payload": {
@@ -196,7 +196,7 @@ fn pr_opened_event_in_window(
                 "number": number,
                 "title": format!("PR #{number}"),
                 "state": "open",
-                "html_url": format!("https://github.com/modulr/foo/pull/{number}"),
+                "html_url": format!("https://github.com/company/foo/pull/{number}"),
                 "user": {
                     "id": SELF_USER_ID,
                     "login": SELF_LOGIN

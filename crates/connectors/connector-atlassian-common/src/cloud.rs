@@ -1,7 +1,7 @@
 //! Cloud-identity discovery for Atlassian workspaces.
 //!
 //! Under Basic auth, the workspace URL (e.g.
-//! `https://modulrfinance.atlassian.net`) is already the tenant
+//! `https://company.atlassian.net`) is already the tenant
 //! identity — both Jira (`/rest/api/3/…`) and Confluence
 //! (`/wiki/api/v2/…`) accept the hostname directly. We therefore
 //! don't strictly need the opaque `cloudId` UUID for request
@@ -72,7 +72,7 @@ pub struct AtlassianAccountInfo {
 /// a `(Url, AtlassianAccountInfo)` tuple through every function.
 #[derive(Debug, Clone)]
 pub struct AtlassianCloud {
-    /// Canonical workspace URL, e.g. `https://modulrfinance.atlassian.net`.
+    /// Canonical workspace URL, e.g. `https://company.atlassian.net`.
     pub workspace_url: Url,
     /// Everything `/myself` gave us.
     pub account: AtlassianAccountInfo,

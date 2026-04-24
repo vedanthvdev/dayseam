@@ -255,7 +255,7 @@ export function AddAtlassianSourceDialog({
   // soon as the dialog detected an existing Atlassian source
   // (Journey C), which looked to the user like the field was
   // hard-wired to the existing tenant ("it's blocked to
-  // modulrfinance"). It's still true that Journey C only makes
+  // company"). It's still true that Journey C only makes
   // sense when the two products live on the same workspace URL,
   // but the right UX is to let the user type and automatically
   // drop out of reuse-PAT if they point somewhere else — not to

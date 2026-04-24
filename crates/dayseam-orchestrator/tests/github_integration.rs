@@ -286,8 +286,8 @@ fn github_pr_opened_body() -> Value {
         },
         "repo": {
             "id": 1,
-            "name": "modulr/foo",
-            "url": "https://api.github.com/repos/modulr/foo"
+            "name": "company/foo",
+            "url": "https://api.github.com/repos/company/foo"
         },
         "created_at": "2026-04-18T10:00:00Z",
         "payload": {
@@ -298,7 +298,7 @@ fn github_pr_opened_body() -> Value {
                 "number": 42,
                 "title": "Orchestrator-level GitHub PR",
                 "state": "open",
-                "html_url": "https://github.com/modulr/foo/pull/42",
+                "html_url": "https://github.com/company/foo/pull/42",
                 "user": {
                     "id": SELF_GITHUB_USER_ID,
                     "login": SELF_GITHUB_LOGIN

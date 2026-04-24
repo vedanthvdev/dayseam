@@ -93,7 +93,7 @@ mod tests {
         AtlassianAccountInfo {
             account_id: account_id.into(),
             display_name: "Vedanth Vasudev".into(),
-            email: Some("vedanth@modulrfinance.com".into()),
+            email: Some("vedanth@company.com".into()),
             cloud_id: None,
         }
     }

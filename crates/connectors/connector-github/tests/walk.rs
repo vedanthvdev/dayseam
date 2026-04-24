@@ -269,7 +269,7 @@ async fn walk_day_drops_events_from_other_actors() {
             OTHER_USER_ID,
             "someone-else",
             "2026-04-20T10:00:00Z",
-            "modulr/foo",
+            "company/foo",
             42,
             "Random PR"
         ),
@@ -278,7 +278,7 @@ async fn walk_day_drops_events_from_other_actors() {
             SELF_USER_ID,
             SELF_LOGIN,
             "2026-04-20T11:00:00Z",
-            "modulr/foo",
+            "company/foo",
             43,
             "My PR"
         ),
@@ -313,7 +313,7 @@ async fn walk_day_filters_events_outside_local_day_window() {
             SELF_USER_ID,
             SELF_LOGIN,
             "2026-04-20T10:00:00Z",
-            "modulr/foo",
+            "company/foo",
             1,
             "In window"
         ),
@@ -322,7 +322,7 @@ async fn walk_day_filters_events_outside_local_day_window() {
             SELF_USER_ID,
             SELF_LOGIN,
             "2026-04-19T10:00:00Z",
-            "modulr/foo",
+            "company/foo",
             2,
             "Yesterday"
         ),
@@ -331,7 +331,7 @@ async fn walk_day_filters_events_outside_local_day_window() {
             SELF_USER_ID,
             SELF_LOGIN,
             "2026-04-21T10:00:00Z",
-            "modulr/foo",
+            "company/foo",
             3,
             "Tomorrow"
         ),
@@ -364,7 +364,7 @@ async fn walk_day_dedupes_events_that_also_appear_in_search() {
         SELF_USER_ID,
         SELF_LOGIN,
         "2026-04-20T09:00:00Z",
-        "modulr/foo",
+        "company/foo",
         42,
         "Fix payment gateway"
     )]);
@@ -384,15 +384,15 @@ async fn walk_day_dedupes_events_that_also_appear_in_search() {
             "number": 42,
             "title": "Fix payment gateway",
             "state": "open",
-            "html_url": "https://github.com/modulr/foo/pull/42",
-            "repository_url": "https://api.github.com/repos/modulr/foo",
+            "html_url": "https://github.com/company/foo/pull/42",
+            "repository_url": "https://api.github.com/repos/company/foo",
             "created_at": "2026-04-20T09:00:00Z",
             "user": {
                 "id": SELF_USER_ID,
                 "login": SELF_LOGIN
             },
             "pull_request": {
-                "url": "https://api.github.com/repos/modulr/foo/pulls/42"
+                "url": "https://api.github.com/repos/company/foo/pulls/42"
             }
         }]
     });
@@ -433,7 +433,7 @@ async fn walk_day_collapses_three_rapid_reviews_into_one_event() {
             SELF_USER_ID,
             SELF_LOGIN,
             "2026-04-20T12:00:00Z",
-            "modulr/foo",
+            "company/foo",
             42,
             "Refactor handler",
             "commented"
@@ -443,7 +443,7 @@ async fn walk_day_collapses_three_rapid_reviews_into_one_event() {
             SELF_USER_ID,
             SELF_LOGIN,
             "2026-04-20T12:00:10Z",
-            "modulr/foo",
+            "company/foo",
             42,
             "Refactor handler",
             "changes_requested"
@@ -453,7 +453,7 @@ async fn walk_day_collapses_three_rapid_reviews_into_one_event() {
             SELF_USER_ID,
             SELF_LOGIN,
             "2026-04-20T12:00:30Z",
-            "modulr/foo",
+            "company/foo",
             42,
             "Refactor handler",
             "approved"

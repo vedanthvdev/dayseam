@@ -12,48 +12,48 @@ import {
 
 describe("normaliseWorkspaceUrl", () => {
   it("expands a bare slug to the canonical atlassian.net URL", () => {
-    expect(normaliseWorkspaceUrl("modulrfinance")).toEqual({
+    expect(normaliseWorkspaceUrl("company")).toEqual({
       kind: "ok",
-      url: "https://modulrfinance.atlassian.net",
+      url: "https://company.atlassian.net",
     });
   });
 
   it("accepts the canonical shape as-is", () => {
     expect(
-      normaliseWorkspaceUrl("https://modulrfinance.atlassian.net"),
-    ).toEqual({ kind: "ok", url: "https://modulrfinance.atlassian.net" });
+      normaliseWorkspaceUrl("https://company.atlassian.net"),
+    ).toEqual({ kind: "ok", url: "https://company.atlassian.net" });
   });
 
   it("strips a trailing slash", () => {
     expect(
-      normaliseWorkspaceUrl("https://modulrfinance.atlassian.net/"),
-    ).toEqual({ kind: "ok", url: "https://modulrfinance.atlassian.net" });
+      normaliseWorkspaceUrl("https://company.atlassian.net/"),
+    ).toEqual({ kind: "ok", url: "https://company.atlassian.net" });
   });
 
   it("rejects http:// (Atlassian Cloud is https-only)", () => {
-    const result = normaliseWorkspaceUrl("http://modulrfinance.atlassian.net");
+    const result = normaliseWorkspaceUrl("http://company.atlassian.net");
     expect(result.kind).toBe("invalid");
   });
 
   it("rejects input with a path segment", () => {
     const result = normaliseWorkspaceUrl(
-      "https://modulrfinance.atlassian.net/wiki",
+      "https://company.atlassian.net/wiki",
     );
     expect(result.kind).toBe("invalid");
   });
 
   it("rejects non-http(s) schemes", () => {
-    expect(normaliseWorkspaceUrl("ftp://modulrfinance.atlassian.net").kind)
+    expect(normaliseWorkspaceUrl("ftp://company.atlassian.net").kind)
       .toBe("invalid");
     expect(normaliseWorkspaceUrl("javascript:alert(1)").kind).toBe("invalid");
   });
 
   it("rejects input with a query string or fragment", () => {
     expect(
-      normaliseWorkspaceUrl("https://modulrfinance.atlassian.net?x=1").kind,
+      normaliseWorkspaceUrl("https://company.atlassian.net?x=1").kind,
     ).toBe("invalid");
     expect(
-      normaliseWorkspaceUrl("https://modulrfinance.atlassian.net#abc").kind,
+      normaliseWorkspaceUrl("https://company.atlassian.net#abc").kind,
     ).toBe("invalid");
   });
 
@@ -64,7 +64,7 @@ describe("normaliseWorkspaceUrl", () => {
 
   it("rejects nonsense strings with special characters", () => {
     expect(normaliseWorkspaceUrl("my workspace").kind).toBe("invalid");
-    expect(normaliseWorkspaceUrl("modulrfinance!").kind).toBe("invalid");
+    expect(normaliseWorkspaceUrl("company!").kind).toBe("invalid");
   });
 
   // DOG-v0.2-03 (security). The pre-fix dialog accepted any host

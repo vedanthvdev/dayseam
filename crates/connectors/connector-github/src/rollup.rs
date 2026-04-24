@@ -146,7 +146,7 @@ mod tests {
         ActivityEvent {
             id: Uuid::from_u128(0xabcd_0000_0000_0000_0000_0000_0000_0000 + id_suffix as u128),
             source_id: Uuid::new_v4(),
-            external_id: "modulr/foo#42".into(),
+            external_id: "company/foo#42".into(),
             kind: ActivityKind::GitHubPullRequestReviewed,
             occurred_at: base + ChronoDuration::seconds(offset_seconds),
             actor: Actor {
@@ -157,15 +157,15 @@ mod tests {
             title: format!("Reviewed PR: Add payments ({state})"),
             body: None,
             links: vec![Link {
-                url: "https://github.com/modulr/foo/pull/42".into(),
+                url: "https://github.com/company/foo/pull/42".into(),
                 label: Some("#42".into()),
             }],
             entities: vec![EntityRef {
                 kind: dayseam_core::EntityKind::GitHubPullRequest,
-                external_id: "modulr/foo#42".into(),
+                external_id: "company/foo#42".into(),
                 label: Some("#42".into()),
             }],
-            parent_external_id: Some("modulr/foo#42".into()),
+            parent_external_id: Some("company/foo#42".into()),
             metadata: serde_json::json!({
                 "github_event_id": format!("evt-{id_suffix}"),
                 "review_state": state,
@@ -215,8 +215,8 @@ mod tests {
     fn reviews_on_different_prs_do_not_collapse() {
         let a = review_event(1, 0, "approved");
         let mut b = review_event(2, 10, "approved");
-        b.parent_external_id = Some("modulr/foo#43".into());
-        b.external_id = "modulr/foo#43".into();
+        b.parent_external_id = Some("company/foo#43".into());
+        b.external_id = "company/foo#43".into();
         let out = collapse_rapid_reviews(vec![a.clone(), b.clone()]);
         assert_eq!(out.len(), 2);
         // Deterministic order by occurred_at: a first (0s), b next (10s).

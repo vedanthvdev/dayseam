@@ -323,7 +323,7 @@ mod tests {
         let json = r#"{"type":"doc","content":[{"type":"paragraph","content":[
           {"type":"mention","attrs":{
              "id":"712020:super-secret-account-id",
-             "email":"someone@modulrfinance.com",
+             "email":"someone@company.com",
              "text":"@Someone"
           }}
         ]}]}"#;
@@ -331,7 +331,7 @@ mod tests {
         assert!(rendered.contains("@Someone"));
         assert!(!rendered.contains("712020"));
         assert!(!rendered.contains("super-secret"));
-        assert!(!rendered.contains("modulrfinance.com"));
+        assert!(!rendered.contains("company.com"));
     }
 
     #[test]

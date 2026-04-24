@@ -33,10 +33,10 @@ import {
 const EXISTING_JIRA: Source = {
   id: "jira-source-1",
   kind: "Jira",
-  label: "modulrfinance/Jira",
+  label: "company/Jira",
   config: {
     Jira: {
-      workspace_url: "https://modulrfinance.atlassian.net",
+      workspace_url: "https://company.atlassian.net",
       email: "ved@example.com",
     },
   },
@@ -53,10 +53,10 @@ function freshJiraSource(id: string): Source {
   return {
     id,
     kind: "Jira",
-    label: "modulrfinance/Jira",
+    label: "company/Jira",
     config: {
       Jira: {
-        workspace_url: "https://modulrfinance.atlassian.net",
+        workspace_url: "https://company.atlassian.net",
         email: "ved@example.com",
       },
     },
@@ -74,11 +74,11 @@ function freshConfluenceSource(id: string): Source {
   return {
     id,
     kind: "Confluence",
-    label: "modulrfinance/Confluence",
+    label: "company/Confluence",
     config: {
       Confluence: {
-        workspace_url: "https://modulrfinance.atlassian.net",
-        email: "v@modulrfinance.com",
+        workspace_url: "https://company.atlassian.net",
+        email: "v@company.com",
       },
     },
     secret_ref: {
@@ -126,11 +126,11 @@ describe("AddAtlassianSourceDialog", () => {
       />,
     );
     fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
-      target: { value: "modulrfinance" },
+      target: { value: "company" },
     });
     expect(
       await screen.findByTestId("add-atlassian-url-normalised"),
-    ).toHaveTextContent("https://modulrfinance.atlassian.net");
+    ).toHaveTextContent("https://company.atlassian.net");
   });
 
   it("rejects http:// with an inline error and never silently upgrades", async () => {
@@ -143,7 +143,7 @@ describe("AddAtlassianSourceDialog", () => {
       />,
     );
     fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
-      target: { value: "http://modulrfinance.atlassian.net" },
+      target: { value: "http://company.atlassian.net" },
     });
     expect(
       await screen.findByTestId("add-atlassian-url-invalid"),
@@ -173,7 +173,7 @@ describe("AddAtlassianSourceDialog", () => {
     );
 
     fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
-      target: { value: "modulrfinance" },
+      target: { value: "company" },
     });
     fireEvent.change(screen.getByTestId("add-atlassian-email"), {
       target: { value: "ved@example.com" },
@@ -193,7 +193,7 @@ describe("AddAtlassianSourceDialog", () => {
     expect(mockInvoke).toHaveBeenCalledWith(
       "atlassian_sources_add",
       expect.objectContaining({
-        workspaceUrl: "https://modulrfinance.atlassian.net",
+        workspaceUrl: "https://company.atlassian.net",
         email: "ved@example.com",
         apiToken: "ATATT-valid-token",
         accountId: "acct-42",
@@ -227,7 +227,7 @@ describe("AddAtlassianSourceDialog", () => {
     fireEvent.click(screen.getByTestId("add-atlassian-enable-confluence"));
 
     fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
-      target: { value: "modulrfinance" },
+      target: { value: "company" },
     });
     fireEvent.change(screen.getByTestId("add-atlassian-email"), {
       target: { value: "ved@example.com" },
@@ -287,7 +287,7 @@ describe("AddAtlassianSourceDialog", () => {
     // Jira source so the Confluence add defaults to the same
     // workspace, but it is *editable* rather than read-only — the
     // old hard-lock looked like the app was pinned to a specific
-    // tenant ("blocked to modulrfinance"). The dialog instead
+    // tenant ("blocked to company"). The dialog instead
     // handles a user who points somewhere else by flipping the
     // reuse-PAT radio off — see the "editing the URL away from
     // the existing tenant" test below for the full flip/revert
@@ -295,7 +295,7 @@ describe("AddAtlassianSourceDialog", () => {
     const urlField = screen.getByTestId(
       "add-atlassian-workspace-url",
     ) as HTMLInputElement;
-    expect(urlField.value).toBe("https://modulrfinance.atlassian.net");
+    expect(urlField.value).toBe("https://company.atlassian.net");
     expect(urlField).not.toHaveAttribute("readonly");
 
     fireEvent.change(screen.getByTestId("add-atlassian-api-token"), {
@@ -419,7 +419,7 @@ describe("AddAtlassianSourceDialog", () => {
     // Edit back to the existing tenant with no token pasted: the
     // dialog should restore reuse mode (post-review symmetry).
     fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
-      target: { value: "modulrfinance" },
+      target: { value: "company" },
     });
     await waitFor(() => expect(reuseRadio.checked).toBe(true));
     expect(screen.queryByTestId("add-atlassian-url-diverged")).toBeNull();
@@ -458,7 +458,7 @@ describe("AddAtlassianSourceDialog", () => {
     // Revert the URL. `tokenMode` must *not* flip back — the user
     // is mid-entry and the token field still has their value.
     fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
-      target: { value: "modulrfinance" },
+      target: { value: "company" },
     });
     expect(pasteRadio.checked).toBe(true);
     const tokenField = screen.getByTestId(
@@ -506,7 +506,7 @@ describe("AddAtlassianSourceDialog", () => {
     );
 
     fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
-      target: { value: "modulrfinance" },
+      target: { value: "company" },
     });
     fireEvent.change(screen.getByTestId("add-atlassian-email"), {
       target: { value: "ved@example.com" },
@@ -569,7 +569,7 @@ describe("AddAtlassianSourceDialog", () => {
 
     fireEvent.click(screen.getByTestId("add-atlassian-enable-confluence"));
     fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
-      target: { value: "modulrfinance" },
+      target: { value: "company" },
     });
     fireEvent.change(screen.getByTestId("add-atlassian-email"), {
       target: { value: "ved@example.com" },
@@ -638,7 +638,7 @@ describe("AddAtlassianSourceDialog", () => {
       "add-atlassian-api-token",
     ) as HTMLInputElement;
 
-    expect(urlField.value).toBe("https://modulrfinance.atlassian.net");
+    expect(urlField.value).toBe("https://company.atlassian.net");
     expect(urlField).toHaveAttribute("readonly");
     expect(emailField.value).toBe("ved@example.com");
     expect(emailField).toHaveAttribute("readonly");

@@ -164,7 +164,7 @@ e2e/
   test-results/                    # Per-run traces/screenshots (git-ignored)
 ```
 
-The layout is loosely modelled after Modulr's `customer-portal-v2`
+The layout is loosely modelled after company's `customer-portal-v2`
 Playwright suite (features / steps / page-objects / fixtures) but
 flattened: our single workspace package doesn't need Angular-CLI's
 `src/tests/` envelope. Naming conventions match theirs

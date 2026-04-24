@@ -10,7 +10,7 @@ onto Dayseam's existing `SourceConnector` + `ActivityEvent` +
 `SourceIdentity` contract?
 
 **Method:** Hit a real Atlassian Cloud instance
-(`modulrfinance.atlassian.net`, ~2 years of history, active Jira
+(`company.atlassian.net`, ~2 years of history, active Jira
 projects `CAR` + `KTON` + `SUP`, active Confluence spaces `ST` +
 `QT` + `FET`) through the Rovo MCP —
 `searchJiraIssuesUsingJql`, `getJiraIssue` with
@@ -85,7 +85,7 @@ privacy). Maps 1:1 onto:
 ```
 Actor {
     display_name: "Vedanth VasuDev",
-    email: Some("vedanth.vasudev@modulrfinance.com") | None,
+    email: Some("vedanth.vasudev@company.com") | None,
     external_id: Some("61128bbf4e8d8d0069e48e16"),  // accountId
 }
 ```
@@ -131,9 +131,9 @@ Three links per event, all stable:
 
 | Label | URL |
 |---|---|
-| `"CAR-5117"` | `https://modulrfinance.atlassian.net/browse/CAR-5117` (UI link, what the user wants) |
-| `"API"` | `https://modulrfinance.atlassian.net/rest/api/3/issue/CAR-5117` (evidence popover) |
-| `"Comment #490883"` (only for `JiraIssueCommented`) | `https://modulrfinance.atlassian.net/browse/CAR-5117?focusedCommentId=490883` |
+| `"CAR-5117"` | `https://company.atlassian.net/browse/CAR-5117` (UI link, what the user wants) |
+| `"API"` | `https://company.atlassian.net/rest/api/3/issue/CAR-5117` (evidence popover) |
+| `"Comment #490883"` (only for `JiraIssueCommented`) | `https://company.atlassian.net/browse/CAR-5117?focusedCommentId=490883` |
 
 Learned from CORR-02 (Phase 3): the `/-/api/v4/...` vs `/api/v4/...`
 mixup was the root cause; here the Jira equivalent is making sure
@@ -159,7 +159,7 @@ we use the `/browse/` UI URL for the user-clickable link and the
 
 PAT-only, `Authorization: Bearer <token>`. Drop-in once `BasicAuth`
 is wired; identical endpoints under `/rest/api/2/...`. **Out of v0.2
-scope** unless the user asks — Modulr's own Atlassian is Cloud.
+scope** unless the user asks — company's own Atlassian is Cloud.
 
 ### 3.3 OAuth 2.0 (3LO) — v0.3+
 
@@ -271,7 +271,7 @@ connectors. It fits as one discrete task in the Jira phase plan.
 
 ### 8.1 What a user actually does on Confluence in a day
 
-Observed on `modulrfinance.atlassian.net` for the same account
+Observed on `company.atlassian.net` for the same account
 across April 2026:
 
 | What happened | How it shows up in the API |
@@ -321,9 +321,9 @@ cross-cutting refactor — it unlocks both products at once.
 
 | Label | URL |
 |---|---|
-| `"Engineering Rota Subscription"` (page title) | `https://modulrfinance.atlassian.net/wiki/spaces/ST/pages/2001142074/Engineering+Rota+Subscription` (the `_links.webui` value, which is already URL-encoded) |
-| `"API"` | `https://modulrfinance.atlassian.net/wiki/rest/api/content/2001142074` |
-| `"Comment #6239617072"` (only for `ConfluenceComment`) | `https://modulrfinance.atlassian.net/wiki/spaces/FET/pages/6222414046/Authy+-+Playwright+implementation?focusedCommentId=6239617072` (from the CQL result's `url` field, relative to `_links.base`) |
+| `"Engineering Rota Subscription"` (page title) | `https://company.atlassian.net/wiki/spaces/ST/pages/2001142074/Engineering+Rota+Subscription` (the `_links.webui` value, which is already URL-encoded) |
+| `"API"` | `https://company.atlassian.net/wiki/rest/api/content/2001142074` |
+| `"Comment #6239617072"` (only for `ConfluenceComment`) | `https://company.atlassian.net/wiki/spaces/FET/pages/6222414046/Authy+-+Playwright+implementation?focusedCommentId=6239617072` (from the CQL result's `url` field, relative to `_links.base`) |
 
 Regression test: link URLs must never double-encode the `+` / `%20`
 sequences already present in Confluence's `webui` field.
@@ -375,7 +375,7 @@ The combined probe established:
 
 | Aspect | Jira | Confluence | Shared? |
 |---|---|---|---|
-| Host | `modulrfinance.atlassian.net` | `modulrfinance.atlassian.net` | ✅ |
+| Host | `company.atlassian.net` | `company.atlassian.net` | ✅ |
 | Auth header | `Basic <base64(email:api_token)>` | `Basic <base64(email:api_token)>` | ✅ |
 | accountId | `61128bbf4e8d8d0069e48e16` | `61128bbf4e8d8d0069e48e16` | ✅ |
 | Base path | `/rest/api/3/` | `/wiki/api/v2/` + `/wiki/rest/api/` | ❌ |
@@ -435,8 +435,8 @@ workspace, **two source rows share one secret_id**:
 
 ```
 sources:
-  id=<uuid-1> kind=jira         name="Jira @ modulrfinance"      secret_id=atl-tok-abc
-  id=<uuid-2> kind=confluence   name="Confluence @ modulrfinance" secret_id=atl-tok-abc
+  id=<uuid-1> kind=jira         name="Jira @ company"      secret_id=atl-tok-abc
+  id=<uuid-2> kind=confluence   name="Confluence @ company" secret_id=atl-tok-abc
 ```
 
 `secrets_remove(secret_id)` becomes reference-counted, or we add
@@ -514,12 +514,12 @@ the phase-3 plan's shape, with the 12 tasks from §11 as the spine.
 
 - `getAccessibleAtlassianResources` → cloudId
   `b5f50ff5-7c51-43af-8bd7-a35cc6801b91`, workspace
-  `modulrfinance`, scopes include both `read:jira-work` and the full
+  `company`, scopes include both `read:jira-work` and the full
   Confluence scope set — **single resource carries both products'
   scopes under one auth**
 - `atlassianUserInfo` → account `61128bbf4e8d8d0069e48e16`,
   displayName "Vedanth VasuDev",
-  email `vedanth.vasudev@modulrfinance.com`
+  email `vedanth.vasudev@company.com`
 - `searchJiraIssuesUsingJql` → 4 issues touched in the last 7 days
   (`CAR-5117`, `CAR-4965`, `CAR-5163`, `SUP-3129`); today's report
   would have 1 Jira bullet (`CAR-5117`)

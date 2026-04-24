@@ -755,7 +755,7 @@ mod tests {
             id: 1,
             number: 42,
             title: "Add payments".into(),
-            html_url: "https://github.com/modulr/foo/pull/42".into(),
+            html_url: "https://github.com/company/foo/pull/42".into(),
             state: "open".into(),
             user: Some(crate::events::GithubUserRef {
                 id: 17,
@@ -767,7 +767,7 @@ mod tests {
             created_at: Some(Utc.with_ymd_and_hms(2026, 4, 20, 10, 0, 0).unwrap()),
             updated_at: None,
             closed_at: None,
-            repository_url: Some("https://api.github.com/repos/modulr/foo".into()),
+            repository_url: Some("https://api.github.com/repos/company/foo".into()),
         };
         let sid = uuid::Uuid::new_v4();
         let start = Utc.with_ymd_and_hms(2026, 4, 20, 0, 0, 0).unwrap();
@@ -775,7 +775,7 @@ mod tests {
         let events = synthesise_events_from_search_hit(&hit, sid, start, end);
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].kind, ActivityKind::GitHubPullRequestOpened);
-        assert_eq!(events[0].external_id, "modulr/foo#42");
+        assert_eq!(events[0].external_id, "company/foo#42");
     }
 
     #[test]

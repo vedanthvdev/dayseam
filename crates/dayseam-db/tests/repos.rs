@@ -747,7 +747,7 @@ async fn activity_events_upsert_refreshes_payload_on_conflict() {
     refreshed.title = "refreshed title".to_string();
     refreshed.entities = vec![EntityRef {
         kind: EntityKind::Repo,
-        external_id: "modulr/modulo-local-infra".into(),
+        external_id: "company/modulo-local-infra".into(),
         label: Some("modulo-local-infra".into()),
     }];
     events
@@ -771,7 +771,7 @@ async fn activity_events_upsert_refreshes_payload_on_conflict() {
         .iter()
         .find(|e| e.kind == EntityKind::Repo)
         .expect("repo entity must land on the row after upsert");
-    assert_eq!(repo_entity.external_id, "modulr/modulo-local-infra");
+    assert_eq!(repo_entity.external_id, "company/modulo-local-infra");
 }
 
 #[tokio::test]
