@@ -96,25 +96,22 @@ describe("SourcesSidebar", () => {
     );
   });
 
-  // DAY-121: every chip exposes a dedicated "Rename" button alongside
-  // Rescan / Edit / Delete. Clicking it opens `RenameSourceDialog`
-  // with the current label prefilled; the dialog itself owns the
-  // `sources_update` round-trip (covered in `RenameSourceDialog.test`).
-  // This test just pins the wiring from the chip to the dialog so a
-  // future refactor of the action cluster can't silently orphan the
-  // rename flow.
-  it("opens RenameSourceDialog from the chip's rename button", async () => {
+  // DAY-126: the dedicated "Aa" Rename button (DAY-121) was folded
+  // into the per-connector Edit dialogs so the chip no longer
+  // surfaces a separate rename affordance. Renaming now happens
+  // inside whichever Edit dialog the ✎ control opens; this test
+  // just pins the removal so a future change cannot re-introduce
+  // the discoverability problem the combined flow was meant to
+  // fix.
+  it("does not render a standalone rename (Aa) button on the chip", async () => {
     registerInvokeHandler("sources_list", async () => [SOURCE]);
     render(<SourcesSidebar />);
     await waitFor(() =>
       expect(screen.getByText("Work repos")).toBeInTheDocument(),
     );
-    fireEvent.click(screen.getByTestId("source-chip-rename-src-1"));
-    const dialog = await screen.findByTestId("rename-source-dialog");
-    expect(dialog).toBeInTheDocument();
     expect(
-      (screen.getByTestId("rename-source-label") as HTMLInputElement).value,
-    ).toBe("Work repos");
+      screen.queryByTestId("source-chip-rename-src-1"),
+    ).not.toBeInTheDocument();
   });
 
   it("opens the local-git add dialog from the add-source menu", async () => {
@@ -302,12 +299,13 @@ describe("SourcesSidebar", () => {
     );
     fireEvent.click(screen.getByTestId("source-error-card-reconnect-jira-1"));
 
-    // Reconnect copy in the dialog header is the tell that the
-    // reconnect prop made it through — the add-mode header reads
-    // "Add Atlassian source" instead.
+    // DAY-126: the dialog opens in unified edit mode so the header
+    // reads "Edit Jira source" — the add-mode header would read
+    // "Add Atlassian source" instead, which is the tell that the
+    // `reconnect` prop did make it through.
     await waitFor(() =>
       expect(
-        screen.getByRole("dialog", { name: /reconnect jira/i }),
+        screen.getByRole("dialog", { name: /edit jira source/i }),
       ).toBeInTheDocument(),
     );
 
@@ -318,14 +316,13 @@ describe("SourcesSidebar", () => {
     expect(screen.getByTestId("add-atlassian-email")).toHaveValue(
       "ved@example.com",
     );
-    // Submit copy flips to Reconnect; if we saw "Add source" we'd
-    // know the `reconnect` prop didn't reach the dialog. The chip
-    // that opened the dialog also has "Reconnect" in its label, so
-    // we scope the lookup to the dialog's own region.
-    const dialog = screen.getByRole("dialog", { name: /reconnect jira/i });
+    // Submit copy flips to Save. The chip that opened the dialog
+    // still says "Reconnect", so we scope the lookup to the
+    // dialog's own region.
+    const dialog = screen.getByRole("dialog", { name: /edit jira source/i });
     const { getByRole: getByRoleInDialog } = within(dialog);
     expect(
-      getByRoleInDialog("button", { name: /^reconnect$/i }),
+      getByRoleInDialog("button", { name: /^save$/i }),
     ).toBeInTheDocument();
   });
 
@@ -377,7 +374,7 @@ describe("SourcesSidebar", () => {
 
     await waitFor(() =>
       expect(
-        screen.getByRole("dialog", { name: /reconnect github/i }),
+        screen.getByRole("dialog", { name: /edit github source/i }),
       ).toBeInTheDocument(),
     );
 
@@ -385,10 +382,10 @@ describe("SourcesSidebar", () => {
       screen.getByTestId("add-github-api-base-url"),
     ).toHaveValue("https://api.github.com/");
 
-    const dialog = screen.getByRole("dialog", { name: /reconnect github/i });
+    const dialog = screen.getByRole("dialog", { name: /edit github source/i });
     const { getByRole: getByRoleInDialog } = within(dialog);
     expect(
-      getByRoleInDialog("button", { name: /^reconnect$/i }),
+      getByRoleInDialog("button", { name: /^save$/i }),
     ).toBeInTheDocument();
   });
 

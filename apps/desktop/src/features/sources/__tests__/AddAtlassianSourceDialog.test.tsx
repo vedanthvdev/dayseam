@@ -370,20 +370,28 @@ describe("AddAtlassianSourceDialog", () => {
     });
   });
 
-  // ── DAY-87: reconnect mode ─────────────────────────────────────
-  // The "Reconnect" chip on `SourceErrorCard` hands the dialog a
-  // `reconnect: { source }` prop. The dialog then:
+  // ── DAY-87 + DAY-126: edit mode ────────────────────────────────
+  // Both the ✎ Edit control and the error-card "Reconnect" chip
+  // hand the dialog a `reconnect: { source }` prop. The dialog
+  // then:
   //   * prefills URL + email from the source, read-only;
-  //   * empties the API token so the user can't submit the old one
-  //     by accident;
+  //   * empties the API token so the user cannot submit the old
+  //     one by accident; leaving it empty means "keep existing
+  //     token" (DAY-126);
+  //   * pre-fills the label from the source and lets the user
+  //     change it (DAY-126 — replaces the old standalone Rename
+  //     dialog);
   //   * hides the product checkboxes and the reuse/paste picker
-  //     (neither is meaningful when rotating one source's token);
-  //   * swaps the submit path from `atlassian_sources_add` to the
-  //     new `atlassian_sources_reconnect` IPC and calls
-  //     `onReconnected` with the list of source ids the backend
-  //     rotated (one, or two for shared-PAT sources).
+  //     (neither is meaningful when editing one source's token);
+  //   * runs `atlassian_sources_reconnect` when a token was
+  //     pasted and/or `sources_update` when the label changed.
+  //     Calls `onReconnected` with the list of source ids the
+  //     backend rotated (one, or two for shared-PAT sources); when
+  //     only the label changed it still fires with the one source
+  //     id that was renamed so the caller's refresh logic stays
+  //     uniform.
 
-  it("reconnect mode: prefills URL/email as read-only and clears the token", () => {
+  it("edit mode: prefills URL/email as read-only, clears the token, and fills the label", () => {
     render(
       <AddAtlassianSourceDialog
         open
@@ -410,7 +418,12 @@ describe("AddAtlassianSourceDialog", () => {
     expect(emailField).toHaveAttribute("readonly");
     expect(tokenField.value).toBe("");
 
-    // Product checkboxes are not rendered in reconnect mode — the
+    const labelField = screen.getByTestId(
+      "add-atlassian-label",
+    ) as HTMLInputElement;
+    expect(labelField.value).toBe(EXISTING_JIRA.label);
+
+    // Product checkboxes are not rendered in edit mode — the
     // source's kind is fixed and switching it would require a
     // delete-and-re-add. The reuse/paste picker is likewise absent.
     expect(
@@ -423,10 +436,10 @@ describe("AddAtlassianSourceDialog", () => {
       screen.queryByTestId("add-atlassian-token-mode-reuse"),
     ).not.toBeInTheDocument();
 
-    // Primary button copy changes to Reconnect / Reconnecting…; the
-    // Add copy would be confusing on a row that's already present.
+    // Primary button copy changes to Save / Saving…; the Add copy
+    // would be confusing on a row that's already present.
     expect(
-      screen.getByRole("button", { name: /^reconnect$/i }),
+      screen.getByRole("button", { name: /^save$/i }),
     ).toBeInTheDocument();
     // Validate button is compiled out — the backend runs the probe
     // as part of the reconnect submit path.
@@ -435,7 +448,7 @@ describe("AddAtlassianSourceDialog", () => {
     ).not.toBeInTheDocument();
   });
 
-  it("reconnect mode: submit calls atlassian_sources_reconnect and onReconnected with affected ids", async () => {
+  it("edit mode: submit with a new token calls atlassian_sources_reconnect and onReconnected with affected ids", async () => {
     registerInvokeHandler("atlassian_sources_reconnect", async () => [
       EXISTING_JIRA.id,
     ]);
@@ -452,10 +465,9 @@ describe("AddAtlassianSourceDialog", () => {
       />,
     );
 
-    // Reconnect stays disabled until the user pastes a token —
-    // the empty-string rejection is the one client-side guard the
-    // dialog enforces before the backend probe runs.
-    const submit = screen.getByRole("button", { name: /^reconnect$/i });
+    // Nothing dirty yet: token empty, label unchanged — Save must
+    // stay disabled so a click cannot fire a no-op edit.
+    const submit = screen.getByRole("button", { name: /^save$/i });
     expect(submit).toBeDisabled();
 
     fireEvent.change(screen.getByTestId("add-atlassian-api-token"), {
@@ -478,11 +490,69 @@ describe("AddAtlassianSourceDialog", () => {
       expect(onReconnected).toHaveBeenCalledWith([EXISTING_JIRA.id]),
     );
     // The add path must not run: a stray `atlassian_sources_add`
-    // invocation in reconnect mode would mean we accidentally
+    // invocation in edit mode would mean we accidentally
     // duplicated the source row.
     expect(mockInvoke).not.toHaveBeenCalledWith(
       "atlassian_sources_add",
       expect.anything(),
+    );
+    // A token-only edit must not touch the label — otherwise we'd
+    // fire a pointless sources_update with the unchanged label.
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "sources_update",
+      expect.anything(),
+    );
+  });
+
+  // DAY-126: editing only the label (no token) must skip
+  // `atlassian_sources_reconnect` entirely — the keychain entry is
+  // untouched and the only write is a label-only `sources_update`
+  // patch against the one source being edited. For a shared-PAT
+  // pair this intentionally does not rename the sibling row.
+  it("edit mode: a label-only change calls sources_update and not atlassian_sources_reconnect", async () => {
+    const onReconnected = vi.fn();
+    registerInvokeHandler("sources_update", async () => ({
+      ...EXISTING_JIRA,
+      label: "Work Jira",
+    }));
+
+    render(
+      <AddAtlassianSourceDialog
+        open
+        onClose={() => {}}
+        onAdded={() => {}}
+        existingSources={[EXISTING_JIRA]}
+        reconnect={{ source: EXISTING_JIRA }}
+        onReconnected={onReconnected}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("add-atlassian-label"), {
+      target: { value: "Work Jira" },
+    });
+
+    const submit = screen.getByRole("button", { name: /^save$/i });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "sources_update",
+        expect.objectContaining({
+          id: EXISTING_JIRA.id,
+          patch: expect.objectContaining({ label: "Work Jira", config: null }),
+          pat: null,
+        }),
+      ),
+    );
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "atlassian_sources_reconnect",
+      expect.anything(),
+    );
+    // onReconnected still fires so the caller can run its uniform
+    // post-edit refresh even when nothing was actually rotated.
+    await waitFor(() =>
+      expect(onReconnected).toHaveBeenCalledWith([EXISTING_JIRA.id]),
     );
   });
 });

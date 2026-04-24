@@ -6,6 +6,48 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+- **DAY-126: source label editing folded into the per-connector
+  Edit dialog; the standalone `Aa` rename button on the source chip
+  is gone.** The "Edit GitHub source" and "Edit Atlassian source"
+  dialogs now show the **Label** field (pre-filled with the current
+  label) alongside the existing read-only URL/email fields, and
+  the credential field (PAT for GitHub, API token for Atlassian) is
+  optional in edit mode — leave it blank to keep the existing
+  Keychain entry untouched. The Save button enables on *either* a
+  changed label or a new credential, and the submit handler routes
+  each kind of dirty field to the correct backend: a credential
+  triggers the existing `*_sources_reconnect` reauthentication
+  path (with all its keychain re-write and shared-PAT fan-out
+  semantics intact), and a renamed label triggers a separate
+  label-only `sources_update` patch (`{ label, config: null },
+  pat: null`) that goes through the `label_only` escape hatch added
+  in DAY-122 / C-4. For Atlassian's shared-PAT case the label-only
+  patch is scoped to the *single* source the user opened the dialog
+  on — the user is editing one chip's name, not retitling every
+  Jira/Confluence source that happens to share a PAT — even when
+  the credential half of the same submit fans the reconnect across
+  every affected source ID. The deleted `RenameSourceDialog`
+  component (DAY-121) and its `Aa` chip button are removed because
+  they were a parallel surface that confused users about where to
+  rename a source; consolidating into the one Edit dialog the user
+  already opens is what they actually expected. GitLab and Local
+  Git sources continue to use their existing edit dialogs (which
+  already exposed the label field), so no UI change there. Test
+  changes mirror the UI: `SourcesSidebar.test.tsx` asserts the
+  `Aa` button is *not* rendered (negative regression test against
+  silently restoring it), and the GitHub/Atlassian dialog tests
+  cover all four submit shapes — credential-only, label-only,
+  both-dirty, and nothing-dirty — including the Atlassian-specific
+  "label patch goes to the opened source ID, not all affected
+  IDs" assertion. No Rust changes: the IPC contract
+  (`sources_update` + the connector-specific `*_reconnect`
+  commands) was already shaped to support this, the comments in
+  `commands.rs` are just updated to point at the new edit-dialog
+  surface instead of the deleted `RenameSourceDialog`. Net change
+  is 446 insertions / 606 deletions across the desktop frontend.
+
 ## [0.6.7]
 
 ### Added

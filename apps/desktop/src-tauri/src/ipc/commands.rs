@@ -476,21 +476,22 @@ fn build_source_auth(
 /// this branch silently. Failing loud here turns a baffling cross-
 /// command bug into a local Save-button error.
 ///
-/// DAY-122 / C-4 adds the `label_only` escape hatch. [`RenameSourceDialog`]
-/// — the uniform rename surface introduced in DAY-121 — always
-/// sends `patch { label, config: null }, pat: null`, which the
-/// pre-C-4 code rejected on GitLab orphan rows with
-/// `ipc.gitlab.pat.missing`. Even worse, the error fired *after*
-/// `update_label` had already written the new label to SQLite
-/// (the writes at `sources_update` happen before this validation),
-/// so the user saw an "error" toast while the chip silently kept
-/// the new name on the next reload. The table's new `label-only`
-/// column surfaces the legitimate "just renaming an orphan"
-/// branch as `OK (rename)`: no PAT operation intended, no
-/// downstream `persist_gitlab_pat` call to worry about, and the
-/// `ensure_gitlab_self_identity` below still runs because
-/// `existing.config` is a fully-populated `GitLab` variant (orphan
-/// means no secret, not no config).
+/// DAY-122 / C-4 adds the `label_only` escape hatch. The uniform
+/// rename surface (DAY-121's `RenameSourceDialog`, folded into the
+/// per-connector `AddXSourceDialog`s in DAY-126) sends
+/// `patch { label, config: null }, pat: null` whenever the user
+/// only renamed a source, which the pre-C-4 code rejected on
+/// GitLab orphan rows with `ipc.gitlab.pat.missing`. Even worse,
+/// the error fired *after* `update_label` had already written the
+/// new label to SQLite (the writes at `sources_update` happen
+/// before this validation), so the user saw an "error" toast
+/// while the chip silently kept the new name on the next reload.
+/// The table's new `label-only` column surfaces the legitimate
+/// "just renaming an orphan" branch as `OK (rename)`: no PAT
+/// operation intended, no downstream `persist_gitlab_pat` call to
+/// worry about, and the `ensure_gitlab_self_identity` below still
+/// runs because `existing.config` is a fully-populated `GitLab`
+/// variant (orphan means no secret, not no config).
 fn validate_pat_arg(
     existing: &Source,
     pat: Option<&IpcSecretString>,
@@ -981,10 +982,11 @@ pub async fn sources_update(
     // [`validate_pat_arg`]: when the caller sends neither a new
     // config nor a new PAT, they are only renaming the source in
     // the UI. Skipping the `(GitLab, None, None)` defense-in-depth
-    // branch for that case is what unblocks [`RenameSourceDialog`]
-    // on GitLab orphan rows. Any other combination — a config
-    // patch without a PAT, or a PAT without a config — is still
-    // subject to the full table of checks.
+    // branch for that case is what unblocks the rename surface
+    // (DAY-121's `RenameSourceDialog`, folded into the per-connector
+    // edit dialogs in DAY-126) on GitLab orphan rows. Any other
+    // combination — a config patch without a PAT, or a PAT without
+    // a config — is still subject to the full table of checks.
     let label_only = patch.config.is_none() && pat.is_none();
     validate_pat_arg(&existing, pat.as_ref(), label_only)?;
     if let Some(new_pat) = pat.as_ref() {
@@ -3154,9 +3156,11 @@ mod tests {
 
     /// DAY-122 / C-4 regression: a label-only rename of a GitLab
     /// orphan row must be accepted. Pre-C-4 this was the blocking
-    /// path — [`RenameSourceDialog`] sent `patch { label, config:
-    /// null }, pat: null` and `validate_pat_arg` rejected the call
-    /// with `ipc.gitlab.pat.missing` because `(GitLab, None, None)`
+    /// path — the rename surface (DAY-121's `RenameSourceDialog`,
+    /// folded into the per-connector edit dialogs in DAY-126) sent
+    /// `patch { label, config: null }, pat: null` and
+    /// `validate_pat_arg` rejected the call with
+    /// `ipc.gitlab.pat.missing` because `(GitLab, None, None)`
     /// unconditionally errored. The `label_only: true` escape
     /// hatch is what unblocks the rename. Deleting the new match
     /// arm (or the `label_only` parameter) fails this test.

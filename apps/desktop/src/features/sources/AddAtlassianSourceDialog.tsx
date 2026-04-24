@@ -29,6 +29,7 @@ import type {
   AtlassianValidationResult,
   SecretRef,
   Source,
+  SourcePatch,
 } from "@dayseam/ipc-types";
 import { Dialog, DialogButton } from "../../components/Dialog";
 import { invoke } from "../../ipc/invoke";
@@ -51,16 +52,21 @@ interface AddAtlassianSourceDialogProps {
    *  configured (→ reuse-PAT affordance) and which product the
    *  user is *not* already running. */
   existingSources: readonly Source[];
-  /** When set, the dialog mounts in "token-only reconnect" mode
-   *  (DAY-87): workspace URL and email are shown read-only from the
-   *  passed source, the product checkboxes are hidden, and submit
-   *  calls `atlassian_sources_reconnect` instead of
+  /** When set, the dialog mounts in edit mode (DAY-87 + DAY-126):
+   *  workspace URL and email are shown read-only from the passed
+   *  source, the product checkboxes are hidden, the label is
+   *  editable (pre-filled from the row), and the API token is
+   *  optional — empty means "keep the existing token", pasted
+   *  means "rotate it". Submit calls
+   *  `atlassian_sources_reconnect` when a token is present and/or
+   *  `sources_update` when the label changed, instead of
    *  `atlassian_sources_add`. URL/email changes are intentionally
-   *  out of scope for this flow — the scope is narrower than the
-   *  plan's original "edit" framing because rotating the bound
-   *  Atlassian account would require re-seeding `SourceIdentity` to
-   *  keep the render-stage self-filter honest, which is a bigger
-   *  change than DAY-87 takes on. */
+   *  out of scope: rotating the bound Atlassian account would
+   *  require re-seeding `SourceIdentity` to keep the render-stage
+   *  self-filter honest. A shared-PAT rotation fans out to every
+   *  sibling row via the `affected` id list from reconnect, but the
+   *  label rename only applies to the one source the user is
+   *  editing — sibling rows keep their labels. */
   reconnect?: { source: Source } | null;
   /** Fired after `atlassian_sources_reconnect` succeeds. Receives
    *  the ids of every source whose keychain slot was rotated —
@@ -185,6 +191,12 @@ export function AddAtlassianSourceDialog({
   const [validation, setValidation] = useState<ValidationState>({ kind: "idle" });
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // DAY-126: in edit mode the dialog doubles as the rename surface,
+  // so the label sits in dialog state pre-filled from the source
+  // being edited. In add mode the label is derived from the
+  // workspace URL after validate (no input; that path predates
+  // DAY-126 and stays untouched).
+  const [label, setLabel] = useState("");
 
   // Re-seed each time the dialog opens. When an existing source is
   // detected we prefill the workspace URL and email from it and
@@ -193,13 +205,15 @@ export function AddAtlassianSourceDialog({
   useEffect(() => {
     if (!open) return;
     if (isReconnect && reconnectConfig != null) {
-      // DAY-87 reconnect: URL + email come from the source row and
-      // are displayed read-only. The token is always empty so we
-      // never show the user a masked-but-present field that hides
-      // the fact we wiped the old one.
+      // DAY-87 reconnect / DAY-126 edit: URL + email come from the
+      // source row and are displayed read-only. The token is always
+      // empty so we never show a masked-but-present field that hides
+      // the fact we wiped the old one — and so leaving it empty is
+      // the obvious "keep existing token" gesture.
       setWorkspaceUrlRaw(reconnectConfig.workspaceUrl);
       setEmail(reconnectConfig.email);
       setApiToken("");
+      setLabel(reconnectSource?.label ?? "");
       setEnableJira(reconnectConfig.kind === "Jira");
       setEnableConfluence(reconnectConfig.kind === "Confluence");
       setTokenMode("paste");
@@ -211,6 +225,7 @@ export function AddAtlassianSourceDialog({
     setWorkspaceUrlRaw(existing?.workspaceUrl ?? "");
     setEmail(existing?.email ?? "");
     setApiToken("");
+    setLabel("");
     if (existingKind === "Jira") {
       setEnableJira(false);
       setEnableConfluence(true);
@@ -225,7 +240,7 @@ export function AddAtlassianSourceDialog({
     setValidation({ kind: "idle" });
     setSubmitError(null);
     setSubmitting(false);
-  }, [open, existing, existingKind, isReconnect, reconnectConfig]);
+  }, [open, existing, existingKind, isReconnect, reconnectConfig, reconnectSource]);
 
   const normalisation: WorkspaceUrlNormalisation = useMemo(
     () => normaliseWorkspaceUrl(workspaceUrlRaw),
@@ -261,13 +276,24 @@ export function AddAtlassianSourceDialog({
     apiToken.trim().length > 0 &&
     validation.kind !== "checking";
 
+  // DAY-126 edit: users can rotate the token, rename the source,
+  // or both in one submit. At least one side has to be dirty so
+  // the Save button is not a no-op. `label.trim()` must be
+  // non-empty because the DB pins `label NOT NULL` and an empty
+  // chip is invisible in the sidebar. When the user pastes a new
+  // token the submit handler runs the probe server-side as part of
+  // the `atlassian_sources_reconnect` IPC, so we do not gate on
+  // client-side validation here.
+  const trimmedLabel = label.trim();
+  const labelChanged =
+    isReconnect &&
+    reconnectSource != null &&
+    trimmedLabel.length > 0 &&
+    trimmedLabel !== reconnectSource.label;
+  const tokenEntered = apiToken.trim().length > 0;
+
   const canSubmit = isReconnect
-    ? // Reconnect mode skips the explicit "Validate" button — the
-      // submit handler runs the probe server-side as part of the
-      // `atlassian_sources_reconnect` IPC, so we only need enough
-      // state to fire that call. An empty token is the one thing we
-      // can reject client-side without a round-trip.
-      apiToken.trim().length > 0 && !submitting
+    ? (tokenEntered || labelChanged) && trimmedLabel.length > 0 && !submitting
     : atLeastOneProduct &&
       normalisation.kind === "ok" &&
       !submitting &&
@@ -308,20 +334,39 @@ export function AddAtlassianSourceDialog({
     setSubmitError(null);
     try {
       if (isReconnect && reconnectSource != null) {
-        // DAY-87: token-only reconnect. The backend re-runs
+        // DAY-87 + DAY-126: unified edit. Rotate the token first
+        // (if the user pasted one) so a failed rotation short-
+        // circuits before we touch the label — otherwise a
+        // renamed-but-still-broken source would be worse than the
+        // pre-edit state. The backend re-runs
         // `/rest/api/3/myself` against the stored workspace URL +
-        // email, refuses if the resolved `account_id` doesn't match
-        // the `SourceIdentity` already bound to this source, and
+        // email, refuses if the resolved `account_id` doesn't
+        // match the `SourceIdentity` bound to this source, and
         // otherwise rotates the keychain slot atomically. The
         // returned list is every `source_id` whose secret was
         // rotated (two ids when the PAT is shared across Jira +
         // Confluence siblings); we hand it to the caller so the
-        // sidebar can fire `sources_healthcheck` for each and clear
-        // the red chips without waiting for the next poll.
-        const affected = await invoke("atlassian_sources_reconnect", {
-          sourceId: reconnectSource.id,
-          apiToken: apiToken.trim(),
-        });
+        // sidebar can fire `sources_healthcheck` for each and
+        // clear the red chips without waiting for the next poll.
+        let affected: string[] = [reconnectSource.id];
+        if (tokenEntered) {
+          affected = await invoke("atlassian_sources_reconnect", {
+            sourceId: reconnectSource.id,
+            apiToken: apiToken.trim(),
+          });
+        }
+        if (labelChanged) {
+          // Label rename is deliberately per-source even when the
+          // PAT is shared across Jira + Confluence siblings. A
+          // user editing the Jira chip intends to rename the Jira
+          // source; the Confluence sibling keeps its label.
+          const patch: SourcePatch = { label: trimmedLabel, config: null };
+          await invoke("sources_update", {
+            id: reconnectSource.id,
+            patch,
+            pat: null,
+          });
+        }
         sourcesBus.dispatchEvent(new Event(SOURCES_CHANGED));
         onReconnected?.(affected);
         return;
@@ -397,6 +442,9 @@ export function AddAtlassianSourceDialog({
     isReconnect,
     reconnectSource,
     onReconnected,
+    tokenEntered,
+    labelChanged,
+    trimmedLabel,
   ]);
 
   const handleClose = useCallback(() => {
@@ -407,12 +455,12 @@ export function AddAtlassianSourceDialog({
   const urlHelp = isReconnect ? null : renderUrlHelp(normalisation);
 
   const title = isReconnect
-    ? `Reconnect ${reconnectConfig?.kind ?? "Atlassian"}`
+    ? `Edit ${reconnectConfig?.kind ?? "Atlassian"} source`
     : existing
       ? `Add ${existingKind === "Jira" ? "Confluence" : "Jira"}`
       : "Add Atlassian source";
   const description = isReconnect
-    ? "Paste a fresh Atlassian API token to reconnect. The workspace URL and account email are fixed — delete and re-add the source to change either one."
+    ? "Rename the source and/or rotate its API token. Leave the token blank to keep the existing one. The workspace URL and account email are fixed — delete and re-add to change either one."
     : existing
       ? `You already have ${existingKind} connected. Add the other product with the same token — or use a different one.`
       : "Connect Jira, Confluence, or both with one Atlassian API token. Dayseam only needs read access.";
@@ -437,10 +485,10 @@ export function AddAtlassianSourceDialog({
           >
             {submitting
               ? isReconnect
-                ? "Reconnecting…"
+                ? "Saving…"
                 : "Adding…"
               : isReconnect
-                ? "Reconnect"
+                ? "Save"
                 : "Add source"}
           </DialogButton>
         </>
@@ -507,6 +555,22 @@ export function AddAtlassianSourceDialog({
           />
           {urlHelp}
         </label>
+
+        {isReconnect ? (
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+              Label
+            </span>
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="modulrfinance Jira"
+              data-testid="add-atlassian-label"
+              className="rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+            />
+          </label>
+        ) : null}
 
         {existing ? (
           <fieldset className="flex flex-col gap-1 rounded border border-neutral-200 bg-neutral-50 px-3 py-2 text-xs dark:border-neutral-800 dark:bg-neutral-900/40">
@@ -583,7 +647,7 @@ export function AddAtlassianSourceDialog({
                 type="password"
                 value={apiToken}
                 onChange={(e) => setApiToken(e.target.value)}
-                placeholder="ATATT3…"
+                placeholder={isReconnect ? "Leave blank to keep existing token" : "ATATT3…"}
                 data-testid="add-atlassian-api-token"
                 spellCheck={false}
                 autoCapitalize="off"
@@ -592,8 +656,9 @@ export function AddAtlassianSourceDialog({
               />
               {isReconnect ? (
                 <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
-                  The new token is validated against the existing
-                  account when you click Reconnect.
+                  Paste a fresh token only if you need to rotate it.
+                  A new token is validated against the existing account
+                  before the keychain entry is replaced.
                 </span>
               ) : (
                 <div className="flex items-center gap-2">

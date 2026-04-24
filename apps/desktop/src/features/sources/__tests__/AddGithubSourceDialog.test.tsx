@@ -230,7 +230,7 @@ describe("AddGithubSourceDialog", () => {
     expect(screen.getByRole("button", { name: /add source/i })).toBeDisabled();
   });
 
-  it("in reconnect mode, URL is read-only and submit calls github_sources_reconnect", async () => {
+  it("in edit mode, URL is read-only, label is editable, and a PAT submit calls github_sources_reconnect", async () => {
     const onReconnected = vi.fn();
     registerInvokeHandler(
       "github_sources_reconnect",
@@ -252,11 +252,15 @@ describe("AddGithubSourceDialog", () => {
     expect(urlField.value).toBe("https://api.github.com/");
     expect(urlField).toHaveAttribute("readonly");
 
-    // Reconnect mode skips the explicit Validate step — the backend
-    // re-runs `/user` as part of the reconnect IPC, so the Validate
-    // button and the label field are hidden.
+    // Edit mode skips the explicit Validate step — the backend
+    // re-runs `/user` as part of the reconnect IPC. The label
+    // field is now rendered (DAY-126) so users can rename without
+    // needing a separate dialog.
     expect(screen.queryByTestId("add-github-validate")).not.toBeInTheDocument();
-    expect(screen.queryByTestId("add-github-label")).not.toBeInTheDocument();
+    const labelField = screen.getByTestId(
+      "add-github-label",
+    ) as HTMLInputElement;
+    expect(labelField.value).toBe(EXISTING_GITHUB_SOURCE.label);
     expect(
       screen.queryByTestId("add-github-open-token-page"),
     ).not.toBeInTheDocument();
@@ -264,7 +268,7 @@ describe("AddGithubSourceDialog", () => {
     fireEvent.change(screen.getByTestId("add-github-pat"), {
       target: { value: "ghp_new" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /reconnect/i }));
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
     await waitFor(() =>
       expect(mockInvoke).toHaveBeenCalledWith(
         "github_sources_reconnect",
@@ -274,10 +278,66 @@ describe("AddGithubSourceDialog", () => {
         }),
       ),
     );
+    // A PAT-only edit must not touch the label via sources_update
+    // — otherwise we'd fire a no-op IPC with the unchanged label.
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "sources_update",
+      expect.anything(),
+    );
     expect(onReconnected).toHaveBeenCalledWith(EXISTING_GITHUB_SOURCE.id);
   });
 
-  it("disables Reconnect when the PAT field is empty", () => {
+  // DAY-126: editing only the label (no PAT) must skip the
+  // reconnect IPC entirely — the keychain entry is untouched and
+  // the only write is a label-only `sources_update` patch. This is
+  // the straight-line rename flow the old `RenameSourceDialog`
+  // used to own, now covered here.
+  it("in edit mode, a label-only change calls sources_update and not github_sources_reconnect", async () => {
+    const onReconnected = vi.fn();
+    registerInvokeHandler("sources_update", async () => ({
+      ...EXISTING_GITHUB_SOURCE,
+      label: "Work GitHub",
+    }));
+
+    render(
+      <AddGithubSourceDialog
+        open
+        onClose={() => {}}
+        onAdded={() => {}}
+        reconnect={{ source: EXISTING_GITHUB_SOURCE }}
+        onReconnected={onReconnected}
+      />,
+    );
+
+    const submit = screen.getByRole("button", { name: /^save$/i });
+    // Nothing dirty yet: PAT empty, label unchanged — Save must
+    // stay disabled, otherwise a click would fire a no-op edit.
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId("add-github-label"), {
+      target: { value: "Work GitHub" },
+    });
+    expect(submit).toBeEnabled();
+
+    fireEvent.click(submit);
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "sources_update",
+        expect.objectContaining({
+          id: EXISTING_GITHUB_SOURCE.id,
+          patch: expect.objectContaining({ label: "Work GitHub", config: null }),
+          pat: null,
+        }),
+      ),
+    );
+    expect(mockInvoke).not.toHaveBeenCalledWith(
+      "github_sources_reconnect",
+      expect.anything(),
+    );
+    expect(onReconnected).toHaveBeenCalledWith(EXISTING_GITHUB_SOURCE.id);
+  });
+
+  it("in edit mode, Save stays disabled when nothing is dirty and enables on either PAT or label change", () => {
     render(
       <AddGithubSourceDialog
         open
@@ -287,11 +347,28 @@ describe("AddGithubSourceDialog", () => {
         onReconnected={() => {}}
       />,
     );
-    const submit = screen.getByRole("button", { name: /reconnect/i });
+    const submit = screen.getByRole("button", { name: /^save$/i });
     expect(submit).toBeDisabled();
+
     fireEvent.change(screen.getByTestId("add-github-pat"), {
       target: { value: "ghp_x" },
     });
     expect(submit).toBeEnabled();
+
+    fireEvent.change(screen.getByTestId("add-github-pat"), {
+      target: { value: "" },
+    });
+    expect(submit).toBeDisabled();
+
+    fireEvent.change(screen.getByTestId("add-github-label"), {
+      target: { value: "renamed" },
+    });
+    expect(submit).toBeEnabled();
+
+    // Trimmed-empty label is rejected (DB pins label NOT NULL).
+    fireEvent.change(screen.getByTestId("add-github-label"), {
+      target: { value: "   " },
+    });
+    expect(submit).toBeDisabled();
   });
 });

@@ -30,19 +30,34 @@
 //   4. Label field — defaults to the host portion of the URL after
 //      a successful validate.
 //
-// Reconnect mode: when `reconnect.source` is supplied the dialog
-// operates on that source — URL and label are shown read-only from
-// the existing row, the validate button is hidden, and submit calls
-// `github_sources_reconnect` directly. The backend re-runs `/user`
-// against the stored URL, refuses if the resolved numeric `user_id`
-// does not match the `GitHubUserId` identity already bound to the
-// source (silent-rebind guard), and rotates the keychain entry in
-// place. The caller then fires `sources_healthcheck` to clear the
-// red chip. Rotating the GitHub account off a source is deliberately
-// out of scope here — deleting and re-adding is the supported path.
+// Edit mode: when `reconnect.source` is supplied the dialog operates
+// on that source. URL is shown read-only from the existing row, the
+// validate button is hidden, and submit does two things depending
+// on what the user touched:
+//
+//   * If the user typed a new PAT, submit calls
+//     `github_sources_reconnect`. The backend re-runs `/user`
+//     against the stored URL, refuses if the resolved numeric
+//     `user_id` does not match the `GitHubUserId` identity already
+//     bound to the source (silent-rebind guard), and rotates the
+//     keychain entry in place.
+//   * If the user changed the label, submit calls `sources_update`
+//     with a label-only patch (`config: null`, `pat: null`).
+//
+// Either or both can happen in one submit — the PAT rotation runs
+// first, the label update second, so a failed rotation short-
+// circuits before we touch the label. The caller fires
+// `sources_healthcheck` afterwards to clear the red chip without
+// waiting for the next poll.
+//
+// DAY-126 collapsed the standalone "rename" dialog into this edit
+// surface: leaving the PAT field empty means "keep existing token",
+// so users can rename a source without rotating the secret.
+// Rotating the GitHub account off a source is still out of scope —
+// deleting and re-adding is the supported path.
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { GithubValidationResult, Source } from "@dayseam/ipc-types";
+import type { GithubValidationResult, Source, SourcePatch } from "@dayseam/ipc-types";
 import { Dialog, DialogButton } from "../../components/Dialog";
 import { invoke } from "../../ipc/invoke";
 import { sourcesBus, SOURCES_CHANGED } from "../../ipc/useSources";
@@ -60,16 +75,19 @@ interface AddGithubSourceDialogProps {
    *  inserted `Source` row. Not called in reconnect mode; see
    *  `onReconnected`. */
   onAdded: (source: Source) => void;
-  /** When set, the dialog mounts in reconnect mode: the API base
-   *  URL + label are shown read-only from the passed source, the
-   *  validate button is hidden, and submit calls
-   *  `github_sources_reconnect` instead of `github_sources_add`. */
+  /** When set, the dialog mounts in edit mode: the API base URL is
+   *  shown read-only from the passed source, the validate button is
+   *  hidden, the label is editable (pre-filled from the row), and
+   *  the PAT field is optional (empty = keep the existing token).
+   *  Submit calls `github_sources_reconnect` when a PAT is present
+   *  and/or `sources_update` when the label changed, instead of
+   *  `github_sources_add`. */
   reconnect?: { source: Source } | null;
-  /** Fired after `github_sources_reconnect` succeeds with the source
-   *  id whose keychain slot was rotated. The caller is expected to
-   *  fire `sources_healthcheck` against that id so the red chip on
-   *  the sidebar clears immediately without waiting for the next
-   *  poll. */
+  /** Fired after a successful edit. Receives the source id so the
+   *  caller can fire `sources_healthcheck` to clear the red chip
+   *  without waiting for the next poll. Fires even when the user
+   *  only changed the label — the id/name is the same in either
+   *  case, keeping the caller's post-edit refresh logic uniform. */
   onReconnected?: (sourceId: string) => void;
 }
 
@@ -143,12 +161,26 @@ export function AddGithubSourceDialog({
     pat.trim().length > 0 &&
     validation.kind !== "checking";
 
+  // In edit mode the user can rotate the PAT, rename the source,
+  // or both in one submit. At least one side has to be dirty —
+  // otherwise the Save button is a no-op and we keep it disabled to
+  // match the DAY-121 "only light up when there's something to do"
+  // pattern. `label.trim()` must be non-empty because the DB pins
+  // `label NOT NULL` and an empty chip is invisible in the sidebar.
+  const trimmedLabel = label.trim();
+  const labelChanged =
+    isReconnect &&
+    reconnectSource != null &&
+    trimmedLabel.length > 0 &&
+    trimmedLabel !== reconnectSource.label;
+  const patEntered = pat.trim().length > 0;
+
   const canSubmit = isReconnect
-    ? // Reconnect path skips the explicit Validate button — the
-      // backend re-runs `/user` as part of
-      // `github_sources_reconnect`, so we only need a non-empty PAT
-      // client-side.
-      pat.trim().length > 0 && !submitting
+    ? // Edit path skips the explicit Validate button — the backend
+      // re-runs `/user` as part of `github_sources_reconnect` when
+      // we forward a PAT. A label-only edit goes through
+      // `sources_update` instead.
+      (patEntered || labelChanged) && trimmedLabel.length > 0 && !submitting
     : normalisation.kind === "ok" &&
       label.trim().length > 0 &&
       validation.kind === "ok" &&
@@ -196,12 +228,30 @@ export function AddGithubSourceDialog({
     setSubmitError(null);
     try {
       if (isReconnect && reconnectSource != null) {
-        const affectedId = await invoke("github_sources_reconnect", {
-          sourceId: reconnectSource.id,
-          pat: pat.trim(),
-        });
+        // Rotate the PAT first (if given) so a failed rotation
+        // short-circuits before we touch the label — otherwise a
+        // renamed-but-still-broken source would be worse than the
+        // pre-edit state.
+        if (patEntered) {
+          await invoke("github_sources_reconnect", {
+            sourceId: reconnectSource.id,
+            pat: pat.trim(),
+          });
+        }
+        if (labelChanged) {
+          // Label-only patch: `config: null` leaves the existing
+          // per-kind config untouched, and `pat: null` tells
+          // `validate_pat_arg` to leave the stored secret alone.
+          // The Rust command has supported this shape since DAY-70.
+          const patch: SourcePatch = { label: trimmedLabel, config: null };
+          await invoke("sources_update", {
+            id: reconnectSource.id,
+            patch,
+            pat: null,
+          });
+        }
         sourcesBus.dispatchEvent(new Event(SOURCES_CHANGED));
-        onReconnected?.(affectedId);
+        onReconnected?.(reconnectSource.id);
         return;
       }
       if (validation.kind !== "ok" || normalisation.kind !== "ok") return;
@@ -222,6 +272,9 @@ export function AddGithubSourceDialog({
     canSubmit,
     isReconnect,
     reconnectSource,
+    patEntered,
+    labelChanged,
+    trimmedLabel,
     validation,
     normalisation,
     label,
@@ -241,10 +294,10 @@ export function AddGithubSourceDialog({
     <Dialog
       open={open}
       onClose={handleClose}
-      title={isReconnect ? "Reconnect GitHub" : "Add GitHub source"}
+      title={isReconnect ? "Edit GitHub source" : "Add GitHub source"}
       description={
         isReconnect
-          ? "Paste a fresh Personal Access Token to restore this source. The API base URL stays the same; the bound GitHub account is preserved."
+          ? "Rename the source and/or rotate its Personal Access Token. Leave the token blank to keep the existing one. The API base URL and bound GitHub account are preserved — delete and re-add to change either."
           : "Connect a GitHub (or GitHub Enterprise) account with a Personal Access Token. Dayseam only needs read access."
       }
       testId="add-github-dialog"
@@ -261,10 +314,10 @@ export function AddGithubSourceDialog({
           >
             {submitting
               ? isReconnect
-                ? "Reconnecting…"
+                ? "Saving…"
                 : "Adding…"
               : isReconnect
-                ? "Reconnect"
+                ? "Save"
                 : "Add source"}
           </DialogButton>
         </>
@@ -322,7 +375,7 @@ export function AddGithubSourceDialog({
             type="password"
             value={pat}
             onChange={(e) => setPat(e.target.value)}
-            placeholder="ghp_…"
+            placeholder={isReconnect ? "Leave blank to keep existing token" : "ghp_…"}
             data-testid="add-github-pat"
             spellCheck={false}
             autoCapitalize="off"
@@ -331,8 +384,9 @@ export function AddGithubSourceDialog({
           />
           {isReconnect ? (
             <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
-              The new token is validated against the bound GitHub
-              account when you click Reconnect.
+              Paste a fresh token only if you need to rotate it. A new
+              token is validated against the bound GitHub account before
+              the keychain entry is replaced.
             </span>
           ) : (
             <div className="flex items-center gap-2">
@@ -350,21 +404,19 @@ export function AddGithubSourceDialog({
           )}
         </label>
 
-        {!isReconnect ? (
-          <label className="flex flex-col gap-1">
-            <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
-              Label
-            </span>
-            <input
-              type="text"
-              value={label}
-              onChange={(e) => setLabel(e.target.value)}
-              placeholder="api.github.com"
-              data-testid="add-github-label"
-              className="rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
-            />
-          </label>
-        ) : null}
+        <label className="flex flex-col gap-1">
+          <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+            Label
+          </span>
+          <input
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder="api.github.com"
+            data-testid="add-github-label"
+            className="rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+          />
+        </label>
 
         {submitError ? (
           <p

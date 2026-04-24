@@ -13,8 +13,12 @@
 // Hovering (or keyboard-focusing) a chip reveals three affordances:
 // Rescan (↻), Edit (✎), and Delete (✕). Rescan fires
 // `sources_healthcheck(id)`; Edit reopens the source's add dialog
-// (different per kind) in edit mode; Delete asks for confirmation
-// before calling `sources_delete(id)`.
+// (different per kind) in edit mode where the user can rename the
+// source and/or rotate its credentials; Delete asks for
+// confirmation before calling `sources_delete(id)`. DAY-126 folded
+// the standalone Rename dialog into Edit because carrying two
+// near-identical surfaces for every connector was confusing and
+// left GitHub + Atlassian without a label field at all.
 //
 // When a source's `last_health.ok` is false and the error code is a
 // known `gitlab.*` code, the chip also renders a `SourceErrorCard`
@@ -37,7 +41,6 @@ import { AddGitlabSourceDialog } from "./AddGitlabSourceDialog";
 import { AddAtlassianSourceDialog } from "./AddAtlassianSourceDialog";
 import { AddGithubSourceDialog } from "./AddGithubSourceDialog";
 import { ApproveReposDialog } from "./ApproveReposDialog";
-import { RenameSourceDialog } from "./RenameSourceDialog";
 import { SourceErrorCard } from "./SourceErrorCard";
 
 function healthDotClass(health: SourceHealth): string {
@@ -107,17 +110,10 @@ export function SourcesSidebar() {
   const [approving, setApproving] = useState<Source | null>(null);
   // Non-null while the edit dialog is open. `editingKind` decides
   // which dialog renders; mixing LocalGit + GitLab in the same
-  // component would over-generalise both.
+  // component would over-generalise both. DAY-126: all four
+  // connector edit dialogs now surface the label field, so rename
+  // is part of edit and does not need its own separate state slot.
   const [editing, setEditing] = useState<Source | null>(null);
-  // Non-null while the rename dialog is open. Kept separate from
-  // `editing` because renaming is the one operation we want to
-  // expose uniformly for every connector kind (DAY-121) — each of
-  // the four "edit" dialogs has its own kind-specific UI for URL /
-  // PAT / scan-root changes, but the label field was missing from
-  // GitHub + Atlassian and broken for GitLab, so the rename path
-  // now lives in its own dedicated dialog that only knows about
-  // labels.
-  const [renaming, setRenaming] = useState<Source | null>(null);
   // Non-null while the delete confirmation is showing.
   const [deleting, setDeleting] = useState<Source | null>(null);
   const [deleteError, setDeleteError] = useState<string | null>(null);
@@ -246,7 +242,6 @@ export function SourcesSidebar() {
           source={source}
           onHealthcheck={handleHealthcheck}
           onEdit={() => setEditing(source)}
-          onRename={() => setRenaming(source)}
           onRequestDelete={() => {
             setDeleteError(null);
             setDeleting(source);
@@ -422,19 +417,6 @@ export function SourcesSidebar() {
         onReconnected={handleGithubReconnected}
       />
 
-      <RenameSourceDialog
-        source={renaming}
-        onClose={() => setRenaming(null)}
-        onRenamed={() => {
-          setRenaming(null);
-          // `useSources.update` already fires the shared bus event,
-          // but we also want the chip label to repaint without
-          // waiting for the next poll, so force a refresh here
-          // mirroring the other edit flows.
-          void refresh();
-        }}
-      />
-
       {approving ? (
         <ApproveReposDialog
           source={approving}
@@ -465,12 +447,11 @@ export function SourcesSidebar() {
 interface SourceChipProps {
   source: Source;
   onHealthcheck: (id: string) => void;
+  /** Opens the connector-specific edit dialog. As of DAY-126 every
+   *  edit dialog (LocalGit, GitLab, GitHub, Atlassian) surfaces a
+   *  Label field, so renaming is part of this one flow instead of
+   *  a separate Rename dialog. */
   onEdit: () => void;
-  /** Opens the `RenameSourceDialog`. Split from `onEdit` (which
-   *  routes to a connector-specific dialog for URL / PAT / scan-
-   *  root edits) because renaming is uniform across every kind
-   *  and the other dialogs don't all surface a label field. */
-  onRename: () => void;
   onRequestDelete: () => void;
   onReconnect: (source: Source) => void;
 }
@@ -498,7 +479,6 @@ function SourceChip({
   source,
   onHealthcheck,
   onEdit,
-  onRename,
   onRequestDelete,
   onReconnect,
 }: SourceChipProps) {
@@ -583,16 +563,6 @@ function SourceChip({
             title="Rescan"
           >
             ↻
-          </button>
-          <button
-            type="button"
-            onClick={onRename}
-            className="rounded px-1 font-mono text-[10px] font-semibold text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
-            aria-label={`Rename ${source.label}`}
-            title="Rename"
-            data-testid={`source-chip-rename-${source.id}`}
-          >
-            Aa
           </button>
           <button
             type="button"
