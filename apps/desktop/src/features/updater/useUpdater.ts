@@ -69,6 +69,13 @@ export interface UpdaterState {
   /** Whether the currently-available version is on the skip list.
    *  Tests (and the banner) read this to gate rendering. */
   isCurrentSkipped: boolean;
+  /** DAY-127 #3: `true` while the current check was initiated by the
+   *  user (via the native "Check for Updates…" menu) and the banner
+   *  should therefore show outcome rows for `checking` / `up-to-date`
+   *  that the silent mount-time check normally suppresses. Auto-
+   *  clears a few seconds after an `up-to-date` resolution so the
+   *  banner fades out on its own. */
+  verbose: boolean;
 }
 
 function formatError(err: unknown): string {
@@ -79,6 +86,25 @@ function formatError(err: unknown): string {
 
 export function useUpdater(): UpdaterState {
   const [status, setStatus] = useState<UpdaterStatus>({ kind: "idle" });
+  // DAY-127 #3: tracks whether the current check cycle was fired by
+  // the user through the native menu (true) or by the silent
+  // mount-time check (false). The banner reads this to decide
+  // whether to render "Checking…" / "Up to date" rows — we don't
+  // want to flash those on app launch, but we absolutely want them
+  // when the user explicitly asked.
+  const [verbose, setVerbose] = useState(false);
+  // DAY-127 #3 (post-review): `runCheck` needs to *synchronously*
+  // know whether another check is already in flight so a second
+  // menu click collapses into a no-op. React state isn't readable
+  // synchronously, so we mirror the status on a ref alongside
+  // every `setStatus` call through `setStatusIfMounted`. This
+  // replaces an earlier attempt that peeked at state via a
+  // functional `setStatus(prev => prev)` updater, which happened
+  // to work only because React's eager-bailout fast path runs
+  // updaters synchronously for "return prev unchanged" cases — a
+  // refactor that returned a new object would silently break the
+  // guard.
+  const statusRef = useRef<UpdaterStatus>({ kind: "idle" });
   // Cache the `Update` resource so `install()` can reuse the handle
   // `check()` returned. `Update` extends `Resource` on the Rust
   // side and must be closed exactly once; we close it in the
@@ -90,6 +116,11 @@ export function useUpdater(): UpdaterState {
   const mountedRef = useRef(true);
 
   const setStatusIfMounted = useCallback((next: UpdaterStatus) => {
+    // Mirror every accepted status onto the ref first so any
+    // synchronous reader (e.g. the `runCheck` in-flight guard) sees
+    // the same value React will commit. We still drop the React
+    // `setState` when unmounted to avoid the classic warning.
+    statusRef.current = next;
     if (mountedRef.current) setStatus(next);
   }, []);
 
@@ -110,6 +141,16 @@ export function useUpdater(): UpdaterState {
   }, []);
 
   const runCheck = useCallback(async () => {
+    // DAY-127 #3: back-to-back menu clicks used to fire a second
+    // `check()` against the updater endpoint for every click, which
+    // is wasted network and, worse, gave the user no indication
+    // anything was in progress. Collapsing repeat clicks while
+    // `checking` makes the "Check for Updates…" menu a no-op from
+    // the user's perspective but preserves the visible banner row
+    // until the in-flight check resolves. We read from `statusRef`
+    // (kept in lockstep with `setStatusIfMounted`) because React
+    // state isn't synchronously readable in a callback.
+    if (statusRef.current.kind === "checking") return;
     setStatusIfMounted({ kind: "checking" });
     try {
       const update = await check();
@@ -222,6 +263,11 @@ export function useUpdater(): UpdaterState {
     let unlisten: (() => void) | null = null;
     let cancelled = false;
     void listen("menu://check-for-updates", () => {
+      // DAY-127 #3: user explicitly asked. Flip the banner into
+      // verbose mode so `checking` / `up-to-date` rows show up —
+      // the silent mount-time check leaves this false and keeps
+      // the banner quiet.
+      setVerbose(true);
       void runCheck();
     })
       .then((fn) => {
@@ -242,8 +288,53 @@ export function useUpdater(): UpdaterState {
     };
   }, [runCheck]);
 
+  // DAY-127 #3: once the verbose check resolves to "up-to-date",
+  // leave the confirmation on screen just long enough to be read,
+  // then drop back to silent mode. The timeout is generous enough
+  // that slower readers catch the copy but short enough to not
+  // feel like a persistent banner — matching Chromium's "You are
+  // on the latest version" toast duration on the "About" page.
+  useEffect(() => {
+    if (!verbose) return;
+    if (status.kind !== "up-to-date") return;
+    const handle = setTimeout(() => {
+      setVerbose(false);
+    }, 4000);
+    return () => clearTimeout(handle);
+  }, [verbose, status.kind]);
+
+  // A user-initiated check that transitions away from the
+  // "checking → up-to-date" pair doesn't need the verbose flavor
+  // anymore — the regular update rows (available / downloading /
+  // ready / error) already carry their own copy and actions.
+  // Clearing verbose here keeps the flag's semantics tight: it
+  // only means "show the verbose-only rows", and when those rows
+  // are no longer the active branch the flag goes back to false
+  // so a future verbose click starts from a clean slate. Error
+  // is included so a verbose check that hits the network and
+  // fails doesn't leave `verbose` stuck true for the rest of the
+  // session.
+  useEffect(() => {
+    if (!verbose) return;
+    if (
+      status.kind === "available" ||
+      status.kind === "downloading" ||
+      status.kind === "ready" ||
+      status.kind === "error"
+    ) {
+      setVerbose(false);
+    }
+  }, [verbose, status.kind]);
+
   const isCurrentSkipped =
     status.kind === "available" ? isSkipped(status.version) : false;
 
-  return { status, check: runCheck, install, skipCurrent, isCurrentSkipped };
+  return {
+    status,
+    check: runCheck,
+    install,
+    skipCurrent,
+    isCurrentSkipped,
+    verbose,
+  };
 }

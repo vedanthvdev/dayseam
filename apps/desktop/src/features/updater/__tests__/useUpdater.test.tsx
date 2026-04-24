@@ -4,6 +4,7 @@ import {
   emitEvent,
   MockUpdate,
   mockRelaunch,
+  mockUpdaterCheck,
   queueUpdaterCheck,
   resetTauriMocks,
 } from "../../../__tests__/tauri-mock";
@@ -236,6 +237,122 @@ describe("useUpdater + UpdaterBanner", () => {
     // a real session (a hook that never unmounts), that's a
     // permanent resource leak.
     expect(first.closeCalls).toBe(1);
+  });
+
+  // DAY-127 #3: the silent mount-time check must *not* render the
+  // verbose-only rows (Checking… / Up to date). Without this, the
+  // shell would flash "Checking for updates…" on every launch — the
+  // original pre-DAY-127 UX that made the banner feel busy. Pinning
+  // the silent path prevents a regression where someone wires
+  // verbose true by default and claims it was "for visibility".
+  it("keeps the banner silent on the mount-time check when verbose has not been requested", async () => {
+    queueUpdaterCheck(null);
+    render(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByTestId("kind").textContent).toBe("up-to-date"),
+    );
+    // Neither of the verbose-only rows should appear.
+    expect(screen.queryByTestId("updater-banner-checking")).toBeNull();
+    expect(screen.queryByTestId("updater-banner-up-to-date")).toBeNull();
+  });
+
+  // DAY-127 #3: a user-triggered menu click drops the hook into
+  // verbose mode so the banner surfaces the "Checking for updates…"
+  // row during the IPC round-trip and a dismissible "Dayseam is
+  // up to date." confirmation on settle. The silent mount-time
+  // check must not render those rows (covered separately above)
+  // so the shell doesn't flash messaging on every launch. This
+  // test pins the "I clicked Check for Updates and nothing
+  // happened" failure mode: before DAY-127 #3 the menu click was
+  // invisible — a stray toggle that dropped the verbose rows
+  // would return to that UX exactly.
+  it("surfaces Checking and Up-to-date rows on a verbose menu-triggered check", async () => {
+    // Mount-time check resolves silent/null so the banner is
+    // clean when the menu event fires.
+    queueUpdaterCheck(null);
+    render(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByTestId("kind").textContent).toBe("up-to-date"),
+    );
+    expect(screen.queryByTestId("updater-banner-up-to-date")).toBeNull();
+    expect(screen.queryByTestId("updater-banner-checking")).toBeNull();
+
+    // Gate the verbose re-check on a pending promise so we can
+    // observe the `Checking…` row mid-flight. We override
+    // `mockUpdaterCheck` directly rather than go through the
+    // (synchronous-valued) queue.
+    let resolveCheck: (value: MockUpdate | null) => void = () => {};
+    const pending = new Promise<MockUpdate | null>((resolve) => {
+      resolveCheck = resolve;
+    });
+    mockUpdaterCheck.mockImplementationOnce(async () => pending);
+    await act(async () => {
+      emitEvent("menu://check-for-updates", null);
+    });
+    await screen.findByTestId("updater-banner-checking");
+
+    await act(async () => {
+      resolveCheck(null);
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("updater-banner-up-to-date"),
+      ).not.toBeNull(),
+    );
+    // The Checking row must swap out — leaving it mounted would
+    // double-stack the banner while we're idle again.
+    expect(screen.queryByTestId("updater-banner-checking")).toBeNull();
+  });
+
+  // DAY-127 #3: back-to-back menu clicks used to fire a fresh
+  // `check()` for every click, wasting IPC and (depending on the
+  // updater endpoint) racing state transitions. The hook now
+  // collapses repeat clicks while a check is already in flight.
+  // Without a regression test, a refactor that goes back to
+  // reading React state non-synchronously in the guard would
+  // silently bring the duplicate calls back.
+  it("collapses a second menu click while a check is still in flight", async () => {
+    // Mount-time check resolves silent/null.
+    queueUpdaterCheck(null);
+    render(<Harness />);
+    await waitFor(() =>
+      expect(screen.getByTestId("kind").textContent).toBe("up-to-date"),
+    );
+
+    // First menu click: gate the IPC so the check stays in flight.
+    let resolveFirst: (value: null) => void = () => {};
+    const pending = new Promise<MockUpdate | null>((resolve) => {
+      resolveFirst = resolve as (value: null) => void;
+    });
+    mockUpdaterCheck.mockImplementationOnce(async () => pending);
+    const callsBeforeSecondClick = mockUpdaterCheck.mock.calls.length;
+    await act(async () => {
+      emitEvent("menu://check-for-updates", null);
+    });
+    await screen.findByTestId("updater-banner-checking");
+    expect(mockUpdaterCheck.mock.calls.length).toBe(callsBeforeSecondClick + 1);
+
+    // Second menu click while the first is still pending. The
+    // guard must collapse it — no second `check()` call should
+    // fire until the first resolves.
+    await act(async () => {
+      emitEvent("menu://check-for-updates", null);
+    });
+    expect(screen.queryByTestId("updater-banner-checking")).not.toBeNull();
+    expect(screen.queryByTestId("updater-banner-available")).toBeNull();
+    expect(mockUpdaterCheck.mock.calls.length).toBe(callsBeforeSecondClick + 1);
+
+    // Let the first check resolve null. The banner settles on the
+    // verbose up-to-date confirmation.
+    await act(async () => {
+      resolveFirst(null);
+    });
+    await waitFor(() =>
+      expect(
+        screen.queryByTestId("updater-banner-up-to-date"),
+      ).not.toBeNull(),
+    );
+    expect(screen.queryByTestId("updater-banner-available")).toBeNull();
   });
 
   it("maps download failures into the error banner without a stray relaunch", async () => {
