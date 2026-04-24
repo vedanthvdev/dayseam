@@ -2,10 +2,18 @@
 //! `github.*` codes in [`dayseam_core::error_codes`].
 //!
 //! The registry itself lives in `dayseam-core` (DAY-93); this module is
-//! the bridge that turns a transport error, an HTTP status, or a serde
-//! decode failure into the right [`DayseamError`] variant + stable code
-//! so downstream log parsers, UI copy, and the `SourceErrorCard`
-//! surface (DAY-99) have a single source of truth.
+//! the bridge that turns an HTTP status or a serde decode failure into
+//! the right [`DayseamError`] variant + stable code so downstream log
+//! parsers, UI copy, and the `SourceErrorCard` surface (DAY-99) have a
+//! single source of truth.
+//!
+//! DAY-129: transport-layer classification (DNS, TLS, connect-refused,
+//! timeout) is the SDK's responsibility — see
+//! `connectors_sdk::http::classify_transport_error`. The pre-DAY-129
+//! `map_transport_error` / `UrlDns` / `UrlTls` helpers in this module
+//! were dead code (the GitHub connector has always routed through
+//! [`connectors_sdk::HttpClient::send`]); dropping them removes one
+//! class of "looks live but isn't" surface from the registry.
 //!
 //! Shape-mirrors `connector-gitlab::errors` and
 //! `connector-atlassian-common::errors` — each connector family owns
@@ -32,10 +40,6 @@ pub enum GithubUpstreamError {
     /// PAT: read-only `Metadata`, `Issues`, `Pull requests`,
     /// `Contents`). Same `Auth` variant, different code, same hint.
     AuthMissingScope,
-    /// DNS resolution failed for the configured host.
-    UrlDns { message: String },
-    /// TLS handshake failed (bad cert, mismatched hostname, etc.).
-    UrlTls { message: String },
     /// 404 on a GitHub endpoint — the resource (user, repo, issue,
     /// PR) isn't reachable. Split out from the catch-all so the UI
     /// surfaces "check the URL / scope" rather than "upstream is
@@ -92,25 +96,6 @@ impl From<GithubUpstreamError> for DayseamError {
                     "Generate a fresh PAT with the required scopes and reconnect this source."
                         .to_string(),
                 ),
-            },
-            GithubUpstreamError::UrlDns { message } => DayseamError::Network {
-                // We reuse GitLab's `url.dns` / `url.tls` codes here
-                // rather than minting GitHub-specific twins: the UI
-                // `SourceErrorCard` copy for "we can't reach the
-                // host" is identical regardless of which vendor we
-                // were talking to, and all four registered connectors
-                // funnel transport failures through the same two
-                // codes today. A v0.5 refactor that needs
-                // vendor-specific DNS / TLS copy can split them
-                // then; minting them speculatively now would bloat
-                // the error registry without a caller that
-                // discriminates.
-                code: error_codes::GITLAB_URL_DNS.to_string(),
-                message,
-            },
-            GithubUpstreamError::UrlTls { message } => DayseamError::Network {
-                code: error_codes::GITLAB_URL_TLS.to_string(),
-                message,
             },
             GithubUpstreamError::ResourceNotFound { message } => DayseamError::Network {
                 code: error_codes::GITHUB_RESOURCE_NOT_FOUND.to_string(),
@@ -173,31 +158,6 @@ pub fn map_status(status: StatusCode, message: impl Into<String>) -> GithubUpstr
             message: format!("unexpected status {status}: {message}"),
         },
     }
-}
-
-/// Classify a [`reqwest::Error`] as DNS, TLS, or a generic transport
-/// failure. Shape-equal to
-/// `connector-gitlab::errors::map_transport_error` so connectors funnel
-/// transport failures through the same UX copy regardless of vendor.
-pub fn map_transport_error(err: &reqwest::Error) -> GithubUpstreamError {
-    let msg = err.to_string();
-    let lower = msg.to_lowercase();
-    if is_tls_error(&lower) {
-        GithubUpstreamError::UrlTls { message: msg }
-    } else {
-        GithubUpstreamError::UrlDns { message: msg }
-    }
-}
-
-fn is_tls_error(lower_msg: &str) -> bool {
-    // `reqwest` does not expose a stable `is_tls()`; we sniff the
-    // message for the rustls-side markers. False negatives degrade
-    // into `UrlDns`, which is safe — both codes surface a "can't reach
-    // the host" card, just with different copy.
-    lower_msg.contains("tls")
-        || lower_msg.contains("certificate")
-        || lower_msg.contains("handshake")
-        || lower_msg.contains("ssl")
 }
 
 #[cfg(test)]

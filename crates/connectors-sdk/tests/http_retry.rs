@@ -279,6 +279,53 @@ async fn unresolvable_host_surfaces_transport_dns_with_hostname_in_message() {
 }
 
 #[tokio::test]
+async fn transport_error_message_does_not_leak_url_userinfo() {
+    // DAY-129 `test10`: the security review on DAY-125 flagged a
+    // theoretical PAT-leak concern — if a user pastes a URL with
+    // embedded credentials (`https://user:pat@gitlab.example.com`)
+    // and the transport layer fails, does the surfaced error
+    // message render those credentials? `reqwest` strips userinfo
+    // from `url()` before the error's `Display` runs (via its
+    // internal `extract_authority` invariant); this test pins the
+    // invariant by forcing a connect-refused on a URL carrying
+    // userinfo and asserting neither the host-splice nor the
+    // trailing detail leaks the password. A future dep bump that
+    // regressed `reqwest` here would fail this test loudly, giving
+    // us a chance to add our own scrub before the leaked bytes
+    // reach a log.
+    let client = HttpClient::new()
+        .expect("build")
+        .with_policy(RetryPolicy::instant());
+    let cancel = CancellationToken::new();
+    let err = client
+        .send(
+            client
+                .reqwest()
+                .get("http://alice:super-secret-pat@127.0.0.1:1/probe"),
+            &cancel,
+            None,
+            None,
+        )
+        .await
+        .expect_err("connect refused on userinfo URL must still surface as a transport error");
+    let DayseamError::Network { message, .. } = &err else {
+        panic!("expected Network error, got {err:?}");
+    };
+    assert!(
+        !message.contains("super-secret-pat"),
+        "PAT leaked into transport error message: `{message}`",
+    );
+    assert!(
+        !message.contains("alice:"),
+        "username:password pair leaked into transport error message: `{message}`",
+    );
+    assert!(
+        message.contains("127.0.0.1"),
+        "host must still appear in the message, got `{message}`",
+    );
+}
+
+#[tokio::test]
 async fn status_401_and_403_return_response_so_caller_can_classify() {
     // CORR-01 regression: before the fix, the SDK collapsed 401/403 into
     // `DayseamError::Network { code: "http.transport" }`, which broke the

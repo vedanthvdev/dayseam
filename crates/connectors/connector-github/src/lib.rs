@@ -38,10 +38,13 @@
 //!   `Unsupported` for every [`connectors_sdk::SyncRequest`] variant
 //!   until DAY-96 lands the walker.
 //! * [`errors`] — [`errors::GithubUpstreamError`] +
-//!   [`errors::map_status`] + [`errors::map_transport_error`].
-//!   Classifies 4xx / 5xx / transport failures into the
+//!   [`errors::map_status`]. Classifies 4xx / 5xx into the
 //!   registry-defined `github.*` error codes the UI keys its
-//!   Reconnect-card copy off.
+//!   Reconnect-card copy off. Transport failures (DNS, TLS,
+//!   connect-refused, timeout) come back from the SDK's
+//!   [`connectors_sdk::HttpClient::send`] as `http.transport.*`
+//!   sub-codes (DAY-129) rather than through a per-connector
+//!   mapper that used to string-match on the request URL.
 //! * [`pagination`] — [`pagination::next_link`]. Parses the
 //!   `Link` header GitHub returns on every paginated endpoint and
 //!   hands the walker the next URL, tolerating malformed headers
@@ -62,10 +65,7 @@ pub mod walk;
 pub use auth::{list_identities, validate_auth, GithubUserInfo};
 pub use config::{GithubConfig, GITHUB_COM_API_BASE_URL};
 pub use connector::{GithubConnector, GithubMux, GithubSourceCfg};
-pub use errors::{
-    map_status as map_github_status, map_transport_error as map_github_transport_error,
-    GithubUpstreamError,
-};
+pub use errors::{map_status as map_github_status, GithubUpstreamError};
 pub use events::{
     GithubActor, GithubComment, GithubEvent, GithubEventPayload, GithubIssue, GithubPullRequest,
     GithubRepo, GithubReview, GithubSearchIssue, GithubSearchPage, GithubUserRef,

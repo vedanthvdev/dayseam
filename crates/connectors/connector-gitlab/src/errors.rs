@@ -1,11 +1,24 @@
-//! Typed conversions from connector-local failure modes to the seven
+//! Typed conversions from connector-local failure modes to the
 //! `gitlab.*` codes in [`dayseam_core::error_codes`].
 //!
 //! The registry itself lives in `dayseam-core`; this module is the
-//! bridge that turns a transport error, an HTTP status, or a serde
-//! decode failure into the right [`DayseamError`] variant + stable
-//! code so downstream log parsers, UI copy, and the error-card surface
-//! (Task 3) have a single source of truth.
+//! bridge that turns an HTTP status or a serde decode failure into
+//! the right [`DayseamError`] variant + stable code so downstream log
+//! parsers, UI copy, and the error-card surface (Task 3) have a
+//! single source of truth.
+//!
+//! DAY-129: transport-layer classification (DNS, TLS, connect-refused,
+//! timeout) lives entirely in `connectors-sdk::http` now. The
+//! pre-DAY-129 `map_transport_error` in this module, and the
+//! accompanying `UrlDns` / `UrlTls` variants, string-matched on
+//! `reqwest::Error::Display` — which was a superset of the SDK's
+//! classifier *and* happened to include the request URL, so a URL
+//! containing "tls" or "dns" silently mis-routed every transport
+//! failure. Dropping them here forces the one PAT-validation lane
+//! that used to bypass the SDK (auth::validate_pat) through
+//! `HttpClient::send`, making every GitLab transport failure surface
+//! through the same `http.transport.*` sub-codes the in-sync walker
+//! already emits.
 
 use dayseam_core::{error_codes, DayseamError};
 use reqwest::StatusCode;
@@ -22,10 +35,6 @@ pub enum GitlabUpstreamError {
     /// minimum the Events API demands). Same variant, different code,
     /// same hint.
     AuthMissingScope,
-    /// DNS resolution failed for the configured host.
-    UrlDns { message: String },
-    /// TLS handshake failed (bad cert, mismatched hostname, etc.).
-    UrlTls { message: String },
     /// 429 — server asked us to slow down. The connector's rate-limit
     /// loop surfaces this before ever constructing a `DayseamError`;
     /// mapped here only when the retry budget is exhausted.
@@ -75,14 +84,6 @@ impl From<GitlabUpstreamError> for DayseamError {
                     "Generate a fresh PAT with the `read_api` scope and reconnect this source."
                         .to_string(),
                 ),
-            },
-            GitlabUpstreamError::UrlDns { message } => DayseamError::Network {
-                code: error_codes::GITLAB_URL_DNS.to_string(),
-                message,
-            },
-            GitlabUpstreamError::UrlTls { message } => DayseamError::Network {
-                code: error_codes::GITLAB_URL_TLS.to_string(),
-                message,
             },
             GitlabUpstreamError::RateLimited { retry_after_secs } => DayseamError::RateLimited {
                 code: error_codes::GITLAB_RATE_LIMITED.to_string(),
@@ -145,33 +146,6 @@ pub fn map_status(status: StatusCode, message: impl Into<String>) -> GitlabUpstr
     }
 }
 
-/// Classify a [`reqwest::Error`] as DNS, TLS, or a generic transport
-/// failure. We surface DNS and TLS separately because they drive
-/// different UI surfaces (Task 3's error card has different copy for
-/// each); everything else lumps into `UrlDns` because, from the user's
-/// perspective, "we couldn't reach the host" is the actionable signal
-/// regardless of the precise socket-layer cause.
-pub fn map_transport_error(err: &reqwest::Error) -> GitlabUpstreamError {
-    let msg = err.to_string();
-    let lower = msg.to_lowercase();
-    if is_tls_error(&lower) {
-        GitlabUpstreamError::UrlTls { message: msg }
-    } else {
-        GitlabUpstreamError::UrlDns { message: msg }
-    }
-}
-
-fn is_tls_error(lower_msg: &str) -> bool {
-    // `reqwest` does not expose a stable `is_tls()`; we sniff the
-    // message for the rustls-side markers. False negatives degrade
-    // into `UrlDns` which is safe — both codes surface a "can't reach
-    // the host" card, just with different copy.
-    lower_msg.contains("tls")
-        || lower_msg.contains("certificate")
-        || lower_msg.contains("handshake")
-        || lower_msg.contains("ssl")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -188,23 +162,6 @@ mod tests {
         let err: DayseamError = GitlabUpstreamError::AuthMissingScope.into();
         assert_eq!(err.code(), error_codes::GITLAB_AUTH_MISSING_SCOPE);
         assert_eq!(err.variant(), "Auth");
-    }
-
-    #[test]
-    fn url_dns_and_tls_each_map_to_network_variant() {
-        let dns: DayseamError = GitlabUpstreamError::UrlDns {
-            message: "dns".into(),
-        }
-        .into();
-        assert_eq!(dns.code(), error_codes::GITLAB_URL_DNS);
-        assert_eq!(dns.variant(), "Network");
-
-        let tls: DayseamError = GitlabUpstreamError::UrlTls {
-            message: "bad cert".into(),
-        }
-        .into();
-        assert_eq!(tls.code(), error_codes::GITLAB_URL_TLS);
-        assert_eq!(tls.variant(), "Network");
     }
 
     #[test]
@@ -332,8 +289,6 @@ mod tests {
         let expected = [
             error_codes::GITLAB_AUTH_INVALID_TOKEN,
             error_codes::GITLAB_AUTH_MISSING_SCOPE,
-            error_codes::GITLAB_URL_DNS,
-            error_codes::GITLAB_URL_TLS,
             error_codes::GITLAB_RATE_LIMITED,
             error_codes::GITLAB_UPSTREAM_5XX,
             error_codes::GITLAB_UPSTREAM_SHAPE_CHANGED,

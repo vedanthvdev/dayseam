@@ -12,13 +12,25 @@
 //! neither in `tracing`, nor in `DayseamError::Auth::message`, nor via
 //! `Debug` on any local value. Every error path passes only the host
 //! and the HTTP status upward.
-
-use std::time::Duration;
+//!
+//! DAY-129: transport failures (DNS, TLS, connect-refused, timeout)
+//! go through the SDK's shared [`HttpClient::send`] classifier rather
+//! than this crate's legacy `map_transport_error`. That fold means the
+//! PAT-validation lane emits the same `http.transport.*` sub-codes as
+//! the in-sync GitLab calls instead of collapsing every transport
+//! failure into `gitlab.url.dns` (and occasionally `gitlab.url.tls`).
+//! The message still names the host — see
+//! `connectors_sdk::http::format_transport_error` — so the
+//! `SourceErrorCard` fallback renders "couldn't reach
+//! `gitlab.example.com` after 1 attempts: …" on the Add-Source dialog
+//! without needing bespoke per-connector copy for transport codes.
 
 use reqwest::StatusCode;
 use serde::Deserialize;
+use tokio_util::sync::CancellationToken;
 
-use crate::errors::{map_status, map_transport_error, GitlabUpstreamError};
+use crate::errors::{map_status, GitlabUpstreamError};
+use connectors_sdk::{HttpClient, RetryPolicy};
 use dayseam_core::DayseamError;
 
 /// Shape returned by GitLab's `/user` endpoint. We only keep the two
@@ -32,35 +44,38 @@ pub struct GitlabUserInfo {
 }
 
 /// Validate a GitLab PAT against `host`. Returns the `(user_id,
-/// username)` pair GitLab echoed back, or one of the seven
-/// `gitlab.*` [`DayseamError`] codes — `auth.invalid_token`,
-/// `auth.missing_scope`, `url.dns`, or `url.tls` in practice. A
-/// 429 / 5xx is exceptionally rare on `/user` and is surfaced as
-/// `upstream_5xx` without any retry (the caller is an interactive
-/// dialog; surfacing the retry there is a Task 3 UX concern).
+/// username)` pair GitLab echoed back, or one of the `gitlab.*`
+/// [`DayseamError`] codes — `auth.invalid_token`,
+/// `auth.missing_scope`, `resource_not_found`, `upstream_5xx` — when
+/// GitLab answers with a non-success status. Transport failures
+/// (DNS, TLS, refused connect, timeout) come back as `http.transport.*`
+/// sub-codes (DAY-129) classified by [`HttpClient::send`] rather than
+/// the now-deleted connector-local `map_transport_error`. 429 is
+/// exceptionally rare on `/user`; when it does land here the SDK has
+/// already exhausted its retry budget, so we surface it as
+/// `RateLimited` with a conservative zero-second retry-after.
 ///
 /// `host` is the user-facing base URL with or without a trailing
 /// slash — we normalise it.
+///
+/// The interactive Add-Source dialog can't plausibly benefit from a
+/// five-attempt retry ladder before the user sees feedback, so the
+/// probe uses [`RetryPolicy::instant`] with `max_attempts = 1` — we
+/// want a single honest try, not a multi-second wait before
+/// surfacing "couldn't reach `gitlab.example.com`" back to the form.
+/// The durable in-sync path keeps the SDK's default policy.
 pub async fn validate_pat(host: &str, pat: &str) -> Result<GitlabUserInfo, DayseamError> {
     let base = host.trim_end_matches('/');
     let url = format!("{base}/api/v4/user");
 
-    let client = reqwest::Client::builder()
-        .user_agent(concat!("dayseam/", env!("CARGO_PKG_VERSION")))
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(Duration::from_secs(30))
-        .build()
-        .map_err(|e| DayseamError::Network {
-            code: dayseam_core::error_codes::GITLAB_URL_TLS.to_string(),
-            message: format!("failed to build HTTP client: {e}"),
-        })?;
+    let http = HttpClient::new()?.with_policy(RetryPolicy {
+        max_attempts: 1,
+        ..RetryPolicy::instant()
+    });
+    let cancel = CancellationToken::new();
 
-    let response = client
-        .get(&url)
-        .header("PRIVATE-TOKEN", pat)
-        .send()
-        .await
-        .map_err(|err| DayseamError::from(map_transport_error(&err)))?;
+    let request = http.reqwest().get(&url).header("PRIVATE-TOKEN", pat);
+    let response = http.send(request, &cancel, None, None).await?;
 
     let status = response.status();
     if status.is_success() {

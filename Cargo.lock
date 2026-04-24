@@ -644,7 +644,7 @@ dependencies = [
 
 [[package]]
 name = "connector-atlassian-common"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "connectors-sdk",
  "dayseam-core",
@@ -661,7 +661,7 @@ dependencies = [
 
 [[package]]
 name = "connector-confluence"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -683,7 +683,7 @@ dependencies = [
 
 [[package]]
 name = "connector-github"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -703,7 +703,7 @@ dependencies = [
 
 [[package]]
 name = "connector-gitlab"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -723,7 +723,7 @@ dependencies = [
 
 [[package]]
 name = "connector-jira"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -743,7 +743,7 @@ dependencies = [
 
 [[package]]
 name = "connector-local-git"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -762,7 +762,7 @@ dependencies = [
 
 [[package]]
 name = "connectors-sdk"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "async-trait",
  "base64 0.22.1",
@@ -776,6 +776,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
+ "url",
  "uuid",
  "wiremock",
  "zeroize",
@@ -1058,7 +1059,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-core"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "chrono",
  "dayseam-macros",
@@ -1078,7 +1079,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-db"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "async-trait",
  "chrono",
@@ -1095,7 +1096,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-desktop"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "base64 0.22.1",
  "chrono",
@@ -1136,7 +1137,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-events"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "chrono",
  "dayseam-core",
@@ -1147,7 +1148,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-macros"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -1158,7 +1159,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-orchestrator"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -1190,7 +1191,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-report"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "cargo_metadata",
  "chrono",
@@ -1207,7 +1208,7 @@ dependencies = [
 
 [[package]]
 name = "dayseam-secrets"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "keyring",
  "thiserror 1.0.69",
@@ -5194,7 +5195,7 @@ checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "sink-markdown-file"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "async-trait",
  "cargo_metadata",
@@ -5212,7 +5213,7 @@ dependencies = [
 
 [[package]]
 name = "sinks-sdk"
-version = "0.6.10"
+version = "0.6.11"
 dependencies = [
  "async-trait",
  "cargo_metadata",

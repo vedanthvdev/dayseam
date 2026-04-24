@@ -28,6 +28,7 @@ use dayseam_events::{LogSender, ProgressSender};
 use rand::Rng;
 use reqwest::{Response, StatusCode};
 use tokio_util::sync::CancellationToken;
+use url::Host;
 
 use crate::clock::{Clock, SystemClock};
 
@@ -253,6 +254,17 @@ impl HttpClient {
                             );
                         }
                         if let Some(l) = logs {
+                            // DAY-129 `fix5`: include the classifier's
+                            // narrowest best-effort category so log
+                            // filters can pivot on "which sub-class of
+                            // transport failure was this retry for"
+                            // without grep-sniffing `error.to_string()`
+                            // (which also changes across reqwest /
+                            // rustls bumps). When the transport-level
+                            // error doesn't match any fragment we fall
+                            // through to the generic `http.transport`
+                            // marker, matching the terminal-path
+                            // classification.
                             l.send(
                                 LogLevel::Warn,
                                 None,
@@ -262,6 +274,7 @@ impl HttpClient {
                                     "max_attempts": self.policy.max_attempts,
                                     "backoff_ms": wait.as_millis(),
                                     "error": err.to_string(),
+                                    "transport_class": classify_transport_error(&err),
                                 }),
                             );
                         }
@@ -411,7 +424,16 @@ fn classify_transport_error(err: &reqwest::Error) -> &'static str {
     // "dns", "tls", or "ssl" would poison every branch below. The
     // inner chain (hyper → rustls → std::io) carries the actual
     // cause without the URL and is what we want to classify on.
-    let chain = inner_error_chain_display(err);
+    classify_chain(&inner_error_chain_display(err))
+}
+
+/// Fragment-based classifier split out from
+/// [`classify_transport_error`] so the (deterministic) pattern
+/// matching can be exercised by table-driven tests without needing a
+/// real `reqwest::Error`. Input must already be lower-cased (our
+/// chain renderers normalise for us); the SDK never feeds un-lowered
+/// strings through this helper.
+fn classify_chain(chain: &str) -> &'static str {
     // Order matters: TLS errors almost always surface while attempting
     // a connect, and the string "connection" is too broad to gate on
     // first. DNS fragments are checked before TLS because a DNS
@@ -434,6 +456,36 @@ fn classify_transport_error(err: &reqwest::Error) -> &'static str {
         return error_codes::HTTP_TRANSPORT_TLS;
     }
     error_codes::HTTP_TRANSPORT_CONNECT
+}
+
+/// DAY-129 `fix3`: true when the transport error originated in (or
+/// was relayed through) an HTTP/SOCKS proxy. Corporate networks that
+/// mandate an outbound proxy frequently fail at the proxy hop
+/// (authentication, allow-listing, certificate interception) rather
+/// than at the real upstream; distinguishing "the proxy refused us"
+/// from "the upstream refused us" is the difference between an
+/// actionable error card and an inscrutable one.
+///
+/// We check the whole chain — including `reqwest::Error`'s own
+/// `Display`, which is the only surface that reliably mentions the
+/// proxy URL for builder-level misconfiguration. The match is a
+/// narrow fragment list so a hostname containing the literal word
+/// "proxy" can't poison the detection (the upstream path doesn't
+/// reach the error chain's display at the socket layer).
+fn chain_mentions_proxy(err: &(dyn std::error::Error + 'static)) -> bool {
+    let chain = error_chain_display(err);
+    // The fragments we key on all imply the proxy is the hop that
+    // failed or that reqwest itself surfaced a `proxy(...)` error.
+    // "proxy" on its own is too broad (e.g. a generic "reverse proxy"
+    // string in an upstream body) so we require one of the
+    // proxy-specific tokens reqwest / hyper actually emit.
+    chain.contains("proxy connect ")
+        || chain.contains("http proxy ")
+        || chain.contains("https proxy ")
+        || chain.contains("socks")
+        || chain.contains("proxy authentication")
+        || chain.contains("proxy-authorization")
+        || chain.contains("bad proxy response")
 }
 
 /// Render a lower-cased concatenation of every display in the error's
@@ -473,12 +525,23 @@ fn inner_error_chain_display(err: &(dyn std::error::Error + 'static)) -> String 
 /// and timeouts. For other variants (redirect loops, body-read
 /// failures) we fall back to the generic shape so we don't mislead
 /// the user about what actually went wrong.
+///
+/// DAY-129:
+/// * `fix4` — IPv6 literal hosts render in bracketed URL form
+///   (`[::1]`, `[2001:db8::1]`) rather than the bare address
+///   [`url::Url::host_str`] returns. Without brackets the message
+///   reads `couldn't reach ::1` which copy-pasted into `curl` picks
+///   up the `:1` as the port; the bracketed form is the invariant
+///   URL spec requires.
+/// * `fix3` — when the chain mentions a proxy we append a
+///   `(via proxy)` qualifier so corporate-network failures point the
+///   user at the proxy first rather than at the ultimate upstream.
 fn format_transport_error(err: &reqwest::Error, attempt: u32) -> String {
     use std::error::Error as _;
 
     let reach = err.is_connect() || err.is_timeout();
     if reach {
-        if let Some(host) = err.url().and_then(|u| u.host_str()) {
+        if let Some(host) = err.url().and_then(format_host_for_message) {
             // Use the *inner* source for the trailing detail so the
             // message doesn't double-mention the host (reqwest's own
             // `Display` renders the full URL, which includes the host
@@ -488,10 +551,31 @@ fn format_transport_error(err: &reqwest::Error, attempt: u32) -> String {
                 .source()
                 .map(|s| s.to_string())
                 .unwrap_or_else(|| err.to_string());
-            return format!("couldn't reach `{host}` after {attempt} attempts: {detail}");
+            let via_proxy = if chain_mentions_proxy(err) {
+                " (via proxy)"
+            } else {
+                ""
+            };
+            return format!(
+                "couldn't reach `{host}`{via_proxy} after {attempt} attempts: {detail}"
+            );
         }
     }
     format!("http error after {attempt} attempts: {err}")
+}
+
+/// Render a URL host for inclusion in a user-facing error message,
+/// putting IPv6 literals inside `[...]` so the result is a valid URL
+/// authority (`[::1]` not `::1`). Domains and IPv4 literals are
+/// emitted unchanged. Returns `None` when the URL has no host (e.g.
+/// `file:` URIs) so the caller can fall back to the generic
+/// "http error after N attempts" shape.
+fn format_host_for_message(u: &url::Url) -> Option<String> {
+    match u.host()? {
+        Host::Domain(d) => Some(d.to_string()),
+        Host::Ipv4(addr) => Some(addr.to_string()),
+        Host::Ipv6(addr) => Some(format!("[{addr}]")),
+    }
 }
 
 /// Best-effort parse of the `Retry-After` header (seconds form).
@@ -721,6 +805,170 @@ mod tests {
             !inner.contains("ssl"),
             "inner walk must not include the outer's URL (contained `ssl`), got `{inner}`",
         );
+    }
+
+    /// DAY-129 `test6`: the fragment classifier is pure — it only
+    /// reads a lower-cased chain string — so we can pin the full
+    /// decision table here without needing a real `reqwest::Error`.
+    /// A regression that drops a fragment (e.g. a `tls` alias going
+    /// away after a rustls bump) collapses the affected column into
+    /// `http.transport.connect` and this table fails loudly with
+    /// which input now mis-classifies.
+    #[test]
+    fn classify_chain_routes_known_fragments_to_expected_subcodes() {
+        let cases: &[(&str, &str)] = &[
+            // DNS fragments cover the union of the resolvers we care
+            // about (std `ToSocketAddrs`, hyper, trust-dns).
+            (
+                "dns error: failed to lookup address for example.com",
+                error_codes::HTTP_TRANSPORT_DNS,
+            ),
+            (
+                "nodename nor servname provided, or not known",
+                error_codes::HTTP_TRANSPORT_DNS,
+            ),
+            ("no such host", error_codes::HTTP_TRANSPORT_DNS),
+            ("name resolution failed", error_codes::HTTP_TRANSPORT_DNS),
+            // TLS fragments cover rustls, native-tls, and the
+            // platform-native TLS error renderings.
+            (
+                "invalid peer certificate: untrustedroot",
+                error_codes::HTTP_TRANSPORT_TLS,
+            ),
+            ("tls handshake eof", error_codes::HTTP_TRANSPORT_TLS),
+            ("ssl: wrong_version_number", error_codes::HTTP_TRANSPORT_TLS),
+            (
+                "handshake failure: unexpected message",
+                error_codes::HTTP_TRANSPORT_TLS,
+            ),
+            // Everything else that reached the classifier with an
+            // `is_connect` outer error defaults to `connect`.
+            (
+                "connection refused (os error 61)",
+                error_codes::HTTP_TRANSPORT_CONNECT,
+            ),
+            ("", error_codes::HTTP_TRANSPORT_CONNECT),
+        ];
+        for (chain, expected) in cases {
+            let got = classify_chain(chain);
+            assert_eq!(
+                got, *expected,
+                "chain `{chain}` expected {expected}, got {got}",
+            );
+        }
+    }
+
+    /// DAY-129 `test7`: the chain walker caps depth to keep a
+    /// pathologically nested error from turning classification into
+    /// an allocation spike. We build a 10-link chain and assert the
+    /// rendered string stops at the 8th frame — both proving the
+    /// bound fires and pinning its current value so a silent bump
+    /// gets reviewed.
+    #[test]
+    fn error_chain_display_caps_at_eight_frames() {
+        use std::fmt;
+
+        #[derive(Debug)]
+        struct Link {
+            label: &'static str,
+            inner: Option<Box<Link>>,
+        }
+        impl fmt::Display for Link {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.label)
+            }
+        }
+        impl std::error::Error for Link {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                self.inner
+                    .as_deref()
+                    .map(|n| n as &(dyn std::error::Error + 'static))
+            }
+        }
+
+        let mut head: Option<Box<Link>> = None;
+        // Build from tail to head so the labels are 0..=9 and the
+        // walker sees 0 first.
+        for n in (0..10).rev() {
+            head = Some(Box::new(Link {
+                label: Box::leak(format!("frame-{n}").into_boxed_str()),
+                inner: head.take(),
+            }));
+        }
+        let chain = error_chain_display(head.as_deref().unwrap());
+        for visible in 0..8 {
+            assert!(
+                chain.contains(&format!("frame-{visible}")),
+                "first 8 frames must be rendered, got `{chain}`",
+            );
+        }
+        for hidden in 8..10 {
+            assert!(
+                !chain.contains(&format!("frame-{hidden}")),
+                "frames beyond the cap must not render, got `{chain}`",
+            );
+        }
+    }
+
+    /// DAY-129 `test9`: the host-splice path uses backticks around
+    /// the target, and falls back to the generic "http error after N
+    /// attempts: …" shape when the error carries no URL. The
+    /// `format_host_for_message` helper is pure so we can cover the
+    /// IPv6 bracket rule without building a real `reqwest::Error`.
+    #[test]
+    fn format_host_for_message_brackets_ipv6_and_passes_through_others() {
+        let ipv6 = url::Url::parse("http://[::1]:8080/path").unwrap();
+        assert_eq!(format_host_for_message(&ipv6).as_deref(), Some("[::1]"));
+
+        let ipv4 = url::Url::parse("http://127.0.0.1:1/").unwrap();
+        assert_eq!(format_host_for_message(&ipv4).as_deref(), Some("127.0.0.1"),);
+
+        let domain = url::Url::parse("https://gitlab.example.com/").unwrap();
+        assert_eq!(
+            format_host_for_message(&domain).as_deref(),
+            Some("gitlab.example.com"),
+        );
+    }
+
+    /// DAY-129 `fix3` / proxy-qualifier test. The detection logic
+    /// walks the full chain, so we exercise it on a mock error
+    /// whose display happens to include one of the fragments reqwest
+    /// / hyper emit in practice. "proxy" on its own is too broad
+    /// (upstream error bodies sometimes mention "reverse proxy")
+    /// and must *not* trigger the qualifier.
+    #[test]
+    fn chain_mentions_proxy_requires_specific_fragments() {
+        use std::fmt;
+        #[derive(Debug)]
+        struct Mock(&'static str);
+        impl fmt::Display for Mock {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for Mock {}
+
+        // Fragments that must light up the qualifier.
+        for fragment in [
+            "proxy connect tcp error",
+            "HTTP proxy handshake failed",
+            "HTTPS proxy refused",
+            "socks connect failed",
+            "407 Proxy Authentication Required",
+            "bad proxy response",
+        ] {
+            assert!(
+                chain_mentions_proxy(&Mock(Box::leak(fragment.to_string().into_boxed_str()))),
+                "expected proxy detection for fragment `{fragment}`",
+            );
+        }
+        // Fragments that look proxy-ish but shouldn't.
+        for fragment in ["reverse proxy upstream 502", "not-a-proxy.example.com"] {
+            assert!(
+                !chain_mentions_proxy(&Mock(Box::leak(fragment.to_string().into_boxed_str()))),
+                "unexpected proxy detection for fragment `{fragment}`",
+            );
+        }
     }
 
     #[test]

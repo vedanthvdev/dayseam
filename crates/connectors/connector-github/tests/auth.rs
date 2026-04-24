@@ -10,9 +10,13 @@
 //! 4. 404 → [`dayseam_core::error_codes::GITHUB_RESOURCE_NOT_FOUND`]
 //!    on [`DayseamError::Network`] (the "Enterprise URL missing
 //!    `/api/v3`" failure mode users actually hit).
-//! 5. Transport error (unbound port) → `github` family routes through
-//!    the reused `gitlab.url.*` codes, consistent with the
-//!    `errors::map_transport_error` contract.
+//! 5. Transport error (unbound port) → SDK classifier routes the
+//!    failure through one of the `http.transport.*` sub-codes (the
+//!    connector-local `map_transport_error` lived only to bridge the
+//!    pre-DAY-129 GitLab fallback path and was dropped alongside the
+//!    GitLab consolidation; the GitHub auth probe has always gone
+//!    through `HttpClient::send`, so this assertion now tightens to
+//!    the transport code family).
 //! 6. Every successful probe carries the documented GitHub headers —
 //!    `Authorization: Bearer …`, `Accept: application/vnd.github+json`,
 //!    `X-GitHub-Api-Version: 2022-11-28`. A header regression would
@@ -131,13 +135,18 @@ async fn validate_auth_maps_404_to_resource_not_found() {
 }
 
 #[tokio::test]
-async fn validate_auth_maps_transport_error_to_reused_url_dns_or_tls_code() {
+async fn validate_auth_maps_transport_error_to_http_transport_subcode() {
     // Port 1 is reliably unbound on every dev host; the connect
     // attempt fails with ECONNREFUSED and the SDK's retry loop
-    // exhausts. Because GitHub reuses GitLab's URL codes for
-    // transport failures (see `connector-github::errors` doc-comment
-    // explaining the symmetric-UX rationale), the code surfaces as
-    // one of the two GitLab variants.
+    // exhausts. DAY-129: the classifier now lives exclusively in
+    // `connectors_sdk::http`, so the surfaced code starts with
+    // `http.transport` (either a specific `http.transport.connect`
+    // or — if the retry ladder exhausted after earlier transient
+    // successes — `http.retry_budget_exhausted`). We keep the
+    // assertion on the `http.transport` prefix rather than pinning
+    // one sub-code so a future classifier sharpening (e.g. DAY-129
+    // `fix3` adding a `proxy` qualifier) doesn't require touching
+    // this test.
     let http = HttpClient::new()
         .expect("http client")
         .with_policy(connectors_sdk::RetryPolicy::instant());
@@ -148,14 +157,7 @@ async fn validate_auth_maps_transport_error_to_reused_url_dns_or_tls_code() {
         .expect_err("connection refused should surface as a network error");
     let code = err.code();
     assert!(
-        code == error_codes::GITLAB_URL_DNS
-            || code == error_codes::GITLAB_URL_TLS
-            || code == error_codes::HTTP_TRANSPORT
-            || code == error_codes::HTTP_TRANSPORT_DNS
-            || code == error_codes::HTTP_TRANSPORT_TLS
-            || code == error_codes::HTTP_TRANSPORT_CONNECT
-            || code == error_codes::HTTP_TRANSPORT_TIMEOUT
-            || code == error_codes::HTTP_RETRY_BUDGET_EXHAUSTED,
+        code.starts_with("http.transport") || code == error_codes::HTTP_RETRY_BUDGET_EXHAUSTED,
         "unexpected transport code: {code}",
     );
     assert_eq!(err.variant(), "Network");

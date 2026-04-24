@@ -21,6 +21,13 @@ serde_json = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "gzip"] }
+# DAY-129 `fix4`: we need `url::Host` to distinguish IPv6 literals
+# from domains in user-facing transport error messages (so the
+# message reads `[::1]` not `::1`, which would otherwise parse as
+# host `::` port `1` when copy-pasted). `url` is already pulled in
+# transitively by reqwest, so this is a re-export of an existing
+# graph entry rather than a new dependency.
+url = "2"
 rand = "0.8"
 # DAY-74. `BasicAuth::atlassian` base64-encodes `email:api_token`
 # at construction time so the plain `email:token` bytes never

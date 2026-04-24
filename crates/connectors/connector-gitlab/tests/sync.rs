@@ -88,18 +88,38 @@ async fn validate_pat_maps_403_to_missing_scope() {
 }
 
 #[tokio::test]
-async fn validate_pat_maps_transport_error_to_url_dns_or_tls() {
+async fn validate_pat_maps_transport_error_to_http_transport_subcode() {
     // Port 1 is reliably unbound on Unix; the connect attempt fails
-    // with ECONNREFUSED which maps to our `url.dns` catch-all.
+    // with ECONNREFUSED. DAY-129: the PAT-validation lane is now
+    // routed through `HttpClient::send` rather than its own
+    // `reqwest::Client` + legacy `map_transport_error`, so the
+    // surfaced code is one of the SDK's `http.transport.*` sub-codes
+    // instead of the dropped `gitlab.url.dns` / `gitlab.url.tls`
+    // codes. Connect-refused on a bound localhost port lands on
+    // `http.transport.connect`; we accept the full transport family
+    // to keep the test stable if the SDK classifier sharpens its
+    // fragment list.
     let err = validate_pat("http://127.0.0.1:1", "any-pat")
         .await
         .expect_err("connection refused should surface as a network error");
     let code = err.code();
     assert!(
-        code == error_codes::GITLAB_URL_DNS || code == error_codes::GITLAB_URL_TLS,
+        code.starts_with("http.transport"),
         "unexpected transport code: {code}",
     );
     assert_eq!(err.variant(), "Network");
+    // The message now names the host (thanks to
+    // `format_transport_error`) so the dialog's generic error
+    // surface has something actionable even without bespoke copy.
+    match err {
+        DayseamError::Network { ref message, .. } => {
+            assert!(
+                message.contains("127.0.0.1"),
+                "expected host in transport error message, got `{message}`",
+            );
+        }
+        other => panic!("expected Network variant, got {other:?}"),
+    }
 }
 
 // ---- walk_day -------------------------------------------------------------
