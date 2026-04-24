@@ -102,8 +102,30 @@ All notable changes to Dayseam are documented in this file. The format follows
   (`sources_update` + the connector-specific `*_reconnect`
   commands) was already shaped to support this, the comments in
   `commands.rs` are just updated to point at the new edit-dialog
-  surface instead of the deleted `RenameSourceDialog`. Net change
+  surface instead of the deleted `RenameSourceDialog`.   Net change
   is 446 insertions / 606 deletions across the desktop frontend.
+
+### Fixed
+
+- **DAY-125: classified transport errors with the target host in the
+  message.** `HttpClient::send` previously collapsed every terminal
+  transport failure into a single `http.transport` code with the
+  message `http error after N attempts: <reqwest::Error>`, which gave
+  the user no signal about *what* had actually broken (DNS vs TLS vs
+  connection refused vs timeout) or *which host* was unreachable. In
+  practice this turned a transient VPN drop against a self-hosted
+  GitLab into a mystery error card that looked identical to every
+  other transport failure. The SDK now classifies the terminal error
+  into one of four sub-codes — `http.transport.dns`,
+  `http.transport.tls`, `http.transport.connect`,
+  `http.transport.timeout` — and falls back to the existing
+  `http.transport` only when the error resists classification, so
+  log-parser grep patterns that keyed on the `http.transport` prefix
+  keep matching. The user-facing message now reads `couldn't reach
+  \`host.example.com\` after N attempts: …` when `reqwest` exposes a
+  URL on the error, pointing the user straight at the host their VPN
+  / DNS / firewall is blocking instead of making them open a
+  connector-debug terminal to find out.
 
 ## [0.6.7]
 

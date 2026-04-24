@@ -277,7 +277,41 @@ pub const CONNECTOR_UNSUPPORTED_SYNC_REQUEST: &str = "connector.unsupported.sync
 pub const HTTP_RETRY_BUDGET_EXHAUSTED: &str = "http.retry.budget_exhausted";
 /// Transport-level HTTP failure (DNS, TLS, connection reset) for an
 /// endpoint that isn't bound to a specific connector.
+///
+/// Kept as the catch-all fallback. The four sub-codes below
+/// (`HTTP_TRANSPORT_DNS` / `_TLS` / `_CONNECT` / `_TIMEOUT`) are
+/// preferred when `HttpClient::send` can classify the underlying
+/// `reqwest::Error` with confidence; `HTTP_TRANSPORT` survives for
+/// unknown or builder-level failures where no narrower label applies.
+/// Log parsers can continue to grep `http.transport` as a prefix and
+/// still match every transport-family code.
 pub const HTTP_TRANSPORT: &str = "http.transport";
+/// Name-resolution failed for the target host. Most often surfaces when
+/// a private GitLab / self-hosted GitHub hostname is only resolvable
+/// from a corporate VPN that isn't currently connected — the symptom
+/// user-side is a sync that worked yesterday and now fails with no
+/// apparent change. The user-facing message includes the host so the
+/// UI can render "couldn't resolve `git.example.com`" instead of the
+/// generic "something went wrong" card.
+pub const HTTP_TRANSPORT_DNS: &str = "http.transport.dns";
+/// TLS / SSL handshake failed for the target host. Typically a
+/// corporate MITM proxy re-signing traffic with a CA Dayseam doesn't
+/// trust, or a genuinely expired / mismatched upstream certificate.
+/// Distinct from `HTTP_TRANSPORT_DNS` so the UI copy can point at
+/// "check your security software / certificate chain" rather than
+/// "check your URL / network".
+pub const HTTP_TRANSPORT_TLS: &str = "http.transport.tls";
+/// TCP connect to the resolved address failed (`ECONNREFUSED`,
+/// `EHOSTUNREACH`, route-to-host failure). Distinct from DNS because
+/// the name *did* resolve — the machine, router, or firewall between
+/// Dayseam and the target is what's denying the connection.
+pub const HTTP_TRANSPORT_CONNECT: &str = "http.transport.connect";
+/// Request timed out after `reqwest`'s configured connect or overall
+/// timeout. Distinct from `HTTP_TRANSPORT_CONNECT` because a timeout
+/// typically means the connection got far enough to stall rather than
+/// being refused outright — a different root cause (upstream load,
+/// captive portal, half-open NAT) from a clean connection refusal.
+pub const HTTP_TRANSPORT_TIMEOUT: &str = "http.transport.timeout";
 
 // -------- Orchestrator ------------------------------------------------------
 
@@ -524,6 +558,10 @@ pub const ALL: &[&str] = &[
     CONNECTOR_UNSUPPORTED_SYNC_REQUEST,
     HTTP_RETRY_BUDGET_EXHAUSTED,
     HTTP_TRANSPORT,
+    HTTP_TRANSPORT_DNS,
+    HTTP_TRANSPORT_TLS,
+    HTTP_TRANSPORT_CONNECT,
+    HTTP_TRANSPORT_TIMEOUT,
     ORCHESTRATOR_RUN_SUPERSEDED,
     ORCHESTRATOR_RUN_CANCELLED,
     ORCHESTRATOR_RUN_FAILED,

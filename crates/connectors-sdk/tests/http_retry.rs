@@ -185,6 +185,100 @@ async fn non_retriable_status_returns_response_without_retries() {
 }
 
 #[tokio::test]
+async fn unreachable_host_surfaces_transport_connect_with_hostname_in_message() {
+    // DAY-125: users hit `http.transport` when the VPN drops out from
+    // under a private GitLab instance, and the generic message gives
+    // them nothing actionable. The fix: classify the terminal
+    // `reqwest::Error` into `http.transport.connect` (still prefixed
+    // `http.transport.*` so existing log parsers keep matching) and
+    // splice the host into the message so "couldn't reach
+    // `git.modulrfinance.io`" appears in the error card, pointing the
+    // user straight at their VPN.
+    //
+    // Port 1 is reliably unbound on every dev host, so this exercises
+    // the connect-refused branch of `reqwest::Error` without needing
+    // network access.
+    let client = HttpClient::new()
+        .expect("build")
+        .with_policy(RetryPolicy::instant());
+    let cancel = CancellationToken::new();
+    let err = client
+        .send(
+            client.reqwest().get("http://127.0.0.1:1/"),
+            &cancel,
+            None,
+            None,
+        )
+        .await
+        .expect_err("connect refused must surface as a transport error");
+    match &err {
+        DayseamError::Network { code, message } => {
+            assert_eq!(
+                code,
+                dayseam_core::error_codes::HTTP_TRANSPORT_CONNECT,
+                "unexpected code; full error = {err:?}",
+            );
+            assert!(
+                message.contains("127.0.0.1"),
+                "expected host in message, got `{message}`",
+            );
+            assert!(
+                message.contains("couldn't reach"),
+                "expected 'couldn't reach' prefix, got `{message}`",
+            );
+        }
+        other => panic!("expected Network error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn unresolvable_host_surfaces_transport_dns_with_hostname_in_message() {
+    // The complement to the connect-refused test: a host that cannot
+    // resolve (`.invalid` is reserved by RFC 6761 for precisely this
+    // use case — it must never be registered) must classify as
+    // `http.transport.dns` rather than `.connect`, because the
+    // remedies differ (check DNS / VPN vs. check firewall / service).
+    //
+    // Skipped on CI runners whose resolvers synthesise A records for
+    // unknown names (some aggressive corporate DNS does this); the
+    // assertion accepts either the DNS sub-code or — if the resolver
+    // coughed up *some* address that then refused — the connect
+    // sub-code, because what we care about here is "not the generic
+    // HTTP_TRANSPORT anymore". The hostname-in-message invariant
+    // holds in both branches.
+    let client = HttpClient::new()
+        .expect("build")
+        .with_policy(RetryPolicy::instant());
+    let cancel = CancellationToken::new();
+    let err = client
+        .send(
+            client
+                .reqwest()
+                .get("http://dayseam-nonexistent-host.invalid/"),
+            &cancel,
+            None,
+            None,
+        )
+        .await
+        .expect_err("unresolvable host must surface as a transport error");
+    match &err {
+        DayseamError::Network { code, message } => {
+            let code = code.as_str();
+            assert!(
+                code == dayseam_core::error_codes::HTTP_TRANSPORT_DNS
+                    || code == dayseam_core::error_codes::HTTP_TRANSPORT_CONNECT,
+                "expected dns or connect sub-code, got `{code}`",
+            );
+            assert!(
+                message.contains("dayseam-nonexistent-host.invalid"),
+                "expected host in message, got `{message}`",
+            );
+        }
+        other => panic!("expected Network error, got {other:?}"),
+    }
+}
+
+#[tokio::test]
 async fn status_401_and_403_return_response_so_caller_can_classify() {
     // CORR-01 regression: before the fix, the SDK collapsed 401/403 into
     // `DayseamError::Network { code: "http.transport" }`, which broke the

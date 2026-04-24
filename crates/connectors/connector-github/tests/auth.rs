@@ -151,6 +151,10 @@ async fn validate_auth_maps_transport_error_to_reused_url_dns_or_tls_code() {
         code == error_codes::GITLAB_URL_DNS
             || code == error_codes::GITLAB_URL_TLS
             || code == error_codes::HTTP_TRANSPORT
+            || code == error_codes::HTTP_TRANSPORT_DNS
+            || code == error_codes::HTTP_TRANSPORT_TLS
+            || code == error_codes::HTTP_TRANSPORT_CONNECT
+            || code == error_codes::HTTP_TRANSPORT_TIMEOUT
             || code == error_codes::HTTP_RETRY_BUDGET_EXHAUSTED,
         "unexpected transport code: {code}",
     );

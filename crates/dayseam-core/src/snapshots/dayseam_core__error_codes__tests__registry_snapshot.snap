@@ -48,6 +48,10 @@ expression: ALL
 - connector.unsupported.sync_request
 - http.retry.budget_exhausted
 - http.transport
+- http.transport.dns
+- http.transport.tls
+- http.transport.connect
+- http.transport.timeout
 - orchestrator.run.superseded
 - orchestrator.run.cancelled
 - orchestrator.run.failed
