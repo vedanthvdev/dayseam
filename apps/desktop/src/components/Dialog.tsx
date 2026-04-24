@@ -169,11 +169,20 @@ export interface DialogButtonProps {
   children: ReactNode;
 }
 
+// DAY-127: every kind carries an explicit 1px border (transparent for
+// primary/danger, coloured for secondary) so all three variants have
+// the same outer box height. Before this, the secondary button sat
+// 2px taller than the primary because only secondary declared
+// `border`, which meant footers with both Cancel + primary (or a
+// standalone primary next to a secondary in the same dialog body)
+// showed a tiny vertical misalignment — most visible on
+// `IdentityManagerDialog` where a secondary "Add" inside the form
+// sits directly above the primary "Done" in the footer.
 const KIND_CLASSES: Record<DialogButtonProps["kind"], string> = {
   primary:
-    "bg-neutral-900 text-white hover:bg-neutral-800 disabled:bg-neutral-400 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white dark:disabled:bg-neutral-700",
+    "border border-transparent bg-neutral-900 text-white hover:bg-neutral-800 disabled:bg-neutral-400 dark:bg-neutral-100 dark:text-neutral-900 dark:hover:bg-white dark:disabled:bg-neutral-700",
   danger:
-    "bg-red-600 text-white hover:bg-red-700 disabled:bg-red-300 dark:disabled:bg-red-900",
+    "border border-transparent bg-red-600 text-white hover:bg-red-700 disabled:bg-red-300 dark:disabled:bg-red-900",
   secondary:
     "border border-neutral-300 bg-white text-neutral-800 hover:bg-neutral-50 disabled:opacity-50 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-100 dark:hover:bg-neutral-800",
 };
@@ -190,7 +199,7 @@ export function DialogButton({
       type={type}
       disabled={disabled}
       onClick={onClick}
-      className={`rounded px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed ${KIND_CLASSES[kind]}`}
+      className={`rounded px-3 py-1.5 text-sm font-medium leading-5 transition disabled:cursor-not-allowed ${KIND_CLASSES[kind]}`}
     >
       {children}
     </button>

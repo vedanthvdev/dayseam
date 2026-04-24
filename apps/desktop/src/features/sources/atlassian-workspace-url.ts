@@ -9,9 +9,9 @@
 // user's input, however, arrives in three shapes we've seen in the
 // wild:
 //
-//   1. `modulrfinance`                          — just the subdomain slug
-//   2. `https://modulrfinance.atlassian.net`     — pasted from the browser bar
-//   3. `https://modulrfinance.atlassian.net/`    — with a trailing slash
+//   1. `yourcompany`                          — just the subdomain slug
+//   2. `https://yourcompany.atlassian.net`     — pasted from the browser bar
+//   3. `https://yourcompany.atlassian.net/`    — with a trailing slash
 //
 // This module is the single place that loose input is collapsed to
 // the tight stored shape, so the dialog and its tests can share one
@@ -36,12 +36,17 @@ export type WorkspaceUrlNormalisation =
  *
  * Six acceptance cases (matching the table in the plan):
  *
- * 1. `modulrfinance`                           → `https://modulrfinance.atlassian.net`      (slug prefilled)
- * 2. `https://modulrfinance.atlassian.net`     → `https://modulrfinance.atlassian.net`      (identity)
- * 3. `https://modulrfinance.atlassian.net/`    → `https://modulrfinance.atlassian.net`      (trailing slash stripped)
- * 4. `http://modulrfinance.atlassian.net`      → `invalid`                                  (cleartext disallowed)
- * 5. `https://modulrfinance.atlassian.net/wiki`→ `invalid`                                  (path not allowed)
- * 6. ``                                        → `empty`                                    (submit stays disabled)
+ * 1. `yourcompany`                           → `https://yourcompany.atlassian.net`      (slug prefilled)
+ * 2. `https://yourcompany.atlassian.net`     → `https://yourcompany.atlassian.net`      (identity)
+ * 3. `https://yourcompany.atlassian.net/`    → `https://yourcompany.atlassian.net`      (trailing slash stripped)
+ * 4. `http://yourcompany.atlassian.net`      → `invalid`                                  (cleartext disallowed)
+ * 5. `https://yourcompany.atlassian.net/wiki`→ `invalid`                                  (path not allowed)
+ * 6. ``                                      → `empty`                                    (submit stays disabled)
+ *
+ * DAY-127 #5a: the user-facing reason strings were reworded off a
+ * specific company name to a neutral `yourcompany` placeholder so
+ * the dialog never implies a particular Atlassian tenant is
+ * hardcoded in the app.
  */
 export function normaliseWorkspaceUrl(raw: string): WorkspaceUrlNormalisation {
   const trimmed = raw.trim();
@@ -61,7 +66,7 @@ export function normaliseWorkspaceUrl(raw: string): WorkspaceUrlNormalisation {
   } else {
     return {
       kind: "invalid",
-      reason: "That doesn't look like a workspace. Try `modulrfinance`.",
+      reason: "That doesn't look like a workspace. Try `yourcompany`.",
     };
   }
 
@@ -86,7 +91,7 @@ export function normaliseWorkspaceUrl(raw: string): WorkspaceUrlNormalisation {
   if (parsed.hostname.length === 0) {
     return {
       kind: "invalid",
-      reason: "Missing host. Example: modulrfinance.atlassian.net",
+      reason: "Missing host. Example: yourcompany.atlassian.net",
     };
   }
 

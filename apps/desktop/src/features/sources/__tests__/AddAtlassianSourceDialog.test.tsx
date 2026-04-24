@@ -283,14 +283,20 @@ describe("AddAtlassianSourceDialog", () => {
 
     fireEvent.click(screen.getByTestId("add-atlassian-token-mode-paste"));
 
-    // Workspace URL is prefilled but read-only — we use the existing
-    // source's URL so the second product is guaranteed to share a
-    // workspace with the first.
+    // DAY-127 #5a: the URL field is prefilled from the existing
+    // Jira source so the Confluence add defaults to the same
+    // workspace, but it is *editable* rather than read-only — the
+    // old hard-lock looked like the app was pinned to a specific
+    // tenant ("blocked to modulrfinance"). The dialog instead
+    // handles a user who points somewhere else by flipping the
+    // reuse-PAT radio off — see the "editing the URL away from
+    // the existing tenant" test below for the full flip/revert
+    // flow.
     const urlField = screen.getByTestId(
       "add-atlassian-workspace-url",
     ) as HTMLInputElement;
     expect(urlField.value).toBe("https://modulrfinance.atlassian.net");
-    expect(urlField).toHaveAttribute("readonly");
+    expect(urlField).not.toHaveAttribute("readonly");
 
     fireEvent.change(screen.getByTestId("add-atlassian-api-token"), {
       target: { value: "ATATT-different-token" },
@@ -368,6 +374,226 @@ describe("AddAtlassianSourceDialog", () => {
     await act(async () => {
       await Promise.resolve();
     });
+  });
+
+  // DAY-127 #5a: with an existing Atlassian source present, the
+  // dialog defaults to reuse-PAT. The moment the user edits the
+  // workspace URL to point somewhere else, reusing the stored
+  // keychain entry is semantically wrong (wrong tenant, wrong
+  // secret), so the dialog flips `tokenMode` to "paste" and
+  // surfaces the amber helper. Pre-post-review this was one-way:
+  // editing the URL back to the existing tenant left the "paste"
+  // radio selected, forcing the user to notice and click back. We
+  // now also revert to "reuse" on the false edge *provided* the
+  // user has not started pasting credentials — wiping in-progress
+  // input would be worse than the stale radio we're fixing.
+  it("Journey C: editing the URL away from the existing tenant flips to paste, and editing back restores reuse", async () => {
+    render(
+      <AddAtlassianSourceDialog
+        open
+        onClose={() => {}}
+        onAdded={() => {}}
+        existingSources={[EXISTING_JIRA]}
+      />,
+    );
+
+    const reuseRadio = screen.getByTestId(
+      "add-atlassian-token-mode-reuse",
+    ) as HTMLInputElement;
+    const pasteRadio = screen.getByTestId(
+      "add-atlassian-token-mode-paste",
+    ) as HTMLInputElement;
+    expect(reuseRadio.checked).toBe(true);
+    expect(screen.queryByTestId("add-atlassian-url-diverged")).toBeNull();
+
+    // Diverge: user types a different workspace.
+    fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
+      target: { value: "someothertenant" },
+    });
+    await waitFor(() => expect(pasteRadio.checked).toBe(true));
+    expect(
+      screen.queryByTestId("add-atlassian-url-diverged"),
+    ).not.toBeNull();
+    expect(reuseRadio).toBeDisabled();
+
+    // Edit back to the existing tenant with no token pasted: the
+    // dialog should restore reuse mode (post-review symmetry).
+    fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
+      target: { value: "modulrfinance" },
+    });
+    await waitFor(() => expect(reuseRadio.checked).toBe(true));
+    expect(screen.queryByTestId("add-atlassian-url-diverged")).toBeNull();
+    expect(reuseRadio).not.toBeDisabled();
+  });
+
+  // DAY-127 #5a: if the user edits into divergence, pastes a
+  // partial token, and then edits the URL back, we deliberately
+  // leave `tokenMode = "paste"` intact — snapping back to "reuse"
+  // would wipe whatever they already typed. The stale radio is
+  // the lesser evil here because the user has visibly committed
+  // to the paste path. This pins that the revert is credential-
+  // aware.
+  it("Journey C: reverting the URL does not clobber a half-entered token", async () => {
+    render(
+      <AddAtlassianSourceDialog
+        open
+        onClose={() => {}}
+        onAdded={() => {}}
+        existingSources={[EXISTING_JIRA]}
+      />,
+    );
+
+    // Diverge, paste a token.
+    fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
+      target: { value: "someothertenant" },
+    });
+    const pasteRadio = screen.getByTestId(
+      "add-atlassian-token-mode-paste",
+    ) as HTMLInputElement;
+    await waitFor(() => expect(pasteRadio.checked).toBe(true));
+    fireEvent.change(screen.getByTestId("add-atlassian-api-token"), {
+      target: { value: "ATATT-partial" },
+    });
+
+    // Revert the URL. `tokenMode` must *not* flip back — the user
+    // is mid-entry and the token field still has their value.
+    fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
+      target: { value: "modulrfinance" },
+    });
+    expect(pasteRadio.checked).toBe(true);
+    const tokenField = screen.getByTestId(
+      "add-atlassian-api-token",
+    ) as HTMLInputElement;
+    expect(tokenField.value).toBe("ATATT-partial");
+  });
+
+  // DAY-127 #5b: the add flow now exposes an optional label field.
+  // When the user fills it, the dialog still fires the canonical
+  // `atlassian_sources_add` (which owns the insert + keychain
+  // plumbing) and then follows up with a best-effort
+  // `sources_update` per inserted row. In Journey A (both products
+  // enabled) the two rows get the user's label suffixed with the
+  // product kind so they stay distinguishable in the sidebar. A
+  // regression here is user-visible: the label silently doesn't
+  // stick, or the two shared-PAT rows collide under the same
+  // string.
+  it("Journey A + custom label: inserts then renames each row with a ' — Jira' / ' — Confluence' suffix", async () => {
+    registerInvokeHandler("atlassian_validate_credentials", async () => ({
+      account_id: "acct-42",
+      display_name: "Vedanth V",
+      email: "ved@example.com",
+    }));
+    const added = [
+      freshJiraSource("jira-new"),
+      freshConfluenceSource("confluence-new"),
+    ];
+    registerInvokeHandler("atlassian_sources_add", async () => added);
+    registerInvokeHandler("sources_update", async (args) => {
+      // Echo the id/patch back so the resolver has something
+      // plausible; the dialog only awaits a successful resolve.
+      const id = args.id as string;
+      const patch = args.patch as { label: string };
+      return { ...freshJiraSource(id), label: patch.label };
+    });
+
+    render(
+      <AddAtlassianSourceDialog
+        open
+        onClose={() => {}}
+        onAdded={() => {}}
+        existingSources={[]}
+      />,
+    );
+
+    fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
+      target: { value: "modulrfinance" },
+    });
+    fireEvent.change(screen.getByTestId("add-atlassian-email"), {
+      target: { value: "ved@example.com" },
+    });
+    fireEvent.change(screen.getByTestId("add-atlassian-api-token"), {
+      target: { value: "ATATT-valid-token" },
+    });
+    fireEvent.change(screen.getByTestId("add-atlassian-add-label"), {
+      target: { value: "Work" },
+    });
+
+    fireEvent.click(screen.getByTestId("add-atlassian-validate"));
+    await screen.findByTestId("add-atlassian-validation-ok");
+    fireEvent.click(screen.getByRole("button", { name: /add source/i }));
+
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "sources_update",
+        expect.objectContaining({
+          id: "jira-new",
+          patch: expect.objectContaining({ label: "Work — Jira" }),
+        }),
+      ),
+    );
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "sources_update",
+        expect.objectContaining({
+          id: "confluence-new",
+          patch: expect.objectContaining({ label: "Work — Confluence" }),
+        }),
+      ),
+    );
+  });
+
+  // DAY-127 #5b: single-product add with a label should rename
+  // that one row to the exact user-supplied label — no suffix.
+  // The suffix is a Journey-A-only disambiguator; applying it to
+  // a single-product add would look like gratuitous editorialising
+  // ("Work — Jira" when the user typed "Work").
+  it("Journey B + custom label: single row is renamed to the exact label without a product suffix", async () => {
+    registerInvokeHandler("atlassian_validate_credentials", async () => ({
+      account_id: "acct-42",
+      display_name: "Vedanth V",
+      email: "ved@example.com",
+    }));
+    registerInvokeHandler("atlassian_sources_add", async () => [
+      freshJiraSource("jira-new"),
+    ]);
+    registerInvokeHandler("sources_update", async () => freshJiraSource("jira-new"));
+
+    render(
+      <AddAtlassianSourceDialog
+        open
+        onClose={() => {}}
+        onAdded={() => {}}
+        existingSources={[]}
+      />,
+    );
+
+    fireEvent.click(screen.getByTestId("add-atlassian-enable-confluence"));
+    fireEvent.change(screen.getByTestId("add-atlassian-workspace-url"), {
+      target: { value: "modulrfinance" },
+    });
+    fireEvent.change(screen.getByTestId("add-atlassian-email"), {
+      target: { value: "ved@example.com" },
+    });
+    fireEvent.change(screen.getByTestId("add-atlassian-api-token"), {
+      target: { value: "ATATT-valid-token" },
+    });
+    fireEvent.change(screen.getByTestId("add-atlassian-add-label"), {
+      target: { value: "Work" },
+    });
+
+    fireEvent.click(screen.getByTestId("add-atlassian-validate"));
+    await screen.findByTestId("add-atlassian-validation-ok");
+    fireEvent.click(screen.getByRole("button", { name: /add source/i }));
+
+    await waitFor(() =>
+      expect(mockInvoke).toHaveBeenCalledWith(
+        "sources_update",
+        expect.objectContaining({
+          id: "jira-new",
+          patch: expect.objectContaining({ label: "Work" }),
+        }),
+      ),
+    );
   });
 
   // ── DAY-87 + DAY-126: edit mode ────────────────────────────────

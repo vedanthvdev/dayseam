@@ -10,7 +10,7 @@
 // keeps the hook the single source of truth for in-flight runs and
 // lets the streaming preview and this row stay decoupled.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { Source } from "@dayseam/ipc-types";
 import type { ReportStatus } from "../../ipc";
 import { useSources } from "../../ipc";
@@ -95,22 +95,64 @@ export function ActionRow({
     onGenerate(date, selectedIds);
   }, [canGenerate, onGenerate, date, selectedIds]);
 
+  // DAY-127 #7: the native `<input type="date">` popover needs a
+  // `blur()` nudge after a *mouse* pick on some Chromium builds to
+  // close reliably. But `onChange` also fires for every keyboard
+  // value change (Up/Down on year/month/day, typing digits), so an
+  // unconditional blur breaks keyboard navigation — the user gets
+  // kicked out of the field between every arrow press. We track
+  // the last interaction modality via `pointerdown` / `keydown`
+  // and only blur when the change came from a pointer. Cleared
+  // after each consume so a pointer-open-then-keyboard-adjust
+  // sequence doesn't inherit the stale flag.
+  const pointerDrivenRef = useRef(false);
+  const handleDatePointerDown = useCallback(() => {
+    pointerDrivenRef.current = true;
+  }, []);
+  const handleDateKeyDown = useCallback(() => {
+    pointerDrivenRef.current = false;
+  }, []);
+  const handleDateChange = useCallback(
+    (event: React.ChangeEvent<HTMLInputElement>) => {
+      setDate(event.target.value);
+      if (pointerDrivenRef.current) {
+        event.target.blur();
+        pointerDrivenRef.current = false;
+      }
+    },
+    [],
+  );
+
   return (
     <section
       aria-label="Report actions"
       className="flex flex-wrap items-center gap-3 border-b border-neutral-200 bg-neutral-50/50 px-6 py-3 dark:border-neutral-800 dark:bg-neutral-900/40"
     >
-      <label className="flex items-center gap-2 text-sm text-neutral-700 dark:text-neutral-200">
+      <label className="flex items-center gap-2 text-xs text-neutral-700 dark:text-neutral-200">
         <span>Date</span>
+        {/* DAY-127 #6 + #7: the native date input used to render
+            `text-sm` with `py-1` padding, making it a hair taller
+            than every other chip / button in this row. Shrinking
+            it to `text-xs` + `py-0.5` aligns it with the Generate
+            button's baseline so the row reads as one strip instead
+            of a date input that wears a larger jacket. The
+            pointer-gated blur in `handleDateChange` closes the
+            native calendar popover after a mouse pick on the
+            platforms where Chromium otherwise leaves it open, but
+            stays out of the way of keyboard users (arrow-key
+            adjustments fire `change` too and an unconditional blur
+            would boot them out of the field between keystrokes). */}
         <input
           type="date"
           value={date}
-          onChange={(event) => setDate(event.target.value)}
+          onPointerDown={handleDatePointerDown}
+          onKeyDown={handleDateKeyDown}
+          onChange={handleDateChange}
           disabled={running}
           aria-disabled={running ? "true" : undefined}
           aria-label="Report date"
           data-testid="action-row-date"
-          className="rounded border border-neutral-300 bg-white px-2 py-1 text-sm text-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
+          className="rounded border border-neutral-300 bg-white px-2 py-0.5 text-xs text-neutral-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-neutral-700 dark:bg-neutral-900 dark:text-neutral-200"
         />
       </label>
 
@@ -149,26 +191,42 @@ export function ActionRow({
         })}
       </fieldset>
 
-      {running ? (
-        <button
-          type="button"
-          onClick={onCancel}
-          data-testid="action-row-cancel"
-          className="ml-auto rounded border border-red-300 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100 dark:border-red-800 dark:bg-red-950 dark:text-red-200 dark:hover:bg-red-900"
-        >
-          Cancel
-        </button>
-      ) : (
-        <button
-          type="button"
-          onClick={handleGenerate}
-          disabled={!canGenerate}
-          data-testid="action-row-generate"
-          className="ml-auto rounded bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
-        >
-          Generate report
-        </button>
-      )}
+      {/* DAY-127 #2: the Cancel / Generate swap used to be two
+          different buttons swapped in/out of the flow. Because
+          "Cancel" is much shorter than "Generate report" and the
+          red chrome differs from the black chrome, the row reflowed
+          visibly whenever `status` crossed `running`↔terminal —
+          most obvious when the user fired a multi-source run and
+          the Generate chip briefly flashed between the two
+          treatments mid-transition. Pinning a single positional
+          slot with `min-w` eliminates the width reflow and keeps
+          the baseline steady; only the button's visual treatment
+          flips now. Both variants carry an identical
+          `border border-transparent` so the primary and the
+          cancel chrome have matching box heights, matching the
+          `DialogButton` normalisation done in the same patch. */}
+      <div className="ml-auto flex min-w-[140px] items-center justify-end">
+        {running ? (
+          <button
+            type="button"
+            onClick={onCancel}
+            data-testid="action-row-cancel"
+            className="w-full rounded border border-red-300 bg-red-50 px-3 py-1.5 text-sm font-medium text-red-800 hover:bg-red-100 dark:border-red-800 dark:bg-red-950 dark:text-red-200 dark:hover:bg-red-900"
+          >
+            Cancel
+          </button>
+        ) : (
+          <button
+            type="button"
+            onClick={handleGenerate}
+            disabled={!canGenerate}
+            data-testid="action-row-generate"
+            className="w-full rounded border border-transparent bg-neutral-900 px-3 py-1.5 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-50 dark:bg-neutral-100 dark:text-neutral-900"
+          >
+            Generate report
+          </button>
+        )}
+      </div>
     </section>
   );
 }

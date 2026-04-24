@@ -8,9 +8,15 @@
 //
 // Visibility rules (see the switch at the bottom):
 //
-//   - `idle` / `checking` / `up-to-date` — renders nothing. First-
-//     check flicker would be noise; a silent "no update" is the
-//     right default.
+//   - `idle` — renders nothing.
+//   - `checking` / `up-to-date` — renders nothing *unless* the
+//     hook is in `verbose` mode (i.e. the user triggered the
+//     check from the native "Check for Updates…" menu). Silent
+//     mount-time checks must not flicker the banner on launch,
+//     but a user-initiated check has to give visible feedback
+//     (DAY-127 #3) — "Checking…" while the IPC is outstanding,
+//     "Dayseam is up to date." on resolution, which self-
+//     dismisses after a few seconds via the hook.
 //   - `available` AND version not on the skip list — renders the
 //     upgrade prompt with Install / Skip actions.
 //   - `downloading` / `ready` — renders the progress / restart
@@ -136,6 +142,26 @@ function ReadyRow({
   );
 }
 
+function CheckingRow() {
+  return (
+    <StatusBar tone="info" testId="updater-banner-checking">
+      <span className="flex-1">Checking for updates…</span>
+      <span
+        aria-hidden="true"
+        className="inline-block h-3 w-3 rounded-full border-2 border-blue-300 border-t-blue-700 motion-safe:animate-spin dark:border-blue-700 dark:border-t-blue-200"
+      />
+    </StatusBar>
+  );
+}
+
+function UpToDateRow() {
+  return (
+    <StatusBar tone="info" testId="updater-banner-up-to-date">
+      <span className="flex-1">Dayseam is up to date.</span>
+    </StatusBar>
+  );
+}
+
 function ErrorRow({
   status,
   onRetry,
@@ -160,7 +186,8 @@ function ErrorRow({
 }
 
 export function UpdaterBanner({ state }: Props) {
-  const { status, install, check, skipCurrent, isCurrentSkipped } = state;
+  const { status, install, check, skipCurrent, isCurrentSkipped, verbose } =
+    state;
 
   const handleInstall = useCallback(() => {
     void install().catch(() => {
@@ -191,9 +218,11 @@ export function UpdaterBanner({ state }: Props) {
       return <ReadyRow status={status} />;
     case "error":
       return <ErrorRow status={status} onRetry={handleCheck} />;
-    case "idle":
     case "checking":
+      return verbose ? <CheckingRow /> : null;
     case "up-to-date":
+      return verbose ? <UpToDateRow /> : null;
+    case "idle":
     default:
       return null;
   }

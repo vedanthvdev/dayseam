@@ -24,7 +24,7 @@
 // C-mode-1 a one-click flow after the checkbox flip because the
 // existing source already carries the validated account id.
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   AtlassianValidationResult,
   SecretRef,
@@ -193,9 +193,12 @@ export function AddAtlassianSourceDialog({
   const [submitError, setSubmitError] = useState<string | null>(null);
   // DAY-126: in edit mode the dialog doubles as the rename surface,
   // so the label sits in dialog state pre-filled from the source
-  // being edited. In add mode the label is derived from the
-  // workspace URL after validate (no input; that path predates
-  // DAY-126 and stays untouched).
+  // being edited.
+  // DAY-127 #5b: the add surface now also carries an optional label
+  // input (matching GitHub + GitLab), so users can name the chip at
+  // creation time instead of accepting the auto-derived default.
+  // Empty means "let the backend derive the label" (preserves
+  // Journey A/B/C semantics pre-DAY-127).
   const [label, setLabel] = useState("");
 
   // Re-seed each time the dialog opens. When an existing source is
@@ -247,6 +250,58 @@ export function AddAtlassianSourceDialog({
     [workspaceUrlRaw],
   );
   const normalisedUrl = normalisation.kind === "ok" ? normalisation.url : null;
+
+  // DAY-127 #5a: the add flow used to lock the workspace URL as
+  // soon as the dialog detected an existing Atlassian source
+  // (Journey C), which looked to the user like the field was
+  // hard-wired to the existing tenant ("it's blocked to
+  // modulrfinance"). It's still true that Journey C only makes
+  // sense when the two products live on the same workspace URL,
+  // but the right UX is to let the user type and automatically
+  // drop out of reuse-PAT if they point somewhere else — not to
+  // block the field outright. This derived flag captures
+  // "the user has edited the URL away from the existing tenant",
+  // and the effect below forces `tokenMode = "paste"` for that
+  // case so the submit doesn't try to reuse a secret from a
+  // different workspace.
+  const divergedFromExistingUrl =
+    existing != null &&
+    normalisedUrl != null &&
+    normalisedUrl !== existing.workspaceUrl;
+  // Tracks whether *this effect* switched the token mode away from
+  // reuse because of divergence. Only in that case do we ever
+  // switch it back — a manual flip to paste by the user (e.g. the
+  // existing PAT doesn't work for some reason) must stick.
+  const didAutoSwitchToPasteRef = useRef(false);
+  useEffect(() => {
+    if (divergedFromExistingUrl) {
+      setTokenMode((prev) => {
+        if (prev === "reuse") {
+          didAutoSwitchToPasteRef.current = true;
+          return "paste";
+        }
+        return prev;
+      });
+      return;
+    }
+    // DAY-127 #5a (post-review): if we flipped the user into paste
+    // mode because they diverged, and they then edit the URL back
+    // to the existing tenant, restore the reuse default so the
+    // dialog doesn't leave a stale "paste" selection the user has
+    // to spot and undo manually. Skip the restore if a token has
+    // already been pasted — wiping a half-entered secret is a UX
+    // regression worse than the stale radio we're cleaning up.
+    // Email is intentionally *not* gated on here: the dialog
+    // pre-fills `email` from the existing source, so an email
+    // check would block the restore for every Journey C caller.
+    if (
+      didAutoSwitchToPasteRef.current &&
+      apiToken.trim().length === 0
+    ) {
+      setTokenMode("reuse");
+      didAutoSwitchToPasteRef.current = false;
+    }
+  }, [divergedFromExistingUrl, apiToken]);
 
   // Typing in the URL, email, or token invalidates any cached
   // validation: the user is pointing at a different account, and
@@ -419,6 +474,39 @@ export function AddAtlassianSourceDialog({
         enableConfluence,
         reuseSecretRef,
       });
+      // DAY-127 #5b: if the user typed a label, rename each
+      // inserted row post-hoc. `atlassian_sources_add` does not
+      // take a label argument (the Rust side auto-derives
+      // `"<Kind> — <host>"`); rather than grow the IPC we apply a
+      // label-only `sources_update` per inserted row. When the
+      // user enabled both products in Journey A the two siblings
+      // land with `"<label> — Jira"` / `"<label> — Confluence"` so
+      // they remain distinguishable in the sidebar. A failure
+      // here does not roll back the add — the sources exist with
+      // their auto-derived labels and the user can rename via the
+      // edit dialog, which is a strictly recoverable state. We
+      // fire the updates in parallel (the two rows are independent
+      // in Journey A) to shrink the "half-renamed" window, and
+      // surface each failure via `console.warn` so a user report
+      // of "my label didn't stick" lands something actionable in
+      // the log drawer rather than a silent swallow.
+      if (trimmedLabel.length > 0) {
+        await Promise.all(
+          rows.map((row) => {
+            const suffix = rows.length > 1 ? ` — ${row.kind}` : "";
+            return invoke("sources_update", {
+              id: row.id,
+              patch: { label: `${trimmedLabel}${suffix}`, config: null },
+              pat: null,
+            }).catch((err) => {
+              console.warn("atlassian post-add rename failed", {
+                id: row.id,
+                err,
+              });
+            });
+          }),
+        );
+      }
       // Fan out on the same bus every other source mutator uses so
       // the sidebar, the onboarding state machine, and
       // `useLocalRepos` all refresh.
@@ -544,9 +632,9 @@ export function AddAtlassianSourceDialog({
             type="text"
             value={workspaceUrlRaw}
             onChange={(e) => setWorkspaceUrlRaw(e.target.value)}
-            readOnly={existing != null || isReconnect}
-            autoFocus={existing == null && !isReconnect}
-            placeholder="modulrfinance"
+            readOnly={isReconnect}
+            autoFocus={!isReconnect}
+            placeholder="yourcompany"
             data-testid="add-atlassian-workspace-url"
             spellCheck={false}
             autoCapitalize="off"
@@ -554,7 +642,48 @@ export function AddAtlassianSourceDialog({
             className="rounded border border-neutral-300 bg-white px-2 py-1.5 font-mono text-sm read-only:cursor-not-allowed read-only:opacity-75 dark:border-neutral-700 dark:bg-neutral-900"
           />
           {urlHelp}
+          {divergedFromExistingUrl ? (
+            <span
+              data-testid="add-atlassian-url-diverged"
+              className="text-[11px] text-amber-700 dark:text-amber-400"
+            >
+              This is a different workspace than your existing Atlassian
+              source. The "reuse token" option has been turned off —
+              paste a fresh API token for this workspace.
+            </span>
+          ) : null}
         </label>
+
+        {!isReconnect ? (
+          // DAY-127 #5b: add flow now offers an optional label
+          // input so the chip can be named at creation time
+          // instead of accepting the default `"<Kind> — <host>"`.
+          // Leaving it blank preserves the pre-DAY-127 derived
+          // label; filling it triggers a post-add `sources_update`
+          // per inserted row (one row in Journey B/C, two in
+          // Journey A) so both siblings land with the user-
+          // supplied label + a kind suffix.
+          <label className="flex flex-col gap-1">
+            <span className="text-xs font-medium text-neutral-700 dark:text-neutral-300">
+              Label{" "}
+              <span className="font-normal text-neutral-500 dark:text-neutral-400">
+                (optional)
+              </span>
+            </span>
+            <input
+              type="text"
+              value={label}
+              onChange={(e) => setLabel(e.target.value)}
+              placeholder="Work"
+              data-testid="add-atlassian-add-label"
+              className="rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
+            />
+            <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
+              Leave blank to use the default label
+              (e.g. <code>Jira — yourcompany.atlassian.net</code>).
+            </span>
+          </label>
+        ) : null}
 
         {isReconnect ? (
           <label className="flex flex-col gap-1">
@@ -565,7 +694,7 @@ export function AddAtlassianSourceDialog({
               type="text"
               value={label}
               onChange={(e) => setLabel(e.target.value)}
-              placeholder="modulrfinance Jira"
+              placeholder="Work Jira"
               data-testid="add-atlassian-label"
               className="rounded border border-neutral-300 bg-white px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-900"
             />
@@ -584,9 +713,16 @@ export function AddAtlassianSourceDialog({
                 value="reuse"
                 checked={tokenMode === "reuse"}
                 onChange={() => setTokenMode("reuse")}
+                disabled={divergedFromExistingUrl}
                 data-testid="add-atlassian-token-mode-reuse"
               />
-              <span>
+              <span
+                className={
+                  divergedFromExistingUrl
+                    ? "text-neutral-400 dark:text-neutral-600"
+                    : undefined
+                }
+              >
                 Reuse the token from <em>{existing.kind}</em> (no paste needed).
               </span>
             </label>

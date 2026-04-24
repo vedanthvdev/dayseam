@@ -96,6 +96,55 @@ describe("SourcesSidebar", () => {
     );
   });
 
+  // DAY-127 #1: clicking the rescan chip flips the button into an
+  // `aria-busy` / `disabled` state and swaps the static ↻ span for
+  // the animate-spin variant until `sources_healthcheck` settles.
+  // Before this change there was no visual acknowledgement for the
+  // click at all — the chip sat inert until the next health-probe
+  // render. Without a regression test, a future refactor of the
+  // in-flight `checkingIds` set (for example, collapsing it into
+  // React-Query) could silently drop the spinner and the user-
+  // facing symptom would look identical to pre-fix: "I clicked
+  // reload and nothing happened". We deliberately keep the IPC
+  // promise pending via an unresolved Promise so we can observe
+  // the in-flight state before resolving and asserting the chip
+  // falls back to the idle markup.
+  it("marks the rescan button aria-busy and spins the ↻ icon while `sources_healthcheck` is in flight", async () => {
+    registerInvokeHandler("sources_list", async () => [SOURCE]);
+    let resolveHealthcheck: (health: SourceHealth) => void = () => {};
+    const pending = new Promise<SourceHealth>((resolve) => {
+      resolveHealthcheck = resolve;
+    });
+    registerInvokeHandler("sources_healthcheck", async () => pending);
+
+    render(<SourcesSidebar />);
+    await waitFor(() =>
+      expect(screen.getByText("Work repos")).toBeInTheDocument(),
+    );
+
+    const rescan = screen.getByTestId("source-chip-rescan-src-1");
+    fireEvent.click(rescan);
+
+    await waitFor(() => {
+      expect(rescan).toHaveAttribute("aria-busy", "true");
+      expect(rescan).toBeDisabled();
+    });
+    expect(rescan).toHaveAttribute("title", "Rescanning…");
+    // The icon span carries the spin class only while in flight.
+    const icon = rescan.querySelector("span[aria-hidden='true']");
+    expect(icon?.className).toMatch(/animate-spin/);
+
+    resolveHealthcheck(HEALTHY);
+
+    await waitFor(() => {
+      expect(rescan).not.toHaveAttribute("aria-busy");
+      expect(rescan).not.toBeDisabled();
+    });
+    expect(rescan).toHaveAttribute("title", "Rescan");
+    const iconAfter = rescan.querySelector("span[aria-hidden='true']");
+    expect(iconAfter?.className).not.toMatch(/animate-spin/);
+  });
+
   // DAY-126: the dedicated "Aa" Rename button (DAY-121) was folded
   // into the per-connector Edit dialogs so the chip no longer
   // surfaces a separate rename affordance. Renaming now happens

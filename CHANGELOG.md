@@ -8,6 +8,63 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ### Changed
 
+- **DAY-127: seven small UX fixes in one patch.** The seven papercuts
+  below each have their own single-line rationale; they ride together
+  because the fixes are tiny and share zero mechanism, so splitting
+  into seven PRs would pay pure branch-and-release overhead for
+  changes that barely span a screen height each.
+    1. **Source rescan feedback** — the `↻` chip button on each source
+       now spins while `sources_healthcheck` is in flight (tracked via
+       a `checkingIds` set in `SourcesSidebar`) and disables itself
+       with `aria-busy="true"`, so a click is visibly acknowledged
+       instead of looking like dead chrome. `motion-reduce` suppresses
+       the animation for users who have that OS preference set.
+    2. **Generate ↔ Cancel button flicker** — the report action row
+       used to swap two differently-sized buttons (black "Generate
+       report" vs red "Cancel") directly into the flow, so every
+       `status = running`↔terminal transition reflowed the row by a
+       few pixels. The two buttons now share a fixed `min-w-[140px]`
+       slot with matching `border border-transparent` boxes, so only
+       the chrome flips — the baseline stays put.
+    3. **Updater banner surfaces "up to date"** — the native
+       *Check for Updates…* menu item now sets the `useUpdater` hook
+       into verbose mode, which renders a *"Checking for updates…"*
+       row while the IPC is outstanding and a *"Dayseam is up to
+       date."* row on resolution (auto-dismissing after 4s). The
+       verbose flag stays off for the silent mount-time check so the
+       banner doesn't flicker on launch, and back-to-back menu clicks
+       collapse into a single in-flight check rather than firing
+       multiple `check()` calls.
+    4. **Identities dialog Done-button alignment** — the `DialogButton`
+       primary/danger variants lacked the explicit `border` that the
+       secondary variant carried, so each footer with mixed kinds
+       (most visible in `IdentityManagerDialog`) sat 2px short on the
+       primary side. All three variants now carry an explicit 1px
+       border (transparent for primary/danger, coloured for secondary)
+       plus `leading-5` for consistent vertical centring.
+    5. **Atlassian add dialog unblocked workspace URL + label input**
+       — (a) the workspace URL field in the add flow is no longer
+       locked read-only when an existing Atlassian source is
+       detected; the user can point at a different tenant, and if
+       the typed URL diverges from the existing source we auto-flip
+       `tokenMode` to `"paste"` and disable the reuse radio so the
+       submit never tries to reuse a secret from a different
+       workspace. The `"modulrfinance"` placeholder/error copy has
+       been replaced with neutral `"yourcompany"` across
+       `atlassian-workspace-url.ts`. (b) the add flow now exposes an
+       optional **Label** input; when filled, a best-effort
+       `sources_update` rename runs for each inserted row after
+       `atlassian_sources_add` so Journey A (two siblings) lands
+       with `"<label> — Jira"` / `"<label> — Confluence"`.
+    6. **Date picker size** — the native `<input type="date">` in
+       `ActionRow` dropped from `text-sm`/`py-1` to `text-xs`/`py-0.5`
+       so it aligns with the Generate button baseline instead of
+       wearing a larger jacket than the rest of the row.
+    7. **Date picker auto-close** — `onChange` now calls
+       `event.target.blur()` so the native calendar popover closes
+       reliably after a date selection (Chromium leaves it open on
+       some platforms; blurring the element dismisses the popup).
+
 - **DAY-126: source label editing folded into the per-connector
   Edit dialog; the standalone `Aa` rename button on the source chip
   is gone.** The "Edit GitHub source" and "Edit Atlassian source"

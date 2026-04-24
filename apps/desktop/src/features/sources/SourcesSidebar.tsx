@@ -150,9 +150,32 @@ export function SourcesSidebar() {
     return () => window.removeEventListener("mousedown", handler);
   }, [addMenuOpen]);
 
+  // DAY-127 #1: the rescan (↻) button used to fire `healthcheck(id)`
+  // and return silently — nothing on the chip changed until the
+  // IPC resolved and `sources_list` refetched, so a user clicking
+  // ↻ had no idea whether the click registered. We now track the
+  // set of in-flight source ids and spin the arrow for that chip
+  // while the healthcheck is pending, giving the click an
+  // immediate visual acknowledgement.
+  const [checkingIds, setCheckingIds] = useState<Set<string>>(
+    () => new Set(),
+  );
   const handleHealthcheck = useCallback(
     (id: string) => {
-      void healthcheck(id);
+      setCheckingIds((prev) => {
+        if (prev.has(id)) return prev;
+        const next = new Set(prev);
+        next.add(id);
+        return next;
+      });
+      void healthcheck(id).finally(() => {
+        setCheckingIds((prev) => {
+          if (!prev.has(id)) return prev;
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      });
     },
     [healthcheck],
   );
@@ -241,6 +264,7 @@ export function SourcesSidebar() {
           key={source.id}
           source={source}
           onHealthcheck={handleHealthcheck}
+          isChecking={checkingIds.has(source.id)}
           onEdit={() => setEditing(source)}
           onRequestDelete={() => {
             setDeleteError(null);
@@ -447,6 +471,11 @@ export function SourcesSidebar() {
 interface SourceChipProps {
   source: Source;
   onHealthcheck: (id: string) => void;
+  /** DAY-127 #1: set true while `sources_healthcheck` for this row
+   *  is in flight so the ↻ button can rotate as a visual receipt
+   *  for the click. Cleared on promise settlement (success or
+   *  failure). */
+  isChecking: boolean;
   /** Opens the connector-specific edit dialog. As of DAY-126 every
    *  edit dialog (LocalGit, GitLab, GitHub, Atlassian) surfaces a
    *  Label field, so renaming is part of this one flow instead of
@@ -478,6 +507,7 @@ interface SourceChipProps {
 function SourceChip({
   source,
   onHealthcheck,
+  isChecking,
   onEdit,
   onRequestDelete,
   onReconnect,
@@ -558,11 +588,24 @@ function SourceChip({
           <button
             type="button"
             onClick={() => onHealthcheck(source.id)}
-            className="rounded px-1 text-[11px] text-neutral-500 hover:bg-neutral-100 dark:text-neutral-400 dark:hover:bg-neutral-800"
+            disabled={isChecking}
+            data-testid={`source-chip-rescan-${source.id}`}
+            data-checking={isChecking ? "true" : undefined}
+            className="rounded px-1 text-[11px] text-neutral-500 hover:bg-neutral-100 disabled:cursor-not-allowed disabled:opacity-60 dark:text-neutral-400 dark:hover:bg-neutral-800"
             aria-label={`Rescan ${source.label}`}
-            title="Rescan"
+            aria-busy={isChecking ? "true" : undefined}
+            title={isChecking ? "Rescanning…" : "Rescan"}
           >
-            ↻
+            <span
+              aria-hidden="true"
+              className={
+                isChecking
+                  ? "inline-block animate-spin motion-reduce:animate-none"
+                  : "inline-block"
+              }
+            >
+              ↻
+            </span>
           </button>
           <button
             type="button"
