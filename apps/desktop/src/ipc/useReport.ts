@@ -63,19 +63,32 @@ const INITIAL: ReportState = {
 };
 
 function deriveStatusFromProgress(events: ProgressEvent[]): ReportStatus {
-  const last = events[events.length - 1]?.phase;
+  // DAY-128 #2: connectors emit `ProgressPhase::Completed` when
+  // their per-source walk finishes (see e.g. `connector-gitlab`,
+  // `connector-jira`, `connector-github`). If we propagate every
+  // terminal phase to the top-level run status the Cancel button
+  // flips back to Generate the instant one source finishes and
+  // then back to Cancel as the next source starts — which is the
+  // "Generate button glitch mid-run" the user is reporting on a
+  // multi-source selection. Only the orchestrator's run-level
+  // completion event carries `source_id === null`; that is the
+  // canonical run terminal on the progress stream. All other
+  // terminals are per-source and must not change the button.
+  const last = events[events.length - 1];
   if (!last) return "starting";
-  switch (last.status) {
+  const phase = last.phase;
+  const isRunLevel = last.source_id === null;
+  switch (phase.status) {
     case "starting":
       return "starting";
     case "in_progress":
       return "running";
     case "completed":
-      return "completed";
+      return isRunLevel ? "completed" : "running";
     case "cancelled":
-      return "cancelled";
+      return isRunLevel ? "cancelled" : "running";
     case "failed":
-      return "failed";
+      return isRunLevel ? "failed" : "running";
     default:
       return "running";
   }

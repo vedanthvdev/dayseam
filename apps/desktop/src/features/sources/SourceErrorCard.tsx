@@ -72,6 +72,17 @@ function resolveCopy(code: string): CardCopy | null {
   return null;
 }
 
+/** Pull the `message` field off an error payload when the variant
+ *  carries one. Every variant except `RateLimited` has `message` on
+ *  its data; narrow on the type so TypeScript knows when it's safe.
+ *  Empty strings are treated as "no message" so a blank backend
+ *  payload doesn't overwrite the (more useful) generic copy. */
+function errorMessage(error: DayseamError): string | null {
+  if (error.variant === "RateLimited") return null;
+  const msg = error.data.message;
+  return msg && msg.length > 0 ? msg : null;
+}
+
 export function SourceErrorCard({
   source,
   error,
@@ -79,10 +90,23 @@ export function SourceErrorCard({
 }: SourceErrorCardProps) {
   const code = error.data.code;
   const copy = resolveCopy(code);
+  // DAY-128 (DAY-125 follow-up): the fallback branch used to render
+  // only the error code, which meant the backend-computed message —
+  // e.g. "couldn't reach `gitlab.example.com` after 3 attempts:
+  // name resolution failed" produced by `HttpClient::format_transport_error`
+  // — was invisible to the user. Any code outside the per-connector
+  // copy maps (currently every `http.transport.*` code ships without
+  // bespoke copy because the message already names the host) would
+  // land users on a generic "couldn't sync" string, throwing away
+  // the diagnostic wire we just added. Prefer the backend message
+  // whenever we don't have bespoke copy; the code chip below still
+  // shows the stable identifier for grepping logs / filing bugs.
+  const backendMessage = errorMessage(error);
 
   const title = copy?.title ?? "Something went wrong";
   const body =
     copy?.body ??
+    backendMessage ??
     `Dayseam couldn't sync this source. The error code was ${code}.`;
   const action = copy?.action ?? "none";
 

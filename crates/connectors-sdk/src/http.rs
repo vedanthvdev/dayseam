@@ -404,7 +404,14 @@ fn classify_transport_error(err: &reqwest::Error) -> &'static str {
     if !err.is_connect() {
         return error_codes::HTTP_TRANSPORT;
     }
-    let chain = error_chain_display(err);
+    // DAY-128: walk the *inner* source chain only. `reqwest::Error`'s
+    // own `Display` includes the full target URL — e.g. "error
+    // sending request for url (https://api.dns-something.com/v1/…)"
+    // — which means a hostname or path containing fragments like
+    // "dns", "tls", or "ssl" would poison every branch below. The
+    // inner chain (hyper → rustls → std::io) carries the actual
+    // cause without the URL and is what we want to classify on.
+    let chain = inner_error_chain_display(err);
     // Order matters: TLS errors almost always surface while attempting
     // a connect, and the string "connection" is too broad to gate on
     // first. DNS fragments are checked before TLS because a DNS
@@ -448,15 +455,43 @@ fn error_chain_display(err: &(dyn std::error::Error + 'static)) -> String {
     out
 }
 
-/// Splice the target host (and attempt count) into the user-facing
-/// transport error message. Falls back to the old shape when
-/// `reqwest` didn't attach a URL — typical for builder-level errors.
-fn format_transport_error(err: &reqwest::Error, attempt: u32) -> String {
-    if let Some(host) = err.url().and_then(|u| u.host_str()) {
-        format!("couldn't reach `{host}` after {attempt} attempts: {err}")
-    } else {
-        format!("http error after {attempt} attempts: {err}")
+/// Like [`error_chain_display`] but skips `err` itself — used for the
+/// classifier to avoid misclassifying on URL fragments baked into
+/// `reqwest::Error::Display`. Returns an empty string when the outer
+/// error carries no source chain (we then fall through to the generic
+/// connect code, which matches the pre-DAY-125 behaviour).
+fn inner_error_chain_display(err: &(dyn std::error::Error + 'static)) -> String {
+    match err.source() {
+        Some(inner) => error_chain_display(inner),
+        None => String::new(),
     }
+}
+
+/// Splice the target host (and attempt count) into the user-facing
+/// transport error message. Only applied to errors where the user
+/// will recognise "couldn't reach host" as correct — connect refusals
+/// and timeouts. For other variants (redirect loops, body-read
+/// failures) we fall back to the generic shape so we don't mislead
+/// the user about what actually went wrong.
+fn format_transport_error(err: &reqwest::Error, attempt: u32) -> String {
+    use std::error::Error as _;
+
+    let reach = err.is_connect() || err.is_timeout();
+    if reach {
+        if let Some(host) = err.url().and_then(|u| u.host_str()) {
+            // Use the *inner* source for the trailing detail so the
+            // message doesn't double-mention the host (reqwest's own
+            // `Display` renders the full URL, which includes the host
+            // we've already named in backticks). Falls back to
+            // `err.to_string()` when the outer error has no source.
+            let detail: String = err
+                .source()
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| err.to_string());
+            return format!("couldn't reach `{host}` after {attempt} attempts: {detail}");
+        }
+    }
+    format!("http error after {attempt} attempts: {err}")
 }
 
 /// Best-effort parse of the `Retry-After` header (seconds form).
@@ -624,4 +659,86 @@ mod tests {
     // `unreachable_host_surfaces_transport_connect_with_hostname_in_message`
     // in `tests/http_retry.rs`, which triggers a real
     // `reqwest::Error` via a refused TCP connect on localhost.
+
+    /// DAY-128: `classify_transport_error` used to walk the whole
+    /// chain starting at `err` itself, which for `reqwest::Error`
+    /// includes the full target URL in `Display`. A URL whose host
+    /// or path happened to contain a classifier fragment (e.g.
+    /// `api.dns.example.com`, `https://h/tls-proxy/…`) would then
+    /// poison the match and misclassify a plain connect refused as
+    /// `HTTP_TRANSPORT_DNS` or `HTTP_TRANSPORT_TLS`. The fix is to
+    /// classify on the *inner* source chain only — this test pins
+    /// that invariant by building an outer error whose `Display`
+    /// is specifically the kind of thing that used to break the
+    /// classifier and asserting the inner walk skips it.
+    #[test]
+    fn inner_error_chain_display_skips_outer_error_display() {
+        use std::fmt;
+
+        #[derive(Debug)]
+        struct Outer(&'static str, Inner);
+        #[derive(Debug)]
+        struct Inner(&'static str);
+        impl fmt::Display for Outer {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl fmt::Display for Inner {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for Outer {
+            fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+                Some(&self.1)
+            }
+        }
+        impl std::error::Error for Inner {}
+
+        // Outer carries the URL-contaminated "dns"/"tls" fragments;
+        // inner is the real cause ("connection refused"). The
+        // inner walk must ignore the outer's "dns"/"tls" and only
+        // see "connection refused".
+        let e = Outer(
+            "error sending request for url (http://api.dns-tls.example.com/v1/ssl/handshake)",
+            Inner("connection refused"),
+        );
+        let inner = inner_error_chain_display(&e);
+        assert!(
+            inner.contains("connection refused"),
+            "inner walk must see the real cause, got `{inner}`",
+        );
+        assert!(
+            !inner.contains("dns"),
+            "inner walk must not include the outer's URL (contained `dns`), got `{inner}`",
+        );
+        assert!(
+            !inner.contains("tls"),
+            "inner walk must not include the outer's URL (contained `tls`), got `{inner}`",
+        );
+        assert!(
+            !inner.contains("ssl"),
+            "inner walk must not include the outer's URL (contained `ssl`), got `{inner}`",
+        );
+    }
+
+    #[test]
+    fn inner_error_chain_display_is_empty_for_sourceless_errors() {
+        // When `reqwest::Error` bottoms out without a source (e.g.
+        // builder-level validation failures), the classifier must
+        // fall through to the generic code rather than panicking or
+        // running the URL through the fragment matcher.
+        use std::fmt;
+        #[derive(Debug)]
+        struct NoSource(&'static str);
+        impl fmt::Display for NoSource {
+            fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for NoSource {}
+        let e = NoSource("some builder error mentioning dns tls ssl");
+        assert_eq!(inner_error_chain_display(&e), "");
+    }
 }

@@ -185,4 +185,58 @@ describe("SourceErrorCard", () => {
       screen.queryByRole("button", { name: /reconnect/i }),
     ).toBeNull();
   });
+
+  // DAY-128 (DAY-125 follow-up): `http.transport.*` codes ship without
+  // per-connector copy — the hostname and reason live in the
+  // backend-computed `message` (see
+  // `HttpClient::format_transport_error`). Before this fix the card
+  // fallback threw that away and only named the code, so the user's
+  // "couldn't reach `gitlab.example.com`: name resolution failed"
+  // message never reached the UI. Assert the fallback now prefers
+  // the backend message over the generic copy.
+  it("surfaces the backend message for unmapped codes with a non-empty message", () => {
+    const transportError: DayseamError = {
+      variant: "Network",
+      data: {
+        code: "http.transport.dns",
+        message:
+          "couldn't reach `gitlab.example.com` after 3 attempts: name resolution failed",
+      },
+    };
+    render(
+      <SourceErrorCard
+        source={GITLAB_SOURCE}
+        error={transportError}
+        onReconnect={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText(
+        /couldn't reach `gitlab\.example\.com` after 3 attempts: name resolution failed/,
+      ),
+    ).toBeInTheDocument();
+    expect(screen.getByText("http.transport.dns")).toBeInTheDocument();
+    expect(
+      screen.queryByText(
+        /Dayseam couldn't sync this source\. The error code was/,
+      ),
+    ).toBeNull();
+  });
+
+  it("falls back to the generic body for unmapped codes with an empty message", () => {
+    const transportError: DayseamError = {
+      variant: "Network",
+      data: { code: "http.transport.unknown", message: "" },
+    };
+    render(
+      <SourceErrorCard
+        source={GITLAB_SOURCE}
+        error={transportError}
+        onReconnect={vi.fn()}
+      />,
+    );
+    expect(
+      screen.getByText(/Dayseam couldn't sync this source/),
+    ).toBeInTheDocument();
+  });
 });

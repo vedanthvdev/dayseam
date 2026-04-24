@@ -149,7 +149,18 @@ export function Dialog({
           {children}
         </div>
         {footer ? (
-          <footer className="flex items-center justify-end gap-2 border-t border-neutral-200 bg-neutral-50 px-5 py-3 dark:border-neutral-800 dark:bg-neutral-900/60">
+          // DAY-128 #1: footer padding was `py-3` which, combined
+          // with the line-height quirk in `DialogButton` (leading-5
+          // + py-1.5 gave the glyph extra space below the baseline
+          // inside its own chrome), made the primary button read as
+          // "too low on the page" — most visible on the Identity
+          // dialog's "Done" and on the Atlassian dialog's
+          // Cancel / Add source pair when the form expanded with
+          // the "Use a different API token" flow. Tightening the
+          // footer strip by 4px here plus the flex-centred glyph
+          // inside `DialogButton` pulls the primary back into the
+          // column the user expects.
+          <footer className="flex items-center justify-end gap-2 border-t border-neutral-200 bg-neutral-50 px-5 py-2 dark:border-neutral-800 dark:bg-neutral-900/60">
             {footer}
           </footer>
         ) : null}
@@ -194,12 +205,23 @@ export function DialogButton({
   onClick,
   children,
 }: DialogButtonProps) {
+  // DAY-128 #1: `rounded px-3 py-1.5 text-sm leading-5` with the
+  // glyph baked straight into the default flow placed the "D" /
+  // "C" / "S" glyphs visibly below the optical centre of the button
+  // — `leading-5` widens the line-box to 20px around a 14px glyph
+  // whose baseline sits in the lower half of that box, so the
+  // content read as "dropped". Pinning `inline-flex items-center`
+  // + a fixed `h-8` collapses the line-box noise and centres the
+  // glyph geometrically, which is what the user calls "looks
+  // aligned" on the Identity "Done" and the Atlassian Cancel /
+  // Add source pair. `leading-none` keeps the shorter buttons
+  // from inheriting the 20px line-height from the parent stylesheet.
   return (
     <button
       type={type}
       disabled={disabled}
       onClick={onClick}
-      className={`rounded px-3 py-1.5 text-sm font-medium leading-5 transition disabled:cursor-not-allowed ${KIND_CLASSES[kind]}`}
+      className={`inline-flex h-8 items-center justify-center rounded px-3 text-sm font-medium leading-none transition disabled:cursor-not-allowed ${KIND_CLASSES[kind]}`}
     >
       {children}
     </button>

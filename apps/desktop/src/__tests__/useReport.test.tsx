@@ -194,6 +194,66 @@ describe("useReport", () => {
     expect(mockInvoke).toHaveBeenCalledWith("report_cancel", { runId: RUN_ID });
   });
 
+  // DAY-128 #2: connectors emit `ProgressPhase::Completed` when a
+  // per-source walk finishes. Before this fix, `deriveStatusFromProgress`
+  // turned those into the top-level `"completed"` status, which made
+  // the Cancel button flip back to "Generate report" mid-run between
+  // sources — the "generate button glitch" the user reported. The
+  // status must only settle to a terminal value on a run-level
+  // progress event (`source_id === null`) *or* on
+  // `report:completed`; per-source terminals stay "running".
+  it("keeps status running when a per-source Completed event fires mid-run", async () => {
+    registerInvokeHandler("report_generate", async () => RUN_ID);
+
+    const { result } = renderHook(() => useReport());
+
+    await act(async () => {
+      await result.current.generate("2026-04-17", ["src-1", "src-2"]);
+    });
+
+    const channels = getCreatedChannels();
+    const progressCh = channels[channels.length - 2];
+
+    const sourceACompleted = {
+      run_id: RUN_ID,
+      source_id: "src-1",
+      phase: { status: "completed", message: "src-1 done" },
+      emitted_at: "2026-04-17T12:00:00Z",
+    } as unknown as ProgressEvent;
+
+    act(() => {
+      progressCh?.deliver(sourceACompleted);
+    });
+
+    expect(result.current.status).toBe("running");
+  });
+
+  it("settles to completed when a run-level (source_id=null) Completed fires", async () => {
+    registerInvokeHandler("report_generate", async () => RUN_ID);
+
+    const { result } = renderHook(() => useReport());
+
+    await act(async () => {
+      await result.current.generate("2026-04-17", ["src-1"]);
+    });
+
+    const channels = getCreatedChannels();
+    const progressCh = channels[channels.length - 2];
+
+    const runLevelCompleted = {
+      run_id: RUN_ID,
+      source_id: null,
+      phase: { status: "completed", message: "run done" },
+      emitted_at: "2026-04-17T12:00:00Z",
+    } as unknown as ProgressEvent;
+
+    act(() => {
+      progressCh?.deliver(runLevelCompleted);
+    });
+
+    expect(result.current.status).toBe("completed");
+  });
+
   it("`reset` clears the accumulated state", async () => {
     registerInvokeHandler("report_generate", async () => RUN_ID);
 
