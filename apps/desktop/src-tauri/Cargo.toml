@@ -126,6 +126,26 @@ wiremock = "0.6"
 # on `sqlx` for the raw inserts and on `connectors-sdk` so we can
 # build an `HttpClient` pointing at the wiremock origin.
 connectors-sdk = { path = "../../../crates/connectors-sdk" }
+# DAY-123 / T-1. The updater-signature integration suite
+# (`tests/updater_signature.rs`) exercises the exact crypto crate
+# (`minisign-verify`) that `tauri-plugin-updater` uses internally,
+# pairing it with the `minisign` reference implementation for
+# in-process keypair generation + signing. Without this pair the
+# v0.5 capstone review's T-1 finding stands — the JS-side updater
+# tests `vi.mock` the entire `@tauri-apps/plugin-updater` import,
+# so the Ed25519 verification path is *only* reachable here. The
+# crates share an upstream author (jedisct1) and read/write the
+# same wire format, so a sign-here / verify-here round-trip pins
+# the same contract a release-time signed DMG goes through inside
+# `tauri-plugin-updater`.
+minisign = "0.9"
+minisign-verify = "0.2"
+# Used only by `tests/updater_signature.rs` to base64-decode the
+# wrapped pubkey field in `tauri.conf.json` before handing the
+# inner key to `minisign-verify`. Pinned at 0.22 to match the
+# version `tauri-plugin-updater` already pulls into the lockfile,
+# so adding this dev-dep does not introduce a second base64 codegen.
+base64 = "0.22"
 
 [features]
 # `custom-protocol` wires in Tauri's custom-protocol flag for release

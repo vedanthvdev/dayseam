@@ -6,6 +6,53 @@ All notable changes to Dayseam are documented in this file. The format follows
 
 ## [Unreleased]
 
+## [0.6.6]
+
+### Added
+
+- **DAY-123 / T-1: real end-to-end coverage of the in-app
+  updater's Ed25519 / minisign signature-verification contract.**
+  The DAY-115 v0.5 capstone review caught that the JS-side updater
+  suite (`apps/desktop/src/features/updater/__tests__/useUpdater.test.tsx`)
+  `vi.mock`s the entire `@tauri-apps/plugin-updater` import and
+  only exercises `MockUpdate`'s canned state machine — the plugin's
+  actual Ed25519 verification path (the one that protects users
+  against an attacker MITMing `https://github.com/.../latest/download/latest.json`
+  and serving a tampered DMG) was not reachable from any test in
+  the repo, so the DAY-108 CHANGELOG's "pipeline verified" wording
+  overstated coverage. v0.6.6 adds
+  [`apps/desktop/src-tauri/tests/updater_signature.rs`](apps/desktop/src-tauri/tests/updater_signature.rs),
+  a five-test integration suite that exercises `minisign-verify` —
+  the exact crate `tauri-plugin-updater` 2.10.1 depends on
+  internally for signature verification, as visible in the
+  `Cargo.lock` dependency tree under
+  `tauri-plugin-updater -> minisign-verify`. Tests
+  (`signature_round_trips_for_matching_keypair`,
+  `verification_fails_when_public_key_does_not_match`,
+  `verification_fails_when_signature_byte_is_flipped`,
+  `verification_fails_when_payload_byte_is_flipped`,
+  `production_pubkey_in_tauri_conf_json_parses`) generate ephemeral
+  keypairs in-process via the `minisign` reference implementation
+  (same upstream author as `minisign-verify`, same wire format),
+  sign a known payload, then exercise every failure mode the review
+  flagged: stale rotated key, tampered `.sig`, tampered `.tar.gz`,
+  plus a sanity-parse of the production pubkey from
+  [`tauri.conf.json`](apps/desktop/src-tauri/tauri.conf.json) so a
+  future config edit that breaks the base64 wrapping or strips the
+  comment header fails CI within ~50 ms instead of at release time.
+  Each negative test was also fail-revert verified (swap
+  `unrelated_kp` for `signing_kp` → test correctly fails;
+  remove the single-byte mutation → test correctly fails), so every
+  assertion is live rather than a no-op. Dev-dependencies added
+  under `[dev-dependencies]` in
+  [`apps/desktop/src-tauri/Cargo.toml`](apps/desktop/src-tauri/Cargo.toml):
+  `minisign = "0.9"` (signing — pure Rust, in-process), `minisign-verify = "0.2"`
+  (verification — the exact transitive already pulled by
+  `tauri-plugin-updater`), and `base64 = "0.22"` (decoding the
+  wrapped pubkey field). None of these reach a production build;
+  all three are `[dev-dependencies]` only. Closes the T-1 entry on
+  [#129](https://github.com/vedanthvdev/dayseam/issues/129).
+
 ## [0.6.5]
 
 ### Fixed
