@@ -80,6 +80,120 @@ describe("SourcesSidebar", () => {
     );
   });
 
+  // DAY-159. Every connector chip renders the brand mark for its
+  // kind so the user can tell at a glance whether a row points at
+  // GitHub, GitLab, a Jira instance, a Confluence instance, or a
+  // local Git scan root — without reading the user-supplied label.
+  // The logos are purely decorative (aria-hidden) because the label
+  // text next to them already names the service; duplicating that
+  // as alt text would be redundant and noisy for screen readers.
+  // The unit-level `ConnectorLogo.test.tsx` pins the component's
+  // own accessibility and coverage-per-kind invariants; this test
+  // only pins that SourceChip actually wires it up for each kind.
+  it("renders the connector brand mark on every chip, one per source kind", async () => {
+    const connectedSources: Source[] = [
+      {
+        id: "src-local",
+        kind: "LocalGit",
+        label: "Work repos",
+        config: { LocalGit: { scan_roots: ["/Users/me/code"] } },
+        secret_ref: null,
+        created_at: "2026-04-10T12:00:00Z",
+        last_sync_at: null,
+        last_health: HEALTHY,
+      },
+      {
+        id: "src-gh",
+        kind: "GitHub",
+        label: "dayseam org",
+        config: { GitHub: { api_base_url: "https://api.github.com" } },
+        secret_ref: {
+          keychain_service: "dayseam.github",
+          keychain_account: "src-gh",
+        },
+        created_at: "2026-04-10T12:00:00Z",
+        last_sync_at: null,
+        last_health: HEALTHY,
+      },
+      {
+        id: "src-gl",
+        kind: "GitLab",
+        label: "self-hosted",
+        config: {
+          GitLab: {
+            base_url: "https://gitlab.example.com",
+            user_id: 42,
+            username: "me",
+          },
+        },
+        secret_ref: {
+          keychain_service: "dayseam.gitlab",
+          keychain_account: "src-gl",
+        },
+        created_at: "2026-04-10T12:00:00Z",
+        last_sync_at: null,
+        last_health: HEALTHY,
+      },
+      {
+        id: "src-jira",
+        kind: "Jira",
+        label: "Acme Jira",
+        config: {
+          Jira: {
+            workspace_url: "https://acme.atlassian.net",
+            email: "me@acme.test",
+          },
+        },
+        secret_ref: {
+          keychain_service: "dayseam.jira",
+          keychain_account: "src-jira",
+        },
+        created_at: "2026-04-10T12:00:00Z",
+        last_sync_at: null,
+        last_health: HEALTHY,
+      },
+      {
+        id: "src-conf",
+        kind: "Confluence",
+        label: "Acme Wiki",
+        config: {
+          Confluence: {
+            workspace_url: "https://acme.atlassian.net/wiki",
+            email: "me@acme.test",
+          },
+        },
+        secret_ref: {
+          keychain_service: "dayseam.confluence",
+          keychain_account: "src-conf",
+        },
+        created_at: "2026-04-10T12:00:00Z",
+        last_sync_at: null,
+        last_health: HEALTHY,
+      },
+    ];
+    registerInvokeHandler("sources_list", async () => connectedSources);
+    render(<SourcesSidebar />);
+    await waitFor(() =>
+      expect(screen.getByText("Work repos")).toBeInTheDocument(),
+    );
+
+    const chipExpectations: [chipId: string, logoKind: string][] = [
+      ["source-chip-src-local", "connector-logo-LocalGit"],
+      ["source-chip-src-gh", "connector-logo-GitHub"],
+      ["source-chip-src-gl", "connector-logo-GitLab"],
+      ["source-chip-src-jira", "connector-logo-Jira"],
+      ["source-chip-src-conf", "connector-logo-Confluence"],
+    ];
+    for (const [chipId, logoKind] of chipExpectations) {
+      const chip = screen.getByTestId(chipId);
+      const logo = within(chip).getByTestId(logoKind);
+      expect(logo.tagName.toLowerCase()).toBe("svg");
+      // Decorative by default — the chip's visible text label
+      // already names the service.
+      expect(logo.getAttribute("aria-hidden")).toBe("true");
+    }
+  });
+
   it("invokes `sources_healthcheck` when the rescan control is clicked", async () => {
     registerInvokeHandler("sources_list", async () => [SOURCE]);
     registerInvokeHandler("sources_healthcheck", async () => HEALTHY);

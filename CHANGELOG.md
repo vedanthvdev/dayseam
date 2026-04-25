@@ -20,6 +20,27 @@ this into the workflow itself.
 
 ## [Unreleased]
 
+### Added
+
+- **DAY-159: Connector brand logos in the Sources sidebar.** Every
+  source chip now renders a 12×12 brand mark before the health dot so
+  users can tell at a glance whether a row points at GitHub, GitLab,
+  Jira, Confluence, or a local Git scan root, without having to read
+  and recognise the user-supplied label. A new `ConnectorLogo`
+  component keyed on the canonical `SourceKind` enum centralises the
+  five marks (sourced from the CC0-licensed Simple Icons collection
+  and inlined as `currentColor` SVG paths, so they inherit the chip's
+  text colour and dark-mode classes with zero extra wiring). The
+  marks are decorative by default (`aria-hidden`) because the visible
+  label next to them already names the service; a `labelled` escape
+  hatch is available for future icon-only contexts (dialog titles,
+  hero surfaces, etc.). Explicitly scoped to just `SourceChip` for
+  now — `ActionRow` source toggles, the streaming-preview group
+  headers, and the add/edit dialogs are deferred to follow-ups so the
+  cross-boundary surfaces (notably the markdown sink's per-kind
+  headers in `StreamingPreview.tsx`, which is kept byte-for-byte in
+  lockstep with the Rust sink) stay untouched in this change.
+
 ### Changed
 
 - **DAY-161: Lock the Dayseam brand mark and replace placeholder app

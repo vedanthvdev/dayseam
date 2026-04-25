@@ -36,6 +36,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { DayseamError, Source, SourceHealth } from "@dayseam/ipc-types";
 import { useLocalRepos, useSources } from "../../ipc";
+import { ConnectorLogo } from "../../components/ConnectorLogo";
 import { AddLocalGitSourceDialog } from "./AddLocalGitSourceDialog";
 import { AddGitlabSourceDialog } from "./AddGitlabSourceDialog";
 import { AddAtlassianSourceDialog } from "./AddAtlassianSourceDialog";
@@ -562,6 +563,11 @@ function SourceChip({
         className="group inline-flex cursor-pointer items-center gap-1.5 self-start rounded border border-neutral-300 px-2 py-0.5 text-xs text-neutral-700 dark:border-neutral-700 dark:text-neutral-200"
         data-testid={`source-chip-${source.id}`}
       >
+        <ConnectorLogo
+          kind={source.kind}
+          size={12}
+          className="shrink-0 text-neutral-500 dark:text-neutral-400"
+        />
         <span
           aria-hidden="true"
           className={`h-1.5 w-1.5 rounded-full ${healthDotClass(health)}`}
