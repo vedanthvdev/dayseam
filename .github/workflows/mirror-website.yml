@@ -1,0 +1,145 @@
+name: Mirror website to Pages repo
+
+# DAY-169. Keeps dayseam/dayseam.github.io in sync with this repo's
+# apps/website/ subtree. Every master push that touches the site
+# rsyncs the source tree into the Pages repo's main branch, which
+# then triggers the Pages repo's own deploy.yml (actions/deploy-pages)
+# to republish https://dayseam.github.io/.
+#
+# Why a separate Pages repo:
+#
+#   GitHub Pages serves org-root URLs (https://dayseam.github.io/)
+#   only from a repo named literally `dayseam.github.io`. Deploying
+#   from dayseam/dayseam would land at /dayseam/, which breaks every
+#   absolute-path asset the site already ships. Rather than add a
+#   base-path config and rewrite URLs, we keep the site alongside
+#   the desktop app in this repo and mirror the subtree to the
+#   correctly-named repo. This workflow is the bridge.
+#
+# Auth:
+#
+#   PAGES_DEPLOY_TOKEN is a fine-grained PAT scoped to
+#   dayseam/dayseam.github.io with `Contents: read and write`. The
+#   default GITHUB_TOKEN cannot push cross-repo, so a PAT (or a
+#   GitHub App installation token) is required. Rotate the PAT every
+#   90 days; add a calendar reminder when it expires. If the PAT
+#   secret is missing, this workflow fails fast on checkout rather
+#   than silently skipping the mirror.
+#
+# What gets mirrored:
+#
+#   Everything under apps/website/ except:
+#     - node_modules, .astro, dist (build artefacts, .gitignored)
+#     - .git (destination's git metadata)
+#     - .github (destination's deploy.yml, not ours)
+#     - README.md, CREDITS.md (standalone-repo-flavoured; the
+#       monorepo versions reference ../../ paths and apps/desktop/
+#       siblings that don't exist in the Pages repo)
+#     - .nvmrc (Pages repo keeps its own)
+#
+# After rsync, pnpm-lock.yaml is regenerated in the Pages repo so a
+# dependency change in apps/website/package.json propagates as a
+# lockfile update in the same mirror commit (not as a lagging
+# "install warning" on the next deploy).
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - "apps/website/**"
+      - ".github/workflows/mirror-website.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mirror-website
+  cancel-in-progress: false
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout dayseam/dayseam (source)
+        uses: actions/checkout@v4
+        with:
+          path: source
+
+      - name: Checkout dayseam/dayseam.github.io (destination)
+        uses: actions/checkout@v4
+        with:
+          repository: dayseam/dayseam.github.io
+          token: ${{ secrets.PAGES_DEPLOY_TOKEN }}
+          path: pages
+
+      - name: Preflight — PAT must be readable
+        run: |
+          if [[ -z "${{ secrets.PAGES_DEPLOY_TOKEN }}" ]]; then
+            echo "::error::PAGES_DEPLOY_TOKEN secret is missing. Generate a fine-grained PAT scoped to dayseam/dayseam.github.io with Contents: read-and-write, and add it as PAGES_DEPLOY_TOKEN in this repo's Actions secrets." >&2
+            exit 1
+          fi
+
+      # rsync --delete propagates deletions in apps/website/ (a
+      # removed component, a moved file) into the Pages repo.
+      # Without --delete, renames would leave orphan copies behind
+      # and the Pages tree would silently drift from the source.
+      - name: Mirror apps/website to Pages repo
+        run: |
+          set -euo pipefail
+          rsync -av --delete \
+            --exclude=node_modules \
+            --exclude=.astro \
+            --exclude=dist \
+            --exclude=.git \
+            --exclude=.github \
+            --exclude=README.md \
+            --exclude=CREDITS.md \
+            --exclude=.nvmrc \
+            source/apps/website/ pages/
+
+      - name: Setup pnpm (for lockfile regeneration)
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.28.0
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      # Regenerate the Pages repo's pnpm-lock.yaml so a dependency
+      # change in apps/website/package.json ships with a matching
+      # lockfile in the same mirror commit. `--lockfile-only` does
+      # exactly that without touching node_modules.
+      - name: Regenerate pnpm-lock.yaml in Pages repo
+        working-directory: pages
+        run: pnpm install --lockfile-only
+
+      - name: Commit and push mirror
+        working-directory: pages
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          SOURCE_MSG: ${{ github.event.head_commit.message }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          if git diff --quiet && [[ -z "$(git status --porcelain)" ]]; then
+            echo "==> No changes to mirror (apps/website/ subtree is already in sync)."
+            exit 0
+          fi
+          git add -A
+          # Commit subject stays short and references the source
+          # SHA; the body carries the original commit's subject for
+          # traceability. Using `--allow-empty-message` would let a
+          # future change ship without context, which is worse than
+          # the occasional "Mirror from …" subject feeling sterile.
+          src_subject="$(printf '%s' "$SOURCE_MSG" | head -n 1)"
+          short_sha="${SOURCE_SHA:0:7}"
+          git commit -m "Mirror from dayseam/dayseam@${short_sha}" \
+                     -m "Source commit: ${src_subject}" \
+                     -m "Upstream: https://github.com/dayseam/dayseam/commit/${SOURCE_SHA}"
+          git push origin main
+          echo "==> Pushed mirror commit to dayseam.github.io main."
+          echo "==> Deploy workflow in dayseam.github.io will now republish https://dayseam.github.io/."

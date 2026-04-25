@@ -49,6 +49,67 @@ release's chore commit from master's linear history; v0.8.1's
 
 ### Added
 
+- **DAY-169: Public hosting for the marketing site at
+  https://dayseam.github.io.** Closes-progress
+  [#141](https://github.com/dayseam/dayseam/issues/141) (WEB-1
+  from the holistic review, together with DAY-166 which built the
+  site itself). The stage-1 placeholder that lived in the org's
+  `dayseam/dayseam.github.io` repo (a single Apr-24 commit with
+  four static Astro components and no React island) was replaced
+  with the full DAY-166 site, synced from this repo's
+  `apps/website/` subtree.
+
+  Architecture is a two-repo mirror, not a duplicate: the canonical
+  source stays at `dayseam/dayseam/apps/website/` (so the site sits
+  alongside the desktop app, its tests, and the brand assets) and a
+  new `mirror-website.yml` workflow in this repo rsyncs the subtree
+  into `dayseam/dayseam.github.io` on every master push that
+  touches `apps/website/**`. The Pages repo's existing
+  `actions/deploy-pages` workflow picks up the mirror commit and
+  republishes. A GitHub Pages root URL like `dayseam.github.io/`
+  (not `/dayseam/`) requires the hosting repo to be named literally
+  `dayseam.github.io`, which is why the Pages repo exists at all
+  rather than this repo being both source and deploy surface.
+
+  The mirror excludes `node_modules`, `.astro`, `dist`, `.git`,
+  `.github`, `README.md`, `CREDITS.md`, and `.nvmrc`. The first
+  three are build artefacts. `.git` and `.github` belong to the
+  destination (we must not overwrite its deploy workflow with a
+  workflow of the wrong shape). `README.md` and `CREDITS.md` in
+  `apps/website/` are written for monorepo readers and reference
+  `../../docs/brand/README.md` and `apps/desktop/...` paths that
+  don't exist in a standalone repo; the Pages repo keeps its own
+  standalone-flavoured copies that survive future mirrors. After
+  rsync the mirror runs `pnpm install --lockfile-only` in the
+  Pages repo so a dependency change in `apps/website/package.json`
+  ships with a matching `pnpm-lock.yaml` in the same mirror
+  commit, not as a lagging install-warning on the next deploy.
+
+  `apps/website/astro.config.mjs` now reads `SITE_URL` from env
+  with a default of `https://dayseam.github.io`, replacing the
+  previous hardcoded `https://dayseam.com`. The old default
+  produced `<link rel="canonical">` and `og:url` meta pointing at
+  a domain that does not resolve, which is the fastest way to tell
+  Google not to index the site that does resolve. When the
+  `dayseam.com` apex CNAME lands, flip `SITE_URL=https://dayseam.com`
+  in the Pages repo's `deploy.yml` env and every canonical / OG
+  tag switches over without a code change. `Base.astro`'s
+  `Astro.site` fallback was updated to match. `apps/website/
+  package.json` also gained `@types/node` (needed for
+  `process.env` typings in `astro.config.mjs` now that it reads
+  an env var) and a `check` script alias plus `packageManager` /
+  `engines` fields so a standalone `pnpm install && pnpm build`
+  in the Pages repo reproduces the monorepo's toolchain.
+
+  Auth: the mirror workflow needs cross-repo write access, which
+  the default `GITHUB_TOKEN` cannot grant. A fine-grained PAT
+  scoped to `dayseam/dayseam.github.io` with `Contents: read and
+  write` is stored as `PAGES_DEPLOY_TOKEN` in this repo's Actions
+  secrets. The preflight step fails fast if the secret is missing,
+  so a secret rotation that forgets to update the value surfaces
+  as a clear CI error on the next site change rather than as a
+  mysteriously-stale production site. Rotate every 90 days.
+
 - **DAY-166: Public marketing site at `apps/website/` — Astro +
   Tailwind + one React island.** Closes-progress
   [#141](https://github.com/dayseam/dayseam/issues/141) (WEB-1

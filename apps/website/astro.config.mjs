@@ -3,7 +3,7 @@ import { defineConfig } from "astro/config";
 import react from "@astrojs/react";
 import tailwind from "@astrojs/tailwind";
 
-// DAY-166. Marketing site for Dayseam.
+// DAY-166 / DAY-169. Marketing site for Dayseam.
 //
 // Output: static. The site has no backend, no user accounts, no
 // database — the whole point of Dayseam is that the product itself
@@ -15,8 +15,18 @@ import tailwind from "@astrojs/tailwind";
 // at setup — SSR would blow up. `client:only` is the correct
 // directive for browser-only islands, and it still defers loading
 // until after HTML paint, so time-to-first-content is unaffected.
+//
+// `site` drives Astro's canonical + og:url + sitemap URL generation.
+// Default is https://dayseam.github.io (the live Pages URL), which
+// is also what the build runs at in the dayseam/dayseam.github.io
+// deploy workflow. When the dayseam.com apex domain is live, set
+// `SITE_URL=https://dayseam.com` in the deploy env and the canonical
+// tags will switch without a code change. Hardcoding dayseam.com
+// here (the previous default) produced canonical URLs that pointed
+// at a domain that did not resolve, which is the fastest way to
+// tell Google not to index the site that *does* resolve.
 export default defineConfig({
-  site: "https://dayseam.com",
+  site: process.env.SITE_URL || "https://dayseam.github.io",
   output: "static",
   compressHTML: true,
   // Astro's dev toolbar is a floating chrome strip at the bottom of
