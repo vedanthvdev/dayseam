@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Dayseam brand mark - monochrome variant.
+
+  Same geometry as dayseam-mark.svg but rendered in a single ink, with
+  no rounded-square background and stroke colour set to currentColor.
+  Use this in single-ink contexts where the multi-hue palette would
+  fight the surrounding UI:
+
+    - Browser favicon (16/32 px)
+    - macOS menubar/tray (template image)
+    - Markdown README badges
+    - Email / printed contexts
+    - Social mention pills
+
+  Callers control colour via CSS color (or the SVG color attribute)
+  thanks to stroke="currentColor". The transparent background means
+  the mark composites cleanly onto any surface.
+
+  Geometry is byte-for-byte identical to dayseam-mark.svg (same
+  convergence point, same fan angles, same seam dash pattern); only
+  the background rect is removed and the strand strokes collapse to a
+  single colour. Re-derive from dayseam-mark.svg if either drifts.
+-->
+<svg
+  width="1024"
+  height="1024"
+  viewBox="0 0 1024 1024"
+  xmlns="http://www.w3.org/2000/svg"
+  role="img"
+  aria-label="Dayseam"
+>
+  <title>Dayseam</title>
+
+  <g
+    stroke="currentColor"
+    stroke-width="28"
+    stroke-linecap="round"
+    fill="none"
+  >
+    <line x1="292" y1="230" x2="680" y2="512" />
+    <line x1="224" y1="364" x2="680" y2="512" />
+    <line x1="200" y1="512" x2="680" y2="512" />
+    <line x1="224" y1="660" x2="680" y2="512" />
+    <line x1="292" y1="794" x2="680" y2="512" />
+
+    <line
+      x1="680"
+      y1="512"
+      x2="980"
+      y2="512"
+      stroke-dasharray="44 24"
+    />
+  </g>
+</svg>

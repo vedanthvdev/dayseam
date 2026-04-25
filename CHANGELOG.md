@@ -20,6 +20,31 @@ this into the workflow itself.
 
 ## [Unreleased]
 
+### Changed
+
+- **DAY-161: Lock the Dayseam brand mark and replace placeholder app
+  icons.** The locked identity is "Convergence": five strands fanning
+  in from the upper-left at evenly varied angles, meeting at a single
+  anchor point on the right and exiting as a horizontal stitched seam.
+  The narrative maps directly to what the app does: many sources
+  (GitHub, GitLab, Jira, Confluence, local Git, future connectors)
+  gather at one point and are stitched into one record. Strand count
+  is intentionally not a literal one-strand-per-connector claim, so
+  adding a future connector does not require redrawing the mark.
+  Canonical sources land at `assets/brand/dayseam-mark.svg` (full
+  colour, on charcoal) and `assets/brand/dayseam-mark-mono.svg`
+  (single ink, transparent background, `currentColor` stroke for
+  favicon / tray / badge use). The four PNGs Tauri's bundle config
+  references at `apps/desktop/src-tauri/icons/` are now rasterised
+  from the SVG master at 32, 128, 256, and 512 px, replacing the
+  Tauri-default placeholder shipped since v0.1. A new one-pager brand
+  guide at `docs/brand/README.md` documents the palette hex codes,
+  geometry, do's-and-don'ts, and the `qlmanage`/`sips` regeneration
+  recipe so future contributors don't redraw the mark off the cuff.
+  User-visible: the dock icon, DMG window icon, About panel icon, and
+  installer icon all change at the next release; no API or behaviour
+  change.
+
 ## [0.8.0] - 2026-04-25
 
 ### Changed
