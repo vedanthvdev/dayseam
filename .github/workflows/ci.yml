@@ -122,6 +122,8 @@ jobs:
         run: bash scripts/release/test-resolve-prev-version.sh
       - name: test-extract-release-notes.sh
         run: bash scripts/release/test-extract-release-notes.sh
+      - name: test-close-changelog.sh
+        run: bash scripts/release/test-close-changelog.sh
       # DAY-113 / F-10: enforce that no production file adds a bare
       # `tokio::spawn` or `tauri::async_runtime::spawn` call. The
       # workspace ships `dayseam_core::runtime::supervised_spawn`
