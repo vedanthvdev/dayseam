@@ -81,11 +81,17 @@ follow them; humans editing directly are also expected to.
   contract.
 
 - **CHANGELOG discipline:** PRs that ship user-visible behaviour add an
-  entry to the `[Unreleased]` section of `CHANGELOG.md`. The PR that
-  closes out a release renames `[Unreleased]` to `[X.Y.Z] - YYYY-MM-DD`
-  and opens a fresh empty `[Unreleased]` above it — without that step,
-  two consecutive releases will publish identical notes (see the v0.7.0
-  → v0.8.0 history and issue #155 for the full story).
+  entry to the `[Unreleased]` section of `CHANGELOG.md`. The release
+  workflow closes `[Unreleased]` into `[X.Y.Z] - YYYY-MM-DD`
+  automatically as part of its `chore(release)` commit (DAY-155 wired
+  `scripts/release/close-changelog.sh` into `release.yml`); agents
+  must not pre-rename the block by hand unless they are deliberately
+  using the capstone-PR pattern (pre-close for a reviewable diff),
+  which the automation detects and skips. Before DAY-155 this was an
+  unwritten convention that slipped twice in practice — the v0.7.0 →
+  v0.8.0 pair (no `[0.7.0]` block exists on master at all) and the
+  v0.8.1 → v0.8.2 pair (v0.8.2 re-shipped v0.8.1's DAY-161 entry on
+  top of its own DAY-159 entry).
 
 - **Verification before claiming done:** before opening a PR the agent
   should have run the relevant subset of `pnpm -r lint`, `pnpm -r

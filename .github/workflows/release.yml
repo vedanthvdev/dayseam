@@ -267,6 +267,36 @@ jobs:
           echo "==> Release notes preview:"
           head -n 20 "$body_file"
 
+      # DAY-155. Close `[Unreleased]` → `[$TARGET] - <today>` and open
+      # a fresh empty `[Unreleased]` above it. Before this step existed
+      # the release workflow never touched CHANGELOG.md at all, so
+      # `extract-release-notes.sh` fell back to `[Unreleased]` on two
+      # consecutive releases and shipped the same notes twice (v0.7.0
+      # → v0.8.0 is the first documented instance on this repo; the
+      # v0.8.1 → v0.8.2 pair was the second, and is what finally
+      # motivated the automation). Running *after* the preflight
+      # extract (not before) preserves the historical contract that
+      # the published release body is the `[Unreleased]` slice at
+      # merge-commit time; the CHANGELOG rewrite then propagates into
+      # the same `chore(release)` commit as the VERSION / Cargo.toml /
+      # tauri.conf.json bumps — one logical "release was cut" commit,
+      # not two.
+      #
+      # The helper is a no-op when `[$TARGET]` already exists (the
+      # capstone-PR authoring pattern pre-renames the block for a
+      # reviewable diff) or when `[Unreleased]` is empty, so no
+      # special-casing is needed here. Dry-run skips the rewrite
+      # because dry-runs never commit or push — leaving CHANGELOG.md
+      # untouched on a dry-run also avoids polluting a maintainer's
+      # local tree if they run `gh workflow run release.yml -f
+      # dry_run=true` against a branch.
+      - name: Close [Unreleased] into [$VERSION] in CHANGELOG.md
+        if: steps.level.outputs.dry_run != 'true'
+        env:
+          TARGET: ${{ steps.bump.outputs.version }}
+        run: |
+          scripts/release/close-changelog.sh "$TARGET"
+
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
 
@@ -861,8 +891,15 @@ jobs:
           set -euo pipefail
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          if [[ -n "$(git status --porcelain VERSION Cargo.toml apps/desktop/src-tauri/tauri.conf.json 2>/dev/null || true)" ]]; then
-            git add VERSION Cargo.toml apps/desktop/src-tauri/tauri.conf.json
+          # DAY-155: CHANGELOG.md joins the version-bump files so the
+          # close-`[Unreleased]` rewrite ships in the same
+          # `chore(release)` commit as the version bumps. A release
+          # that mutates nothing on master (the capstone-PR idempotent
+          # path where every file is already at the target) still
+          # hits the "nothing to commit" branch because the porcelain
+          # check covers all four files together.
+          if [[ -n "$(git status --porcelain VERSION Cargo.toml apps/desktop/src-tauri/tauri.conf.json CHANGELOG.md 2>/dev/null || true)" ]]; then
+            git add VERSION Cargo.toml apps/desktop/src-tauri/tauri.conf.json CHANGELOG.md
             git commit -m "chore(release): v${{ steps.bump.outputs.version }}"
             # --force-with-lease=<ref>:<sha> is NOT a force push in the
             # destructive sense; it asserts that master is exactly at

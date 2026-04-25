@@ -5,20 +5,25 @@ All notable changes to Dayseam are documented in this file. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!--
-Release-cadence note (DAY-155): the `release.yml` workflow only bumps
-`VERSION` / `Cargo.toml` / `tauri.conf.json` in its `chore(release)`
-commit — it does NOT close this `[Unreleased]` block. Because
-`scripts/release/extract-release-notes.sh` falls back to `[Unreleased]`
-when the target version has no explicit section, leaving this block
-populated across two consecutive releases causes the same notes to
-ship twice (exactly what happened in the v0.7.0 → v0.8.0 pair). The
-convention until that's automated: the PR that closes out a release
-renames this `[Unreleased]` header to `[X.Y.Z] - YYYY-MM-DD` and opens
-a fresh empty `[Unreleased]` above it. Issue #155 tracks automating
-this into the workflow itself.
+Release-cadence note (DAY-155): the `release.yml` workflow now closes
+`[Unreleased]` into `[X.Y.Z] - YYYY-MM-DD` automatically as part of
+its `chore(release)` commit, using `scripts/release/close-changelog.sh`.
+Contributors should add PR entries under `[Unreleased]` as normal and
+leave the close step to the workflow — don't pre-rename the block
+manually unless you are deliberately using the capstone-PR pattern
+(pre-close for a reviewable diff), which the automation detects and
+skips. Before DAY-155 the close was an unwritten convention that
+slipped twice in practice: the v0.7.0 → v0.8.0 pair (no `[0.7.0]`
+block exists on master at all) and the v0.8.1 → v0.8.2 pair, where
+v0.8.2 re-published v0.8.1's DAY-161 entry on top of v0.8.2's DAY-159
+entry. The `[0.8.2]` block below reproduces what actually shipped in
+v0.8.2's GitHub Release body, for historical accuracy — the
+deduplicated ideal would have had only DAY-159 under [0.8.2].
 -->
 
 ## [Unreleased]
+
+## [0.8.2] - 2026-04-25
 
 ### Added
 
@@ -40,6 +45,22 @@ this into the workflow itself.
   cross-boundary surfaces (notably the markdown sink's per-kind
   headers in `StreamingPreview.tsx`, which is kept byte-for-byte in
   lockstep with the Rust sink) stay untouched in this change.
+
+### Changed
+
+- **DAY-161 (reshipped from v0.8.1): Lock the Dayseam brand mark and
+  replace placeholder app icons.** v0.8.2 was the last release cut
+  before DAY-155 automated the `[Unreleased]` close, so
+  `extract-release-notes.sh` fell back to the still-populated
+  `[Unreleased]` at merge time and re-shipped v0.8.1's DAY-161 entry
+  on top of v0.8.2's DAY-159 entry. This block reproduces that
+  published body verbatim for historical accuracy; for the substance
+  of the brand-mark change see `[0.8.1]` below. Future releases will
+  not hit this failure mode — `scripts/release/close-changelog.sh`
+  now renames `[Unreleased]` into `[X.Y.Z]` as part of the release
+  workflow's `chore(release)` commit.
+
+## [0.8.1] - 2026-04-25
 
 ### Changed
 
