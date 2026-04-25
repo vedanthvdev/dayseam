@@ -39,7 +39,7 @@
     "category": "Productivity",
     "copyright": "Copyright (c) Dayseam contributors",
     "shortDescription": "Local-first automated work reporting.",
-    "longDescription": "Dayseam collects evidence of your day across local git and GitLab, generates an editable report, and saves it to markdown or Obsidian.",
+    "longDescription": "Dayseam is a local-first work reporting app. It collects evidence of your day across local Git, GitLab, GitHub, Jira, and Confluence, generates an editable evidence-linked report, and saves it to a Markdown file or your Obsidian vault. No Dayseam account, no telemetry; tokens live in the macOS Keychain.",
     "macOS": {
       "minimumSystemVersion": "13.0",
       "signingIdentity": "-",

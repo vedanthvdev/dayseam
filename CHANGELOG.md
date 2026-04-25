@@ -47,6 +47,49 @@ release's chore commit from master's linear history; v0.8.1's
 
 ## [Unreleased]
 
+### Changed
+
+- **DAY-165: Refresh public docs to match the shipped product state.**
+  `README.md` had been carrying v0.1.0 status copy (unsigned first-run
+  language, Local Git + GitLab only, the v0.1.0 release page as the
+  primary download link, stale `vedanthvdev/dayseam` URLs) while the
+  repo is on v0.8.2 with Developer ID signing + notarization shipping
+  on every release. Rewritten so a new visitor sees the current
+  product: five source connectors (Local Git, GitLab, GitHub, Jira,
+  Confluence), Markdown/Obsidian sink, signed + notarized macOS DMG,
+  in-app Tauri updater, and a realistic post-v1.0 roadmap line for
+  Windows/Linux. `tauri.conf.json`'s `longDescription` is updated in
+  lockstep so the bundle metadata shown in Finder and the DMG installer
+  no longer claims "local git and GitLab" only. Also clarifies the
+  "Pluggable architecture" bullet into a **Connector architecture**
+  bullet that makes explicit this is compile-time extension via crates
+  (implementing `SourceConnector` / `SinkAdapter`), not runtime plugin
+  loading — closes PLUG-1 from the holistic review since runtime
+  plugins aren't a planned product direction. Closes #139.
+
+### Added
+
+- **DAY-165: Publish `docs/privacy-security.md` — a user-facing
+  privacy and security disclosure.** Answers the seven questions the
+  holistic review flagged as unanswered: what's in the local SQLite
+  database (with per-table plain-English descriptions sourced from
+  `crates/dayseam-db/migrations/`), where tokens live (macOS Keychain
+  via `crates/dayseam-secrets`, keyed by `service::account`), what
+  crosses the WebView → Rust IPC boundary and why the asymmetric
+  `IpcSecretString` wrapper makes that crossing one-way, the three
+  classes of endpoint Dayseam ever talks to (source hosts, GitHub
+  Releases for the updater, Apple's OS-level notarization check), the
+  explicit no-telemetry stance with the CSP as corroborating evidence,
+  the two-root update trust model (Tauri Ed25519 signature + Developer
+  ID notarization + stapled ticket) and the deliberately narrow
+  updater capability grants, the three macOS entitlements and why each
+  is needed, and an honest "what is and isn't protected against"
+  section that names local disk compromise without FileVault,
+  co-resident malware, upstream token compromise, user-chosen
+  self-hosted hosts, and residual WebView risk as out-of-scope. Linked
+  from `README.md`'s new **Privacy & security** section so a visitor
+  lands on it before installing. Closes #140.
+
 ### Fixed
 
 - **DAY-164: Close the back-to-back-release race that silently
