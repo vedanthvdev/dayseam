@@ -546,7 +546,14 @@ jobs:
           out_sig="${out_dir}/Dayseam-v${VERSION}.app.tar.gz.sig"
           cp "$src_tar" "$out_tar"
           cp "$src_sig" "$out_sig"
-          download_url="https://github.com/vedanthvdev/dayseam/releases/download/v${VERSION}/Dayseam-v${VERSION}.app.tar.gz"
+          # Derive the download URL from the GitHub Actions context instead of
+          # hardcoding the owner/repo. The `latest.json` we generate is consumed
+          # by every already-shipped Dayseam binary via the updater endpoint in
+          # `tauri.conf.json`, and a baked-in owner means a future org move
+          # would silently leave release artifacts pointing at a redirected URL.
+          # Sourcing the owner from `github.repository` keeps this job portable
+          # so a transferred repo keeps producing correct updater manifests.
+          download_url="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/download/v${VERSION}/Dayseam-v${VERSION}.app.tar.gz"
           out_json="${out_dir}/latest.json"
           scripts/release/generate-latest-json.sh \
             "$VERSION" \

@@ -125,7 +125,7 @@ test_happy_path_emits_expected_shape() {
   printf '### Highlights\n- DAY-108 in-app updater\n' >"$scratch/notes"
 
   local out
-  out="$("$SCRIPT" "0.6.0" "https://github.com/vedanthvdev/dayseam/releases/download/v0.6.0/Dayseam-v0.6.0.app.tar.gz" "$scratch/sig" "$scratch/notes")"
+  out="$("$SCRIPT" "0.6.0" "https://github.com/dayseam/dayseam/releases/download/v0.6.0/Dayseam-v0.6.0.app.tar.gz" "$scratch/sig" "$scratch/notes")"
 
   # Parse with jq and assert every field matches.
   local version notes pub_date
@@ -154,7 +154,7 @@ test_happy_path_emits_expected_shape() {
   # the response platforms object"). Asserting each one explicitly
   # (instead of a `keys | length == 2` check) is what pins the
   # exact string the plugin composes from `{os}-{arch}` at runtime.
-  local expected_url="https://github.com/vedanthvdev/dayseam/releases/download/v0.6.0/Dayseam-v0.6.0.app.tar.gz"
+  local expected_url="https://github.com/dayseam/dayseam/releases/download/v0.6.0/Dayseam-v0.6.0.app.tar.gz"
   local arch
   for arch in darwin-aarch64 darwin-x86_64; do
     local sig_val url_val

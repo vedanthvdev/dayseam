@@ -6,7 +6,16 @@
 # merges. It is idempotent — re-running applies the same policy.
 set -euo pipefail
 
-REPO="${REPO:-vedanthvdev/dayseam}"
+# Resolve the target repo from the current checkout when no override is
+# set, so this script keeps working after an org transfer without needing
+# an edit. Setting REPO=... explicitly still wins — useful for a bootstrap
+# admin who needs to run the script outside a clone.
+if [[ -z "${REPO:-}" ]]; then
+  if ! REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner 2>/dev/null)"; then
+    echo "setup-branch-protection.sh: cannot resolve repo from current dir; set REPO=owner/name" >&2
+    exit 1
+  fi
+fi
 BRANCH="${BRANCH:-master}"
 
 echo "Applying branch protection to ${REPO}#${BRANCH}"

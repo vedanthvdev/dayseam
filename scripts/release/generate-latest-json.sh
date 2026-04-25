@@ -6,7 +6,7 @@
 # `plugins.updater.endpoints[0]` from `tauri.conf.json`, which
 # resolves to:
 #
-#   https://github.com/vedanthvdev/dayseam/releases/latest/download/latest.json
+#   https://github.com/dayseam/dayseam/releases/latest/download/latest.json
 #
 # That URL is served by GitHub's stable "latest release asset"
 # redirect; the asset it returns is whatever this script produced

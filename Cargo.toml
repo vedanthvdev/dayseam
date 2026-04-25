@@ -24,7 +24,7 @@ members = [
 version = "0.7.0"
 edition = "2021"
 license = "AGPL-3.0-only"
-repository = "https://github.com/vedanthvdev/dayseam"
+repository = "https://github.com/dayseam/dayseam"
 authors = ["Dayseam contributors"]
 rust-version = "1.88"
 # Every workspace crate is an internal component of the Dayseam desktop
