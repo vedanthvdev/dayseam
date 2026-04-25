@@ -4,7 +4,23 @@ All notable changes to Dayseam are documented in this file. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and the project adheres to
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+<!--
+Release-cadence note (DAY-155): the `release.yml` workflow only bumps
+`VERSION` / `Cargo.toml` / `tauri.conf.json` in its `chore(release)`
+commit — it does NOT close this `[Unreleased]` block. Because
+`scripts/release/extract-release-notes.sh` falls back to `[Unreleased]`
+when the target version has no explicit section, leaving this block
+populated across two consecutive releases causes the same notes to
+ship twice (exactly what happened in the v0.7.0 → v0.8.0 pair). The
+convention until that's automated: the PR that closes out a release
+renames this `[Unreleased]` header to `[X.Y.Z] - YYYY-MM-DD` and opens
+a fresh empty `[Unreleased]` above it. Issue #155 tracks automating
+this into the workflow itself.
+-->
+
 ## [Unreleased]
+
+## [0.8.0] - 2026-04-25
 
 ### Changed
 
