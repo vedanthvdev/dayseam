@@ -451,6 +451,45 @@ The Rust core is the brain. Responsibilities, top-down:
   shows structured log entries; short-lived toasts surface success,
   warning, and error signals.
 
+### 5.2a Background execution (DAY-149, Tier A)
+
+The app ships two lifecycle policies controlled by the persisted
+`Settings.keep_running_when_window_closed` flag (default `true`):
+
+- **Keep running in the background.** Closing the main window calls
+  `api.prevent_close()` and `window.hide()` instead of quitting.
+  The Tauri event loop, scheduler background task, and event bus
+  keep running, so the 6pm report still fires even if the user
+  closed the window at 9am. A menu-bar tray icon gives the user
+  an always-visible way to re-open the window or quit the app.
+  On macOS the Dock icon click path hits
+  `RunEvent::Reopen { has_visible_windows: false, .. }` and calls
+  the same `show + focus` helper the tray menu uses.
+- **Close quits the app.** When the flag is `false`, the close
+  handler falls through and Tauri tears the window down; because
+  `main` is the only application window, the process exits
+  naturally. This matches pre-DAY-149 behaviour for users who
+  explicitly opt out.
+
+The flag lives in SQLite (`settings` row, `config_version = 2`) and
+is mirrored onto an `Arc<AtomicBool>` on `AppState` so the close
+handler can read it synchronously from the Tauri main thread
+without blocking on async SQLite. `startup::build_app_state` seeds
+the mirror at boot; `settings_update` refreshes it in lockstep
+whenever the user flips the Preferences toggle. Legacy v1 rows
+rehydrate with `keep_running_when_window_closed = true` via
+`#[serde(default = "...")]`, so upgraders get the scheduler-friendly
+behaviour without a destructive migration.
+
+Out of scope for Tier A and tracked as follow-ups:
+
+- **Tier B.** Optional login-item entry so the scheduler can
+  come up at user login without a manual launch.
+- **Tier C.** Fully headless daemon: a separate background
+  process that runs the scheduler even when the app has quit,
+  with the main app becoming a thin UI over a shared state
+  store.
+
 ### 5.3 The IPC boundary in one diagram
 
 ```mermaid

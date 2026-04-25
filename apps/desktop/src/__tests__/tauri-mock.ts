@@ -338,6 +338,30 @@ export function registerOnboardingComplete(): void {
       last_write_at: null,
     },
   ]);
+  // DAY-149: `PreferencesDialog` is always mounted on `App`, which
+  // means its new `useSettings` hook fires `settings_get` on every
+  // render. Defaulting the response to a fresh install's values
+  // here — rather than forcing every App-level test to register it
+  // manually — keeps the fixture honest to what the first-launch
+  // user actually sees. Tests that care about a specific settings
+  // shape (e.g. a user who already turned background mode off)
+  // override these handlers in their own body.
+  registerInvokeHandler("settings_get", async () => ({
+    config_version: 2,
+    theme: "system",
+    verbose_logs: false,
+    keep_running_when_window_closed: true,
+  }));
+  registerInvokeHandler("settings_update", async (args) => {
+    const { patch } = args as { patch: Record<string, unknown> };
+    return {
+      config_version: 2,
+      theme: "system",
+      verbose_logs: false,
+      keep_running_when_window_closed: true,
+      ...patch,
+    };
+  });
   // The source chip now surfaces the discovered-repo count, so the
   // fully-onboarded fixture needs a populated `local_repos_list`
   // response — otherwise the chip would stay on "…" or "0 repos"

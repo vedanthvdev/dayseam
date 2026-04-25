@@ -2,9 +2,11 @@
 
 use dayseam_db::LogRepo;
 use dayseam_desktop::ipc::{atlassian, broadcast_forwarder, commands, github, scheduler};
+use dayseam_desktop::state::AppState;
 use dayseam_desktop::{scheduler_task, startup, tracing_init};
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
-use tauri::{Emitter, Manager};
+use tauri::tray::TrayIconBuilder;
+use tauri::{Emitter, Manager, RunEvent, WindowEvent};
 
 fn main() {
     // DAY-115 / SF-1. Install the `tracing` subscriber *before*
@@ -27,6 +29,48 @@ fn main() {
     let _guard = runtime.enter();
 
     let builder = tauri::Builder::default()
+        // DAY-149. Intercept the main window's close event so the
+        // user's `Cmd+W` / red-traffic-light click keeps the Tauri
+        // process (and therefore the `scheduler_task` background
+        // loop that promises a 6pm report even if the window was
+        // closed at 9am) alive. The close policy is read cheaply
+        // from an `AtomicBool` mirrored onto `AppState` by
+        // `settings_update` and seeded at boot by
+        // `startup::build_app_state`, so the handler never has to
+        // touch SQLite on the Tauri main thread. Auxiliary windows
+        // (e.g. a future detached preferences window) are not
+        // intercepted here — only the `main` label is — so closing
+        // a child panel still closes that panel without affecting
+        // the app lifecycle.
+        .on_window_event(|window, event| {
+            if let WindowEvent::CloseRequested { api, .. } = event {
+                if window.label() != "main" {
+                    return;
+                }
+                let keep_running = window
+                    .app_handle()
+                    .state::<AppState>()
+                    .should_keep_running_when_window_closed();
+                if keep_running {
+                    // `prevent_close` has to come before `hide` so
+                    // Tauri doesn't tear down the webview between
+                    // the hide call and the next event loop tick —
+                    // the ordering is what lets the window re-appear
+                    // instantly when `RunEvent::Reopen` (Dock click
+                    // on macOS) fires.
+                    api.prevent_close();
+                    let _ = window.hide();
+                    tracing::info!(
+                        "window close intercepted: app staying in background for scheduler"
+                    );
+                }
+                // When `keep_running` is false, fall through — Tauri
+                // closes the window and, because this is the only
+                // application window, the process exits naturally.
+                // That matches the pre-DAY-149 behaviour an opt-out
+                // user explicitly asked for.
+            }
+        })
         // Registers the native file/directory chooser. The only
         // permission we grant on it is `dialog:allow-open` (see
         // `capabilities/default.json`); save-pickers, message boxes,
@@ -177,6 +221,69 @@ fn main() {
                 }
             });
 
+            // DAY-149: build the menu-bar tray icon so a user who
+            // hid the main window via Cmd+W has an always-visible
+            // affordance to bring it back (or quit the app
+            // entirely). The tray is the only place the
+            // hide-on-close behaviour becomes discoverable: without
+            // it, a user who hid the window and then wants to
+            // re-open has to either click the Dock icon (which we
+            // handle via `RunEvent::Reopen` below) or know about
+            // the running process. Building the tray is
+            // best-effort — on platforms where the feature is
+            // unavailable (headless CI, some Linux sessions without
+            // an AppIndicator host) `build` returns an error; we
+            // log and continue rather than fail boot, because the
+            // close-on-hide behaviour itself still works and the
+            // user can always relaunch from Launchpad.
+            let tray_show = MenuItemBuilder::with_id("tray_show", "Show Dayseam").build(app)?;
+            let tray_quit = MenuItemBuilder::with_id("tray_quit", "Quit Dayseam").build(app)?;
+            let tray_menu = MenuBuilder::new(app)
+                .items(&[&tray_show])
+                .separator()
+                .items(&[&tray_quit])
+                .build()?;
+            let tray_show_id = tray_show.id().clone();
+            let tray_quit_id = tray_quit.id().clone();
+            let tray_build = TrayIconBuilder::with_id("dayseam-main-tray")
+                // `default_window_icon` returns the app bundle icon —
+                // on macOS this renders as a coloured glyph in the
+                // menu bar rather than a monochrome template. A
+                // dedicated template-mode tray icon is tracked as a
+                // follow-up so Tier A doesn't block on iconography.
+                .icon(
+                    app.default_window_icon()
+                        .cloned()
+                        .expect("bundle icon available"),
+                )
+                .tooltip("Dayseam")
+                .menu(&tray_menu)
+                .show_menu_on_left_click(true)
+                .on_menu_event(move |app_handle, event| {
+                    let id = event.id();
+                    if id == &tray_show_id {
+                        show_main_window(app_handle);
+                    } else if id == &tray_quit_id {
+                        // `app.exit(0)` starts a graceful shutdown:
+                        // Tauri emits `RunEvent::ExitRequested` to
+                        // any registered handler, closes windows,
+                        // and then the process exits once every
+                        // window is gone. The scheduler task is
+                        // currently untracked on shutdown — that's
+                        // a known limitation captured in the
+                        // ARCHITECTURE.md background-execution
+                        // section as a Tier C follow-up.
+                        app_handle.exit(0);
+                    }
+                })
+                .build(app);
+            if let Err(err) = tray_build {
+                tracing::warn!(
+                    %err,
+                    "tray icon unavailable; hide-on-close still works but no menu-bar affordance"
+                );
+            }
+
             Ok(())
         });
 
@@ -265,7 +372,47 @@ fn main() {
         scheduler::scheduler_skip_catch_up,
     ]);
 
-    builder
-        .run(tauri::generate_context!())
-        .expect("error while running the Dayseam desktop app");
+    // DAY-149: switch from the one-shot `.run(context)` convenience
+    // to `.build().run(callback)` so we can observe
+    // `RunEvent::Reopen` — macOS's "user clicked the Dock icon of
+    // a running app with no visible windows" signal. Without the
+    // callback a user who hid the window via Cmd+W and then tries
+    // to re-open by clicking the Dock icon would find the icon
+    // bouncing but no window appearing, because macOS has no
+    // default behaviour for reopen on a hidden app. The handler
+    // shows and focuses the main window, exactly matching what a
+    // well-behaved native macOS app does.
+    let app = builder
+        .build(tauri::generate_context!())
+        .expect("error while building the Dayseam desktop app");
+    app.run(|app_handle, event| {
+        if let RunEvent::Reopen {
+            has_visible_windows,
+            ..
+        } = event
+        {
+            if !has_visible_windows {
+                show_main_window(app_handle);
+            }
+        }
+    });
+}
+
+/// DAY-149: shared helper used by both the tray "Show Dayseam" menu
+/// item and the macOS `RunEvent::Reopen` dispatch. Guarantees the
+/// main window ends up visible *and* focused — `show()` alone is
+/// enough on a cold Dock click but doesn't re-take focus when the
+/// window was merely hidden (not minimised), so both calls are needed
+/// to give the user a consistent "click here, get a window" feel.
+/// Silent on missing-window because the only path that hits this
+/// helper is one where the window was created at startup; a missing
+/// `"main"` label means something catastrophic happened at boot and
+/// the earlier startup paths will have already surfaced it.
+fn show_main_window<R: tauri::Runtime>(app_handle: &tauri::AppHandle<R>) {
+    if let Some(window) = app_handle.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.set_focus();
+    } else {
+        tracing::warn!("show_main_window: no 'main' webview window registered");
+    }
 }

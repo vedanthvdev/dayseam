@@ -15,11 +15,11 @@ use connector_gitlab::GitlabSourceCfg;
 use connector_jira::{JiraConfig, JiraSourceCfg};
 use connectors_sdk::HttpClient;
 use dayseam_core::{
-    DayseamError, LogLevel, SourceConfig, SourceIdentity, SourceIdentityKind, SourceKind,
+    DayseamError, LogLevel, Settings, SourceConfig, SourceIdentity, SourceIdentityKind, SourceKind,
 };
 use dayseam_db::{
-    open, registered_repairs, LocalRepoRepo, LogRepo, LogRow, PersonRepo, SourceIdentityRepo,
-    SourceRepo,
+    open, registered_repairs, LocalRepoRepo, LogRepo, LogRow, PersonRepo, SettingsRepo,
+    SourceIdentityRepo, SourceRepo,
 };
 use dayseam_events::AppBus;
 use dayseam_orchestrator::{
@@ -163,7 +163,41 @@ pub async fn build_app_state(data_dir: &Path) -> Result<AppState, DayseamError> 
     // matches what the inline `?`s surfaced before.
     let http = HttpClient::new()?;
 
-    Ok(AppState::new(pool, app_bus, secrets, orchestrator, http))
+    let state = AppState::new(pool.clone(), app_bus, secrets, orchestrator, http);
+
+    // DAY-149: seed the close-handler atomic mirror from the
+    // persisted `Settings` blob. Without this the mirror stays at
+    // its `AtomicBool::new(true)` constructor default on cold boot,
+    // which is indistinguishable from "user explicitly chose true"
+    // for fresh installs but would silently revert a user who had
+    // toggled the setting off in a prior session back to "keep
+    // running" until they opened Preferences again. Reading the row
+    // once at boot keeps the mirror faithful to persistent state
+    // without making the close handler synchronously touch SQLite.
+    //
+    // Best-effort on purpose: a missing or unreadable settings row
+    // leaves the mirror at its default (which matches the
+    // `Settings::default()` value), and we log the failure so a
+    // post-mortem has a breadcrumb rather than silently falling
+    // back. The settings row read here happens inside the orchestrator
+    // startup path rather than the detached orphan-secret audit so
+    // the mirror is primed *before* the setup closure installs the
+    // window-close handler — no race window where the first Cmd+W
+    // reads the wrong value.
+    let persisted = SettingsRepo::new(pool)
+        .get::<Settings>(crate::ipc::commands::APP_SETTINGS_KEY)
+        .await
+        .unwrap_or_else(|err| {
+            tracing::warn!(
+                %err,
+                "startup: could not read persisted settings; using defaults for close-handler mirror"
+            );
+            None
+        })
+        .unwrap_or_default();
+    state.set_keep_running_when_window_closed(persisted.keep_running_when_window_closed);
+
+    Ok(state)
 }
 
 /// DAY-71 backfill: for every persisted GitLab source, make sure a

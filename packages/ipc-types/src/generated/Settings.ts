@@ -21,4 +21,18 @@ theme: ThemePreference,
  * default — Phase 1 still captures them into SQLite, the toggle
  * only affects visibility.
  */
-verbose_logs: boolean, };
+verbose_logs: boolean, 
+/**
+ * When true, closing the main window hides the app but keeps the
+ * process (and therefore the scheduler) running in the Dock so
+ * the 6pm report fires even if the user quit the window at 9am.
+ * When false, closing the last window quits the app — the
+ * pre-DAY-149 behaviour. Defaults to `true` for new installs and
+ * for migrated v1 rows so the scheduler promise on the marketing
+ * site holds without the user having to enable anything. Read
+ * cheaply from the window-close handler via an atomic mirror on
+ * [`crate::state::AppState`] in `dayseam-desktop`; that mirror
+ * is the authoritative value the handler reads, and this field
+ * is the persisted source of truth it was seeded from.
+ */
+keep_running_when_window_closed: boolean, };

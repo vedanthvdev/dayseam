@@ -11,6 +11,7 @@
 //! of this module.
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use connectors_sdk::HttpClient;
@@ -142,6 +143,25 @@ pub struct AppState {
     /// persisted on purpose — "skip once" should not mean "skip
     /// forever".
     pub scheduler_skip: crate::ipc::scheduler::SchedulerSkipSet,
+    /// DAY-149 atomic mirror of
+    /// [`dayseam_core::Settings::keep_running_when_window_closed`].
+    ///
+    /// The window-close handler runs on Tauri's main thread and
+    /// cannot safely block on async SQLite reads — every close event
+    /// would otherwise round-trip through the Tokio runtime before
+    /// the user's `Cmd+W` could even return. Mirroring the value
+    /// onto an [`AtomicBool`] lets the handler read it in a single
+    /// `load()` call while keeping SQLite as the persistent source
+    /// of truth: `startup::build_app_state` seeds this from the
+    /// stored `Settings`, and `settings_update` re-writes it in
+    /// lockstep whenever the user flips the Preferences toggle.
+    ///
+    /// Wrapped in `Arc` so the `on_window_event` closure in
+    /// `main.rs` can capture a cheap clone without taking a Tauri
+    /// `State<'_, AppState>` (that closure runs outside the
+    /// `#[tauri::command]` dispatch path and therefore has no
+    /// ergonomic way to borrow `AppState`).
+    pub keep_running_when_window_closed: Arc<AtomicBool>,
 }
 
 impl AppState {
@@ -156,6 +176,12 @@ impl AppState {
         orchestrator: Orchestrator,
         http: HttpClient,
     ) -> Self {
+        // DAY-149: the mirror starts at the same default as the
+        // persisted `Settings` (true). `startup::build_app_state`
+        // immediately overwrites this with the persisted value after
+        // reading the `"app"` settings row, so boots with a stored
+        // "close really quits" choice still take effect on the first
+        // window-close event of the session.
         Self {
             pool,
             app_bus,
@@ -164,7 +190,27 @@ impl AppState {
             orchestrator,
             http,
             scheduler_skip: crate::ipc::scheduler::SchedulerSkipSet::new(),
+            keep_running_when_window_closed: Arc::new(AtomicBool::new(true)),
         }
+    }
+
+    /// DAY-149 helper — read the mirrored value without a manual
+    /// `Ordering::Relaxed` sprinkled at every call site. Relaxed is
+    /// fine here because the only invariants are per-field and the
+    /// close handler is happy to see an update one event late if the
+    /// user toggled mid-close.
+    #[must_use]
+    pub fn should_keep_running_when_window_closed(&self) -> bool {
+        self.keep_running_when_window_closed.load(Ordering::Relaxed)
+    }
+
+    /// DAY-149 helper — set the mirrored value in lockstep with the
+    /// persisted `Settings.keep_running_when_window_closed` field.
+    /// Called by `settings_update` whenever the incoming patch
+    /// carries a `Some(_)` for that field.
+    pub fn set_keep_running_when_window_closed(&self, v: bool) {
+        self.keep_running_when_window_closed
+            .store(v, Ordering::Relaxed);
     }
 
     /// Test-only constructor that lets `tests/reconnect_rebind.rs`

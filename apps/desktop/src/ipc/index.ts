@@ -15,5 +15,7 @@ export { useLocalRepos } from "./useLocalRepos";
 export type { UseLocalReposState } from "./useLocalRepos";
 export { useSinks } from "./useSinks";
 export type { UseSinksState } from "./useSinks";
+export { useSettings } from "./useSettings";
+export type { UseSettingsState } from "./useSettings";
 export { useReport, REPORT_COMPLETED_EVENT } from "./useReport";
 export type { UseReportState, ReportState, ReportStatus } from "./useReport";

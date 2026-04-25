@@ -39,7 +39,15 @@ tracing = { workspace = true }
 # desktop binary never installed a subscriber. `tracing_init::init`
 # wires one up at startup before any other Tauri plugin can log.
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-tauri = { version = "2", features = [] }
+# DAY-149: `tray-icon` feature enables `TrayIconBuilder` and the
+# `app.tray_by_id()` manager so the hide-on-close background mode has
+# a menu-bar affordance to bring the main window back. The feature is
+# cross-platform in Tauri 2 but only actually renders on the
+# platforms that support it (macOS menu bar, Windows system tray,
+# Linux AppIndicator); running without a tray is still safe because
+# `TrayIconBuilder::build(&app)` returns a `Result` and we log + skip
+# on error rather than failing boot.
+tauri = { version = "2", features = ["tray-icon"] }
 dayseam-core = { path = "../../../crates/dayseam-core" }
 dayseam-db = { path = "../../../crates/dayseam-db" }
 dayseam-events = { path = "../../../crates/dayseam-events" }

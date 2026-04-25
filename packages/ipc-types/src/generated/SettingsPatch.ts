@@ -6,4 +6,13 @@ import type { ThemePreference } from "./ThemePreference";
  * the frontend can send only what the user changed; omitted fields
  * are explicitly "leave alone", not "reset to default".
  */
-export type SettingsPatch = { theme?: ThemePreference | null, verbose_logs?: boolean | null, };
+export type SettingsPatch = { theme?: ThemePreference | null, verbose_logs?: boolean | null, 
+/**
+ * DAY-149. When `Some(_)`, flips whether closing the main window
+ * hides the app (scheduler keeps running) or quits the process
+ * outright. The Preferences dialog surfaces this as a single
+ * checkbox; the IPC layer mirrors the resolved value onto an
+ * atomic on `AppState` so the window-close handler can read it
+ * synchronously without re-hitting SQLite on every close event.
+ */
+keep_running_when_window_closed?: boolean | null, };

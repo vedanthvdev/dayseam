@@ -19,7 +19,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { ScheduleConfig } from "@dayseam/ipc-types";
 import { Dialog, DialogButton } from "../../components/Dialog";
-import { useSinks } from "../../ipc";
+import { useSettings, useSinks } from "../../ipc";
 import { ThemeToggle } from "../../components/ThemeToggle";
 import { useScheduler } from "../scheduler/useScheduler";
 
@@ -58,15 +58,37 @@ function inputToTime(v: string): string {
 export function PreferencesDialog({ open, onClose }: PreferencesDialogProps) {
   const scheduler = useScheduler();
   const { sinks, loading: sinksLoading } = useSinks();
+  const {
+    settings,
+    loading: settingsLoading,
+    error: settingsError,
+    save: saveSettings,
+  } = useSettings();
 
   // Local draft so the form doesn't mutate the persisted config on
   // every change. Reset to the stored value every time the dialog
   // opens so a cancelled edit leaves no trace.
   const [draft, setDraft] = useState<ScheduleConfig | null>(null);
+  // DAY-149: local draft of the "keep the app running when the
+  // main window closes" toggle. Loaded from the persisted
+  // `Settings` blob on open, written back via `settings_update` on
+  // Save. Kept in its own state — rather than merged into the
+  // scheduler draft — because the underlying row is `Settings`,
+  // not `ScheduleConfig`, and we don't want a scheduler-save
+  // failure to also abandon a background-mode toggle change (or
+  // vice versa).
+  const [keepRunning, setKeepRunning] = useState<boolean | null>(null);
+  const [savingKeepRunning, setSavingKeepRunning] = useState(false);
 
   useEffect(() => {
     if (open) setDraft(scheduler.config);
   }, [open, scheduler.config]);
+
+  useEffect(() => {
+    if (open && settings) {
+      setKeepRunning(settings.keep_running_when_window_closed);
+    }
+  }, [open, settings]);
 
   const eligibleSinks = useMemo(
     () =>
@@ -93,13 +115,33 @@ export function PreferencesDialog({ open, onClose }: PreferencesDialogProps) {
   const handleSave = useCallback(async () => {
     if (!draft) return;
     try {
+      // DAY-149: save the `Settings` patch *first*. If persisting
+      // the background-mode toggle fails the user still gets a
+      // "settings failed" error surfaced through `useSettings`'s
+      // error channel, and the scheduler config is not touched
+      // yet. Saving scheduler second means a successful
+      // background-mode save can't be stranded by a scheduler
+      // write failure either — `useScheduler.save` throws, we
+      // skip `onClose`, and the dialog stays open for the retry.
+      if (
+        keepRunning !== null &&
+        settings !== null &&
+        keepRunning !== settings.keep_running_when_window_closed
+      ) {
+        setSavingKeepRunning(true);
+        try {
+          await saveSettings({ keep_running_when_window_closed: keepRunning });
+        } finally {
+          setSavingKeepRunning(false);
+        }
+      }
       await scheduler.save(draft);
       onClose();
     } catch {
-      // Error is surfaced via `scheduler.error`; keep the dialog
-      // open so the user can retry or cancel.
+      // Error is surfaced via `scheduler.error` or `settingsError`;
+      // keep the dialog open so the user can retry or cancel.
     }
-  }, [draft, scheduler, onClose]);
+  }, [draft, scheduler, onClose, keepRunning, settings, saveSettings]);
 
   const canSave =
     draft !== null &&
@@ -113,7 +155,8 @@ export function PreferencesDialog({ open, onClose }: PreferencesDialogProps) {
     // actually picks a value.
     draft.target_time.length > 0 &&
     draft.earliest_start.length > 0 &&
-    !scheduler.saving;
+    !scheduler.saving &&
+    !savingKeepRunning;
 
   return (
     <Dialog
@@ -163,6 +206,58 @@ export function PreferencesDialog({ open, onClose }: PreferencesDialogProps) {
           <p className="text-[11px] text-neutral-500 dark:text-neutral-400">
             Also available from the native <em>View &gt; Theme</em> menu.
           </p>
+        </section>
+
+        {/* DAY-149: Background-execution section. Lives above
+            Scheduler because the value it controls is a precondition
+            for the scheduler promise ("my daily report fires at 6pm
+            even if I closed the window at 9am") — a user who
+            disables this here should see the scheduler section
+            immediately below to understand the knock-on effect. */}
+        <section
+          aria-labelledby="preferences-background-heading"
+          className="flex flex-col gap-2 border-t border-neutral-200 pt-4 dark:border-neutral-800"
+        >
+          <h3
+            id="preferences-background-heading"
+            className="text-xs font-semibold uppercase tracking-wide text-neutral-500 dark:text-neutral-400"
+          >
+            Background
+          </h3>
+          {settingsLoading && keepRunning === null ? (
+            <p className="text-xs text-neutral-500 dark:text-neutral-400">
+              Loading background settings…
+            </p>
+          ) : (
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={keepRunning ?? true}
+                onChange={(e) => setKeepRunning(e.target.checked)}
+                data-testid="preferences-keep-running-when-window-closed"
+                className="mt-0.5"
+              />
+              <span className="flex flex-col gap-0.5">
+                <span className="text-neutral-800 dark:text-neutral-200">
+                  Keep Dayseam running in the background when I close the window
+                </span>
+                <span className="text-[11px] text-neutral-500 dark:text-neutral-400">
+                  Leaves the app in the Dock and menu bar so scheduled reports
+                  still run. Quit Dayseam from the menu bar icon or the app
+                  menu when you really want to exit. Turn this off to have
+                  closing the window quit the app instead.
+                </span>
+              </span>
+            </label>
+          )}
+          {settingsError ? (
+            <p
+              role="alert"
+              className="rounded border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-800 dark:border-red-900 dark:bg-red-950/40 dark:text-red-200"
+            >
+              {settingsError}
+            </p>
+          ) : null}
         </section>
 
         <section

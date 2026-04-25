@@ -52,7 +52,12 @@ use crate::state::{spawn_run_reaper, AppState, RunHandle};
 /// row for the whole app is enough for Phase 1; per-scope settings
 /// (per source, per project) can land alongside them in a later phase
 /// without changing this key.
-const APP_SETTINGS_KEY: &str = "app";
+/// Storage key the `settings` repo uses for the `Settings` blob. Kept
+/// `pub(crate)` so `startup::build_app_state` can seed the DAY-149
+/// `keep_running_when_window_closed` atomic on `AppState` from the
+/// same row this module reads, without forcing a magic-string
+/// duplicate at boot time.
+pub(crate) const APP_SETTINGS_KEY: &str = "app";
 
 /// Production Tauri command identifiers. The canonical source of
 /// truth for the `invoke_handler!` list in `main.rs`, the `COMMANDS`
@@ -136,6 +141,14 @@ pub async fn settings_get(state: State<'_, AppState>) -> Result<Settings, Daysea
 /// Apply a partial update and return the resulting full [`Settings`].
 /// The Rust side is the source of truth for the merge semantics; see
 /// [`Settings::with_patch`].
+///
+/// DAY-149: if the patch touches `keep_running_when_window_closed`,
+/// mirror the resolved value onto [`AppState`]'s atomic so the
+/// window-close handler (running on Tauri's main thread, outside of
+/// any async context) sees the new policy immediately without having
+/// to re-read SQLite. The mirror is updated *after* the successful
+/// write so a failed persist cannot desync the in-memory flag from
+/// the persisted row.
 #[tauri::command]
 pub async fn settings_update(
     patch: SettingsPatch,
@@ -151,6 +164,7 @@ pub async fn settings_update(
     repo.set(APP_SETTINGS_KEY, &next)
         .await
         .map_err(|e| internal("settings.write", e))?;
+    state.set_keep_running_when_window_closed(next.keep_running_when_window_closed);
     Ok(next)
 }
 
@@ -2179,6 +2193,7 @@ mod tests {
         let next = current.with_patch(SettingsPatch {
             theme: Some(dayseam_core::ThemePreference::Dark),
             verbose_logs: Some(true),
+            keep_running_when_window_closed: None,
         });
         repo.set(APP_SETTINGS_KEY, &next).await.expect("write");
 
@@ -2189,6 +2204,48 @@ mod tests {
             .expect("row exists");
         assert_eq!(stored.theme, dayseam_core::ThemePreference::Dark);
         assert!(stored.verbose_logs);
+        assert!(
+            stored.keep_running_when_window_closed,
+            "DAY-149: default survives a patch that doesn't touch it"
+        );
+    }
+
+    #[tokio::test]
+    async fn settings_update_mirrors_keep_running_onto_app_state() {
+        // DAY-149: flipping the persisted setting must also flip the
+        // atomic the window-close handler reads. Without this mirror,
+        // a user who opens Preferences, turns the toggle off, closes
+        // the dialog, and hits Cmd+W would still have the close
+        // handler read the stale boot-time value and hide the window
+        // instead of quitting.
+        let (state, _dir) = make_state().await;
+        assert!(
+            state.should_keep_running_when_window_closed(),
+            "mirror starts at the AppState::new default (true)"
+        );
+
+        let repo = SettingsRepo::new(state.pool.clone());
+        let current = repo
+            .get::<Settings>(APP_SETTINGS_KEY)
+            .await
+            .expect("read")
+            .unwrap_or_default();
+        let next = current.with_patch(SettingsPatch {
+            keep_running_when_window_closed: Some(false),
+            ..SettingsPatch::default()
+        });
+        repo.set(APP_SETTINGS_KEY, &next).await.expect("write");
+        // Re-run the lockstep step the command does after a
+        // successful write. Exercising the exact same helper the
+        // IPC path uses, rather than re-implementing it here, means
+        // a future refactor to the mirror surface keeps this test
+        // honest.
+        state.set_keep_running_when_window_closed(next.keep_running_when_window_closed);
+
+        assert!(
+            !state.should_keep_running_when_window_closed(),
+            "mirror reflects the freshly-persisted false"
+        );
     }
 
     #[tokio::test]

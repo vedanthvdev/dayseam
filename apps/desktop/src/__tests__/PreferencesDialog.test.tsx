@@ -13,7 +13,12 @@
 
 import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { ScheduleConfig, Sink } from "@dayseam/ipc-types";
+import type {
+  ScheduleConfig,
+  Settings,
+  SettingsPatch,
+  Sink,
+} from "@dayseam/ipc-types";
 import { PreferencesDialog } from "../features/preferences/PreferencesDialog";
 import { ThemeProvider, THEME_STORAGE_KEY } from "../theme";
 import { registerInvokeHandler, resetTauriMocks } from "./tauri-mock";
@@ -26,6 +31,13 @@ const BASE_CFG: ScheduleConfig = {
   catch_up_days: 7,
   sink_id: null,
   template_id: null,
+};
+
+const BASE_SETTINGS: Settings = {
+  config_version: 2,
+  theme: "system",
+  verbose_logs: false,
+  keep_running_when_window_closed: true,
 };
 
 const SINK: Sink = {
@@ -66,6 +78,30 @@ describe("PreferencesDialog", () => {
       return payload.config;
     });
     registerInvokeHandler("sinks_list", async () => [SINK]);
+    // DAY-149: the Preferences dialog now hydrates a Background
+    // section from the persisted `Settings` blob. A test that
+    // doesn't override these handlers gets the default (true)
+    // toggle state and a no-op `settings_update` that echoes
+    // whatever patch it receives back as the canonical `Settings`
+    // row — matching the Rust `Settings::with_patch` contract.
+    registerInvokeHandler("settings_get", async () => BASE_SETTINGS);
+    registerInvokeHandler("settings_update", async (args) => {
+      const { patch } = args as { patch: SettingsPatch };
+      // `SettingsPatch` is generated as "field?: T | null" from
+      // Rust's `Option<T>`. Only apply fields the caller set to a
+      // real value — treating `null` as "leave alone" matches the
+      // Rust-side `with_patch` semantics, and keeps the mock's
+      // return type compatible with `Settings` (no nullable
+      // fields).
+      const next: Settings = { ...BASE_SETTINGS };
+      if (patch.theme != null) next.theme = patch.theme;
+      if (patch.verbose_logs != null) next.verbose_logs = patch.verbose_logs;
+      if (patch.keep_running_when_window_closed != null) {
+        next.keep_running_when_window_closed =
+          patch.keep_running_when_window_closed;
+      }
+      return next;
+    });
   });
 
   afterEach(async () => {
@@ -151,6 +187,76 @@ describe("PreferencesDialog", () => {
 
     fireEvent.change(input, { target: { value: "-5" } });
     expect(input.value).toBe("0");
+  });
+
+  it("persists the keep-running-in-background toggle via settings_update", async () => {
+    // DAY-149: flipping the Background checkbox and hitting Save
+    // must dispatch a `settings_update` patch with the new
+    // value — otherwise the close-handler atomic mirror (seeded
+    // at boot + updated by this same IPC path) never learns about
+    // the user's choice and Cmd+W keeps hiding the window
+    // regardless.
+    const patches: SettingsPatch[] = [];
+    registerInvokeHandler("settings_update", async (args) => {
+      const { patch } = args as { patch: SettingsPatch };
+      patches.push(patch);
+      const next: Settings = { ...BASE_SETTINGS };
+      if (patch.keep_running_when_window_closed != null) {
+        next.keep_running_when_window_closed =
+          patch.keep_running_when_window_closed;
+      }
+      return next;
+    });
+
+    render(<Harness initialOpen />);
+    await screen.findByTestId("preferences-dialog");
+
+    const toggle = (await screen.findByTestId(
+      "preferences-keep-running-when-window-closed",
+    )) as HTMLInputElement;
+    // Defaulted to true by the fixture — confirm before flipping.
+    await waitFor(() => expect(toggle.checked).toBe(true));
+    fireEvent.click(toggle);
+    expect(toggle.checked).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() => expect(patches.length).toBe(1));
+    expect(patches[0]!.keep_running_when_window_closed).toBe(false);
+  });
+
+  it("skips settings_update when the background toggle was not changed", async () => {
+    // DAY-149: scheduler-only edits must not drag a no-op
+    // `settings_update` call along with them. The dialog touches
+    // two different persistence rows (`ScheduleConfig` vs
+    // `Settings`) and bundling them would turn a scheduler-save
+    // failure into a settings-save failure too — worse
+    // ergonomics, no safety gain.
+    let settingsCalls = 0;
+    registerInvokeHandler("settings_update", async (args) => {
+      settingsCalls += 1;
+      const { patch } = args as { patch: SettingsPatch };
+      const next: Settings = { ...BASE_SETTINGS };
+      if (patch.keep_running_when_window_closed != null) {
+        next.keep_running_when_window_closed =
+          patch.keep_running_when_window_closed;
+      }
+      return next;
+    });
+
+    render(<Harness initialOpen />);
+    await screen.findByTestId("preferences-dialog");
+    // Let the Background section hydrate so the save path can see
+    // an unchanged `keepRunning` value instead of the initial
+    // `null` draft.
+    await screen.findByTestId("preferences-keep-running-when-window-closed");
+
+    fireEvent.click(screen.getByRole("button", { name: /^save$/i }));
+    await waitFor(() =>
+      expect(
+        screen.queryByRole("button", { name: /^save$/i }),
+      ).toBeInTheDocument(),
+    );
+    expect(settingsCalls).toBe(0);
   });
 
   it("surfaces the no-sink empty state when no MarkdownFile sink exists", async () => {
