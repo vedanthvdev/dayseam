@@ -23,12 +23,13 @@ async function renderWithTheme(theme: Theme): Promise<HTMLElement> {
       screen.getByRole("region", { name: /connected sources/i }),
     ).toBeInTheDocument(),
   );
-  // ActionRow auto-selects every configured source on the frame
-  // after `useSources` resolves. On fast local runs that happens
-  // within the same tick as the region appearing, but CI has been
-  // observed to capture the transient "region present, nothing
-  // selected, Generate disabled" frame. Wait for Generate to be
-  // enabled so the snapshot always reflects the settled state.
+  // DAY-170: the merged `SourcesSidebar` auto-selects every
+  // configured source on the frame after `useSources` resolves.
+  // On fast local runs that happens within the same tick as the
+  // region appearing, but CI has been observed to capture the
+  // transient "region present, nothing selected, Generate
+  // disabled" frame. Wait for Generate to be enabled so the
+  // snapshot always reflects the settled state.
   await waitFor(() =>
     expect(
       screen.getByTestId("action-row-generate"),
@@ -45,7 +46,7 @@ async function renderWithTheme(theme: Theme): Promise<HTMLElement> {
 }
 
 // Attributes that can drift run-to-run (react-generated ids, test
-// ordering, today's date on the ActionRow date picker) are stripped
+// ordering, today's date on the merged report-row date picker) are stripped
 // so the snapshot stays meaningful and doesn't flake across
 // midnight. The date input's initial `value` is derived from the
 // user's local calendar day via `localTodayIso()`, so without

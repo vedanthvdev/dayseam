@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Dayseam tray / menubar mark - background-less coloured variant.
+
+  DAY-170. Shipped as a coloured variant of the "Convergence"
+  silhouette for the macOS/Linux menubar tray icon. The rounded-
+  charcoal background used by the dock/app icon is explicitly
+  dropped here because the tray sits directly on the system menubar
+  (light grey on macOS, dark charcoal in dark mode) and a second
+  charcoal box in that context reads as visual noise.
+
+  Geometry matches `dayseam-mark.svg` byte-for-byte  same
+  convergence point (680, 512), same fan angles (-36°, -18°, 0°,
+  +18°, +36°), same strand endpoints, same palette. The only
+  deviations from the canonical file:
+
+    1. No background rect  strands composite directly onto the
+       menubar surface.
+    2. Stroke width is bumped from 28 to 88 so the mark is legible
+       when rasterised down to 32x32 / 64x64 CSS pixels for the
+       tray. At the canonical 1024-canvas size 88 reads as a bold
+       variant; at 32 px target size 88/1024 × 32 H 2.75 CSS px,
+       which survives low-DPI menubars without going muddy.
+    3. Seam is drawn in #8E8E93 (Apple's secondary-label grey,
+       midway between menubar-light and menubar-dark ink) rather
+       than the cream `#F6F1E6` of the rounded-square variant,
+       because cream is invisible against a light menubar and the
+       tray PNG cannot flip per theme at runtime.
+
+  This SVG is the single source of truth for the rasterised PNGs at
+  `apps/desktop/src-tauri/icons/tray-icon.png` and
+  `apps/desktop/src-tauri/icons/tray-icon@2x.png`. Re-rasterise via
+  `scripts/rasterise-tray-icon.py` after any change here; do not
+  redraw the PNGs by hand.
+-->
+<svg
+  width="1024"
+  height="1024"
+  viewBox="0 0 1024 1024"
+  xmlns="http://www.w3.org/2000/svg"
+  role="img"
+  aria-label="Dayseam"
+>
+  <title>Dayseam</title>
+
+  <g
+    stroke-width="88"
+    stroke-linecap="round"
+    fill="none"
+  >
+    <line x1="292" y1="230" x2="680" y2="512" stroke="#E89A2C" />
+    <line x1="224" y1="364" x2="680" y2="512" stroke="#2B8AA0" />
+    <line x1="200" y1="512" x2="680" y2="512" stroke="#D94F6E" />
+    <line x1="224" y1="660" x2="680" y2="512" stroke="#5BA567" />
+    <line x1="292" y1="794" x2="680" y2="512" stroke="#4D6DD0" />
+
+    <line
+      x1="680"
+      y1="512"
+      x2="980"
+      y2="512"
+      stroke="#8E8E93"
+      stroke-dasharray="44 24"
+    />
+  </g>
+</svg>

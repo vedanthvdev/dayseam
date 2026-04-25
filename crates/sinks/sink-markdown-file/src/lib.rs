@@ -51,4 +51,4 @@ mod lock;
 mod markdown;
 mod markers;
 
-pub use adapter::MarkdownFileSink;
+pub use adapter::{report_filename_for_date, MarkdownFileSink};

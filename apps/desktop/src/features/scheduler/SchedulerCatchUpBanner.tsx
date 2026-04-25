@@ -1,5 +1,6 @@
 // DAY-130 catch-up banner. Non-blocking strip that mounts above
-// the `ActionRow` when the Rust scheduler's cold-start scan (or an
+// the merged `SourcesSidebar` report row (previously `ActionRow`;
+// see DAY-170) when the Rust scheduler's cold-start scan (or an
 // hourly tick) emits `scheduler:catch-up-suggested` with a list of
 // missed dates. "Run" dispatches `scheduler_run_catch_up`; "Skip"
 // dispatches `scheduler_skip_catch_up` (session-scoped — the banner

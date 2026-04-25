@@ -95,16 +95,29 @@ pub struct ScheduleState {
 
 impl ScheduleState {
     /// Build a [`ScheduleState`] from the raw `sync_runs` rows
-    /// recorded by the scheduler. Rows with any other trigger are
-    /// ignored because the "satisfied" predicate is specifically
-    /// about scheduler-produced reports; a user-initiated run for
-    /// the same day still leaves a scheduled hole (by design — we
-    /// only promise reports via the scheduler path).
+    /// recorded by the scheduler.
     ///
     /// A row counts as satisfaction iff its `status == Completed`.
+    /// DAY-170: both scheduler-triggered **and** user-triggered
+    /// completed runs now satisfy a day. The earlier cut
+    /// (scheduler-only) matched the design intent "we only promise
+    /// reports via the scheduler path", but it produced a concrete
+    /// user-facing bug: a user who opened Dayseam at 10am every
+    /// morning and manually generated the day's report would still
+    /// be nagged on the next open with "Catch up 3 missed reports"
+    /// — the catch-up planner counted only the scheduler's own
+    /// runs, not the reports the user had already generated (and
+    /// likely saved). Surfacing a catch-up prompt for days the
+    /// user has already produced a report is the discoverability
+    /// equivalent of a false positive; the planner now treats any
+    /// completed run as satisfying the day so the prompt only
+    /// fires when the day really is empty of output.
+    ///
     /// `InDay` and `FinalPass` both register; the latter wins when
     /// both exist for the same date (catches the "retried the same
-    /// day" corner case).
+    /// day" corner case). User-triggered rows register as `InDay`
+    /// because they carry no "final pass" semantics — the trigger
+    /// kind distinction only meaningfully ranks scheduler rows.
     pub fn from_sync_runs<'a>(
         rows: impl Iterator<Item = SchedulerRunRow<'a>>,
         local_tz: FixedOffset,
@@ -114,24 +127,34 @@ impl ScheduleState {
             if row.status != SyncRunStatus::Completed {
                 continue;
             }
-            let SyncRunTrigger::Scheduler { action } = row.trigger else {
-                continue;
-            };
             // The run's wall-clock start gives us the "which
-            // scheduled day satisfied" on InDay rows; final-pass
-            // rows carry the *previous* scheduled day as their
-            // target, which the scheduler records by re-using the
-            // `request.date` the planner emitted.
+            // scheduled day satisfied" for in-day and user-triggered
+            // rows; scheduler final-pass rows carry the *previous*
+            // scheduled day as their target, which the scheduler
+            // records by re-using the `request.date` the planner
+            // emitted.
             let started_local = row.started_at.with_timezone(&local_tz).date_naive();
-            let target_date = match action {
-                SchedulerTriggerKind::InDay | SchedulerTriggerKind::CatchUp => started_local,
-                SchedulerTriggerKind::FinalPass => started_local - Duration::days(1),
-            };
-            let kind = match action {
-                SchedulerTriggerKind::InDay | SchedulerTriggerKind::CatchUp => {
-                    SatisfactionKind::InDay
-                }
-                SchedulerTriggerKind::FinalPass => SatisfactionKind::FinalPass,
+            let (target_date, kind) = match row.trigger {
+                SyncRunTrigger::Scheduler { action } => match action {
+                    SchedulerTriggerKind::InDay | SchedulerTriggerKind::CatchUp => {
+                        (started_local, SatisfactionKind::InDay)
+                    }
+                    SchedulerTriggerKind::FinalPass => (
+                        started_local - Duration::days(1),
+                        SatisfactionKind::FinalPass,
+                    ),
+                },
+                // Any non-scheduler trigger (User, API, future
+                // kinds) counts as satisfaction for `started_local`
+                // with `InDay` strength. We don't try to attribute
+                // a user-initiated run to "yesterday's final pass"
+                // — if the user ran at 00:30 on the 18th for the
+                // 17th, the run's `request.date` will be 17th and
+                // the row recorded for a separate scheduler pass
+                // would override this with `FinalPass` if one ever
+                // lands, but the pragmatic case (user runs during
+                // the current day) is handled correctly here.
+                _ => (started_local, SatisfactionKind::InDay),
             };
             state
                 .satisfied
@@ -704,6 +727,112 @@ mod tests {
             .unwrap();
         let actions = plan_next_actions(now, &cfg, &state);
         assert_eq!(actions, vec![ScheduledAction::RunToday(sunday)]);
+    }
+
+    #[test]
+    fn from_sync_runs_counts_user_triggered_completed_runs_as_satisfaction() {
+        // DAY-170 regression: a user who opens Dayseam and manually
+        // generates a report must not be prompted with a catch-up
+        // banner for that same day on the next tick. Before DAY-170,
+        // `from_sync_runs` filtered out `SyncRunTrigger::User`, which
+        // meant the only way a day could be marked satisfied was for
+        // the scheduler itself to fire. This test pins the new
+        // contract: completed **user** runs count too.
+        let mon = NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
+        let started = local_offset()
+            .from_local_datetime(&mon.and_hms_opt(10, 0, 0).unwrap())
+            .single()
+            .unwrap()
+            .with_timezone(&Local);
+        let rows = std::iter::once(SchedulerRunRow {
+            status: SyncRunStatus::Completed,
+            trigger: SyncRunTrigger::User,
+            started_at: started,
+            _phantom: std::marker::PhantomData,
+        });
+        let state = ScheduleState::from_sync_runs(rows, local_offset());
+        assert_eq!(
+            state.satisfied.get(&mon),
+            Some(&SatisfactionKind::InDay),
+            "a completed user-triggered run satisfies its wall-clock day"
+        );
+    }
+
+    #[test]
+    fn from_sync_runs_still_treats_scheduler_final_pass_as_yesterday() {
+        // Companion to the DAY-170 test above: scheduler final-pass
+        // rows keep their pre-DAY-170 semantics of "yesterday's
+        // satisfaction", even though user rows now fold into the
+        // same code path. This guards against accidentally folding
+        // final-pass into `started_local` when refactoring the
+        // match arms.
+        let mon = NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
+        let tue = mon + Duration::days(1);
+        // Final-pass rows land on the day *after* the target day.
+        let started = local_offset()
+            .from_local_datetime(&tue.and_hms_opt(9, 0, 0).unwrap())
+            .single()
+            .unwrap()
+            .with_timezone(&Local);
+        let rows = std::iter::once(SchedulerRunRow {
+            status: SyncRunStatus::Completed,
+            trigger: SyncRunTrigger::Scheduler {
+                action: SchedulerTriggerKind::FinalPass,
+            },
+            started_at: started,
+            _phantom: std::marker::PhantomData,
+        });
+        let state = ScheduleState::from_sync_runs(rows, local_offset());
+        assert_eq!(
+            state.satisfied.get(&mon),
+            Some(&SatisfactionKind::FinalPass),
+            "scheduler final-pass row on Tue marks Mon as final-passed"
+        );
+        assert!(
+            !state.satisfied.contains_key(&tue),
+            "final-pass must not also mark its own start date as satisfied"
+        );
+    }
+
+    #[test]
+    fn from_sync_runs_final_pass_overrides_in_day_for_same_date() {
+        // Two runs for the same date: an InDay (could be user or
+        // scheduler-in-day) and a scheduler FinalPass. The
+        // FinalPass must win regardless of iteration order.
+        let mon = NaiveDate::from_ymd_opt(2026, 4, 20).unwrap();
+        let tue = mon + Duration::days(1);
+        let in_day_started = local_offset()
+            .from_local_datetime(&mon.and_hms_opt(14, 0, 0).unwrap())
+            .single()
+            .unwrap()
+            .with_timezone(&Local);
+        let final_pass_started = local_offset()
+            .from_local_datetime(&tue.and_hms_opt(9, 0, 0).unwrap())
+            .single()
+            .unwrap()
+            .with_timezone(&Local);
+        let rows = vec![
+            SchedulerRunRow {
+                status: SyncRunStatus::Completed,
+                trigger: SyncRunTrigger::User,
+                started_at: in_day_started,
+                _phantom: std::marker::PhantomData,
+            },
+            SchedulerRunRow {
+                status: SyncRunStatus::Completed,
+                trigger: SyncRunTrigger::Scheduler {
+                    action: SchedulerTriggerKind::FinalPass,
+                },
+                started_at: final_pass_started,
+                _phantom: std::marker::PhantomData,
+            },
+        ];
+        let state = ScheduleState::from_sync_runs(rows.into_iter(), local_offset());
+        assert_eq!(
+            state.satisfied.get(&mon),
+            Some(&SatisfactionKind::FinalPass),
+            "final-pass wins over in-day for the same target date"
+        );
     }
 
     #[test]

@@ -1,7 +1,19 @@
+// DAY-170: `ActionRow` was folded into `SourcesSidebar` so the
+// user-facing "pick a day, pick sources, hit Generate" surface fits
+// on a single row directly above the preview. This file keeps the
+// former `action-row-*` behaviour pinned — auto-selection on first
+// load, toggle-to-exclude, Generate/Cancel swap, and the disabled-
+// Generate empty state — but now drives them through the merged
+// `SourcesSidebar` component via its `reportActions` prop. The
+// testids stay stable (`action-row-date`, `action-row-source-<id>`,
+// `action-row-generate`, `action-row-cancel`) so a future reader
+// searching for "action-row" still lands on the contract. The file
+// name is kept as a historical pointer; the contents have moved.
+
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Source } from "@dayseam/ipc-types";
-import { ActionRow } from "../features/report/ActionRow";
+import { SourcesSidebar } from "../features/sources/SourcesSidebar";
 import { registerInvokeHandler, resetTauriMocks } from "./tauri-mock";
 
 const SRC_A: Source = {
@@ -17,9 +29,12 @@ const SRC_A: Source = {
 
 const SRC_B: Source = { ...SRC_A, id: "src-b", label: "Repo B" };
 
-describe("ActionRow", () => {
+describe("SourcesSidebar report actions (formerly ActionRow)", () => {
   beforeEach(() => {
     resetTauriMocks();
+    // `useLocalRepos` fires for every LocalGit chip; stub it flat
+    // so the tests below are not coupled to repo-discovery plumbing.
+    registerInvokeHandler("local_repos_list", async () => []);
   });
   afterEach(() => {
     resetTauriMocks();
@@ -29,10 +44,12 @@ describe("ActionRow", () => {
     registerInvokeHandler("sources_list", async () => [SRC_A, SRC_B]);
     const onGenerate = vi.fn();
     render(
-      <ActionRow
-        status="idle"
-        onGenerate={onGenerate}
-        onCancel={() => {}}
+      <SourcesSidebar
+        reportActions={{
+          status: "idle",
+          onGenerate,
+          onCancel: () => {},
+        }}
       />,
     );
     await waitFor(() =>
@@ -45,10 +62,12 @@ describe("ActionRow", () => {
     registerInvokeHandler("sources_list", async () => [SRC_A, SRC_B]);
     const onGenerate = vi.fn();
     render(
-      <ActionRow
-        status="idle"
-        onGenerate={onGenerate}
-        onCancel={() => {}}
+      <SourcesSidebar
+        reportActions={{
+          status: "idle",
+          onGenerate,
+          onCancel: () => {},
+        }}
       />,
     );
     await waitFor(() =>
@@ -58,6 +77,10 @@ describe("ActionRow", () => {
     fireEvent.change(screen.getByTestId("action-row-date"), {
       target: { value: "2026-02-14" },
     });
+    // Clicking the chip body is the same gesture as clicking the
+    // hidden checkbox — the `<label htmlFor=…>` wrapper wires
+    // native click-to-toggle semantics. Driving the checkbox
+    // directly keeps the assertion about selection explicit.
     fireEvent.click(screen.getByTestId(`action-row-source-${SRC_B.id}`));
     fireEvent.click(screen.getByTestId("action-row-generate"));
 
@@ -69,21 +92,25 @@ describe("ActionRow", () => {
     registerInvokeHandler("sources_list", async () => [SRC_A]);
     const onCancel = vi.fn();
     render(
-      <ActionRow
-        status="running"
-        onGenerate={() => {}}
-        onCancel={onCancel}
+      <SourcesSidebar
+        reportActions={{
+          status: "running",
+          onGenerate: () => {},
+          onCancel,
+        }}
       />,
     );
     await waitFor(() =>
-      expect(screen.getByTestId(`action-row-source-${SRC_A.id}`)).toBeInTheDocument(),
+      expect(
+        screen.getByTestId(`action-row-source-${SRC_A.id}`),
+      ).toBeInTheDocument(),
     );
     expect(
       screen.queryByTestId("action-row-generate"),
     ).not.toBeInTheDocument();
-    // DAY-119: ActionRow no longer renders a live progress message — the
-    // canonical narration lives in StreamingPreview. Guard against
-    // regression so we never surface progress in both places again.
+    // DAY-119: ActionRow never rendered a live progress message
+    // (StreamingPreview owns live narration). The merged row
+    // inherits that contract — no progress text inline.
     expect(
       screen.queryByTestId("action-row-progress-message"),
     ).not.toBeInTheDocument();
@@ -91,15 +118,19 @@ describe("ActionRow", () => {
     expect(onCancel).toHaveBeenCalledTimes(1);
   });
 
-  it("disables Generate with an explanation when no sources are connected", async () => {
+  it("disables Generate when no sources are connected", async () => {
     registerInvokeHandler("sources_list", async () => []);
     render(
-      <ActionRow status="idle" onGenerate={() => {}} onCancel={() => {}} />,
+      <SourcesSidebar
+        reportActions={{
+          status: "idle",
+          onGenerate: () => {},
+          onCancel: () => {},
+        }}
+      />,
     );
     await waitFor(() =>
-      expect(
-        screen.getByText(/add a source above to enable generate/i),
-      ).toBeInTheDocument(),
+      expect(screen.getByText(/no sources connected/i)).toBeInTheDocument(),
     );
     expect(screen.getByTestId("action-row-generate")).toBeDisabled();
   });

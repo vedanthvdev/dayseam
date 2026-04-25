@@ -47,13 +47,27 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 # Linux AppIndicator); running without a tray is still safe because
 # `TrayIconBuilder::build(&app)` returns a `Result` and we log + skip
 # on error rather than failing boot.
-tauri = { version = "2", features = ["tray-icon"] }
+#
+# DAY-170 adds `image-png` so `tauri::include_image!` can decode the
+# coloured-strands tray PNG at compile time and embed it in the
+# binary. Without the feature the macro expands to a call against
+# `Image::from_bytes`, which only exists when `image-png` or
+# `image-ico` is on; PNG is the format we ship the tray raster in.
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
 dayseam-core = { path = "../../../crates/dayseam-core" }
 dayseam-db = { path = "../../../crates/dayseam-db" }
 dayseam-events = { path = "../../../crates/dayseam-events" }
 dayseam-secrets = { path = "../../../crates/dayseam-secrets", features = ["keychain"] }
 dayseam-orchestrator = { path = "../../../crates/dayseam-orchestrator" }
 dayseam-report = { path = "../../../crates/dayseam-report" }
+# DAY-170. The scheduler's catch-up planner now also treats "a saved
+# report file for date D in a markdown-file sink" as satisfaction
+# for D, so the planner never nags the user with a catch-up prompt
+# for a day whose report is already sitting on disk. We pull in the
+# sink crate purely for `report_filename_for_date` so the naming
+# convention has a single source of truth — the scheduler task does
+# not instantiate the sink adapter.
+sink-markdown-file = { path = "../../../crates/sinks/sink-markdown-file" }
 connectors-sdk = { path = "../../../crates/connectors-sdk" }
 connector-local-git = { path = "../../../crates/connectors/connector-local-git" }
 connector-gitlab = { path = "../../../crates/connectors/connector-gitlab" }
