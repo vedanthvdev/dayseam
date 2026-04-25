@@ -38,8 +38,28 @@ on:
 permissions:
   contents: write
 
+# DAY-164. Release runs serialize on a GLOBAL key, not per-ref. The
+# previous `release-${{ github.ref }}` grouped per PR, which let two
+# different PRs' release runs proceed in parallel. Combined with the
+# `--force-with-lease=master:<sha>` push that only checked the tip
+# SHA (not descendant-ness), a v0.N PR that merged mid-flight of a
+# v0.N-1 release could have its `chore(release): v0.N-1` commit
+# silently overwritten and orphaned from master's linear history.
+# That is exactly what happened to v0.8.1's `chore(release)` commit
+# `56f0c2a` during the v0.8.1 → v0.8.2 pair — the tag still points
+# at the commit but `git log origin/master` skips it entirely.
+#
+# A single global group forces Run B to wait for Run A to push,
+# tag, and publish before it can even start checking out. This is
+# the cheapest correctness fix; releases are infrequent enough (one
+# per merged semver:patch/minor/major PR) that serializing a few
+# minutes of queue time is invisible to users. The paired change
+# below (plain `git push` + descendant assertion) is the
+# belt-and-braces layer that catches the residual race where Run B's
+# `merge_commit_sha` — stable at PR merge time — is stale relative
+# to the master tip Run A just pushed.
 concurrency:
-  group: release-${{ github.ref }}
+  group: release-master-push
   cancel-in-progress: false
 
 jobs:
@@ -860,33 +880,43 @@ jobs:
       # carries the right `version` metadata. A pre-bumped tree (Task
       # 9 capstone) has nothing to commit and the step no-ops.
       #
-      # DAY-122 / R-3. The push used to be a bare `git push origin
-      # HEAD:master`; plain git already rejects non-fast-forward
-      # pushes, so concurrent-merge scenarios fail safely rather
-      # than silently overwrite. This step tightens that further by
-      # capturing the expected master SHA at checkout and passing
-      # it to `--force-with-lease=master:<sha>`. The lease asserts
-      # "master must be exactly at this SHA before I push"; any
-      # drift (another PR merged while this release ran) aborts
-      # the push with an explicit error instead of a generic
-      # "non-fast-forward" message. The caller can then retry the
-      # release from the new master head without risking a half-
-      # applied release (tag pushed, bump commit missing, or vice
-      # versa).
-      - name: Capture expected master SHA before bump push
-        id: lease
-        if: steps.level.outputs.dry_run != 'true'
-        run: |
-          set -euo pipefail
-          git fetch origin master
-          expected="$(git rev-parse origin/master)"
-          echo "expected_master=$expected" >>"$GITHUB_OUTPUT"
-          echo "==> Expected master SHA for --force-with-lease: $expected"
-
+      # DAY-164 (supersedes DAY-122 / R-3). The push is now a plain
+      # `git push origin HEAD:master` paired with an explicit
+      # "our chore commit's parent IS origin/master's tip" assertion
+      # before the push.
+      #
+      # The previous DAY-122 implementation captured the master SHA
+      # into `EXPECTED_MASTER` seconds before the push and passed it
+      # to `--force-with-lease=master:$EXPECTED_MASTER`. That API
+      # only asserts the tip SHA — it does NOT require the pushed
+      # commit to be a descendant of the tip. So when Run A's chore
+      # commit sat on a stale base (Run B's PR merged to master
+      # mid-flight, advancing master to M2 while A's HEAD still
+      # pointed at M1 + chore_A), the lease passed (master was
+      # indeed at M2 at capture time) and the force-push happily
+      # rewound M2 out of master's linear history, orphaning it.
+      # Failure mode: v0.8.1's chore(release) commit 56f0c2a is only
+      # reachable via the v0.8.1 tag; `git log origin/master` skips
+      # it entirely, because v0.8.2's release pushed on top of a
+      # stale base using exactly this mechanism.
+      #
+      # Plain `git push` rejects non-fast-forward pushes by default,
+      # which is the correct behaviour here: if master has advanced
+      # since our checkout, we must not publish a commit whose
+      # parent isn't the current tip, because doing so either (a)
+      # drops the intervening work silently (the bug) or (b) needs
+      # an explicit rebase the workflow doesn't currently model.
+      # The workflow-level `concurrency: release-master-push` group
+      # above is the primary guard — it makes Run B wait for Run A
+      # to finish pushing, tagging, and publishing before it starts
+      # — and this step's descendant assertion is the belt-and-
+      # braces that catches the residual race where Run B's
+      # merge_commit_sha (stable at PR merge time) is stale relative
+      # to current master. In that case we fail loudly with a
+      # remediation message rather than silently overwriting.
       - name: Commit version bump (if any)
+        id: commit
         if: steps.level.outputs.dry_run != 'true'
-        env:
-          EXPECTED_MASTER: ${{ steps.lease.outputs.expected_master }}
         run: |
           set -euo pipefail
           git config user.name "github-actions[bot]"
@@ -901,19 +931,37 @@ jobs:
           if [[ -n "$(git status --porcelain VERSION Cargo.toml apps/desktop/src-tauri/tauri.conf.json CHANGELOG.md 2>/dev/null || true)" ]]; then
             git add VERSION Cargo.toml apps/desktop/src-tauri/tauri.conf.json CHANGELOG.md
             git commit -m "chore(release): v${{ steps.bump.outputs.version }}"
-            # --force-with-lease=<ref>:<sha> is NOT a force push in the
-            # destructive sense; it asserts that master is exactly at
-            # $EXPECTED_MASTER (captured seconds earlier) and refuses
-            # the push if it isn't. A plain `git push` without
-            # --force-with-lease would also reject a non-FF push, but
-            # the lease surfaces the drift with an explicit "stale
-            # info" error that names the expected SHA in the output
-            # — which is what lets an operator diagnose a concurrent
-            # merge instead of chasing a vague rejection.
-            git push --force-with-lease="master:${EXPECTED_MASTER}" origin HEAD:master
+            echo "committed=true" >>"$GITHUB_OUTPUT"
           else
             echo "==> Version bump already present on master; nothing to commit."
+            echo "committed=false" >>"$GITHUB_OUTPUT"
           fi
+
+      # DAY-164. Assert our chore commit's parent IS origin/master's
+      # current tip before we push. The logic lives in
+      # `scripts/release/assert-master-descendant.sh` so it carries
+      # its own test suite (`test-assert-master-descendant.sh` in
+      # the `shell-scripts` matrix on ci.yml) and a future tweak to
+      # the assertion semantics doesn't require editing release.yml.
+      # Skipped when step 'commit' reports nothing was committed
+      # (pre-bumped capstone path).
+      - name: Assert chore commit descends from origin/master tip
+        if: steps.level.outputs.dry_run != 'true' && steps.commit.outputs.committed == 'true'
+        run: |
+          scripts/release/assert-master-descendant.sh
+
+      # DAY-164. Plain `git push` — no `--force-with-lease`. Plain
+      # push rejects non-fast-forward pushes by default (git exit
+      # code 1 with 'Updates were rejected because the remote
+      # contains work that you do not have locally'), which is the
+      # correct failure mode here. The descendant assertion above
+      # is the primary gate; this push is strictly a fast-forward
+      # once we've passed it.
+      - name: Push chore commit to master
+        if: steps.level.outputs.dry_run != 'true' && steps.commit.outputs.committed == 'true'
+        run: |
+          set -euo pipefail
+          git push origin HEAD:master
 
       - name: Tag the release
         if: steps.level.outputs.dry_run != 'true'

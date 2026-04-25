@@ -5,7 +5,7 @@ All notable changes to Dayseam are documented in this file. The format follows
 [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 <!--
-Release-cadence note (DAY-155): the `release.yml` workflow now closes
+Release-cadence note (DAY-155): the `release.yml` workflow closes
 `[Unreleased]` into `[X.Y.Z] - YYYY-MM-DD` automatically as part of
 its `chore(release)` commit, using `scripts/release/close-changelog.sh`.
 Contributors should add PR entries under `[Unreleased]` as normal and
@@ -13,15 +13,72 @@ leave the close step to the workflow — don't pre-rename the block
 manually unless you are deliberately using the capstone-PR pattern
 (pre-close for a reviewable diff), which the automation detects and
 skips. Before DAY-155 the close was an unwritten convention that
-slipped twice in practice: the v0.7.0 → v0.8.0 pair (no `[0.7.0]`
-block exists on master at all) and the v0.8.1 → v0.8.2 pair, where
-v0.8.2 re-published v0.8.1's DAY-161 entry on top of v0.8.2's DAY-159
-entry. The `[0.8.2]` block below reproduces what actually shipped in
-v0.8.2's GitHub Release body, for historical accuracy — the
-deduplicated ideal would have had only DAY-159 under [0.8.2].
+slipped twice in practice:
+
+  - the v0.7.0 → v0.8.0 pair, where v0.8.0's body re-shipped v0.7.0's
+    entire DAY-127/DAY-126/DAY-125 [Unreleased] slice verbatim because
+    nothing closed [Unreleased] between the two releases. The
+    `[0.7.0]` and `[0.8.0]` blocks below now reproduce what actually
+    shipped in each release body for historical accuracy (the
+    deduplicated ideal would have had only the capstone content under
+    [0.8.0]); DAY-164 back-filled the [0.7.0] block — before that
+    there was no [0.7.0] section on master at all.
+
+  - the v0.8.1 → v0.8.2 pair, where v0.8.2 re-published v0.8.1's
+    DAY-161 entry on top of v0.8.2's DAY-159 entry. The `[0.8.2]`
+    block below reproduces what actually shipped for historical
+    accuracy — the deduplicated ideal would have had only DAY-159
+    under [0.8.2]. DAY-164 deduplicated v0.8.2's GitHub Release body
+    out-of-band via `gh release edit`, leaving the CHANGELOG record
+    intact so this file and the release body together explain what
+    happened.
+
+Release-cadence note (DAY-164): the `release.yml` workflow now
+serializes release runs on a single global concurrency group
+(`release-master-push`) and verifies via
+`scripts/release/assert-master-descendant.sh` that the chore commit's
+parent is origin/master's current tip before pushing. This closes the
+v0.8.1 → v0.8.2 failure mode where `--force-with-lease=master:<sha>`
+accepted a non-fast-forward push and silently orphaned the previous
+release's chore commit from master's linear history; v0.8.1's
+`56f0c2a` is only reachable via the v0.8.1 tag, not via
+`git log origin/master`.
 -->
 
 ## [Unreleased]
+
+### Fixed
+
+- **DAY-164: Close the back-to-back-release race that silently
+  orphaned v0.8.1's `chore(release)` commit.** The release workflow's
+  `--force-with-lease=master:<captured-sha>` push checked only the
+  tip SHA, not whether the pushed commit was a descendant of the
+  tip, so a release whose checkout base had since been advanced by
+  a concurrent run happily force-pushed a stale-parented commit
+  over the top — silently orphaning the intervening commit(s) from
+  master's linear history. v0.8.1's `chore(release)` commit
+  `56f0c2a` is the known victim: the v0.8.1 tag still resolves it
+  correctly but `git log origin/master` skips it entirely. The fix
+  has three layers: (a) workflow-level `concurrency:
+  release-master-push` now serializes all release runs on a single
+  global lock, so Run B waits for Run A to push, tag, and publish
+  before it even starts checking out; (b) the push is now a plain
+  `git push origin HEAD:master` with the `--force-with-lease`
+  removed — plain push rejects non-fast-forward pushes by default,
+  which is the correct failure mode here; and (c) a new
+  `scripts/release/assert-master-descendant.sh` helper runs
+  *before* the push, asserts `HEAD^ == origin/master` tip after a
+  fresh fetch, and fails the workflow loudly with an operator-
+  actionable remediation message if they diverge. The helper ships
+  with its own `test-assert-master-descendant.sh` covering happy
+  path, drift detection, missing origin remote, origin without
+  master, and root-commit edge cases, and is wired into the
+  `shell-scripts` CI matrix on both `ubuntu-latest` and
+  `macos-latest`. This PR also back-fills the missing `[0.7.0] -
+  2026-04-24` block in the CHANGELOG (reconstructed from the v0.7.0
+  GitHub Release body) and deduplicated v0.8.2's GitHub Release
+  body out-of-band so the historical record is consistent on both
+  surfaces.
 
 ## [0.8.2] - 2026-04-25
 
@@ -88,6 +145,154 @@ deduplicated ideal would have had only DAY-159 under [0.8.2].
   change.
 
 ## [0.8.0] - 2026-04-25
+
+<!--
+DAY-164 historical note: every entry in this block is the same
+content that shipped in v0.7.0's GitHub Release body. v0.7.0 was
+the last release cut before DAY-155 automated the `[Unreleased]`
+close, so `extract-release-notes.sh` fell back to the still-
+populated `[Unreleased]` at v0.8.0's merge-commit time and re-
+shipped v0.7.0's DAY-127/DAY-126/DAY-125 slice verbatim. v0.8.0
+itself carried no new user-visible entries. This block reproduces
+what actually shipped in v0.8.0's release body for historical
+accuracy; see `[0.7.0] - 2026-04-24` below for the original
+appearance of the same content.
+-->
+
+### Changed
+
+- **DAY-127: seven small UX fixes in one patch.** The seven papercuts
+  below each have their own single-line rationale; they ride together
+  because the fixes are tiny and share zero mechanism, so splitting
+  into seven PRs would pay pure branch-and-release overhead for
+  changes that barely span a screen height each.
+    1. **Source rescan feedback** — the `↻` chip button on each source
+       now spins while `sources_healthcheck` is in flight (tracked via
+       a `checkingIds` set in `SourcesSidebar`) and disables itself
+       with `aria-busy="true"`, so a click is visibly acknowledged
+       instead of looking like dead chrome. `motion-reduce` suppresses
+       the animation for users who have that OS preference set.
+    2. **Generate ↔ Cancel button flicker** — the report action row
+       used to swap two differently-sized buttons (black "Generate
+       report" vs red "Cancel") directly into the flow, so every
+       `status = running`↔terminal transition reflowed the row by a
+       few pixels. The two buttons now share a fixed `min-w-[140px]`
+       slot with matching `border border-transparent` boxes, so only
+       the chrome flips — the baseline stays put.
+    3. **Updater banner surfaces "up to date"** — the native
+       *Check for Updates…* menu item now sets the `useUpdater` hook
+       into verbose mode, which renders a *"Checking for updates…"*
+       row while the IPC is outstanding and a *"Dayseam is up to
+       date."* row on resolution (auto-dismissing after 4s). The
+       verbose flag stays off for the silent mount-time check so the
+       banner doesn't flicker on launch, and back-to-back menu clicks
+       collapse into a single in-flight check rather than firing
+       multiple `check()` calls.
+    4. **Identities dialog Done-button alignment** — the `DialogButton`
+       primary/danger variants lacked the explicit `border` that the
+       secondary variant carried, so each footer with mixed kinds
+       (most visible in `IdentityManagerDialog`) sat 2px short on the
+       primary side. All three variants now carry an explicit 1px
+       border (transparent for primary/danger, coloured for secondary)
+       plus `leading-5` for consistent vertical centring.
+    5. **Atlassian add dialog unblocked workspace URL + label input**
+       — (a) the workspace URL field in the add flow is no longer
+       locked read-only when an existing Atlassian source is
+       detected; the user can point at a different tenant, and if
+       the typed URL diverges from the existing source we auto-flip
+       `tokenMode` to `"paste"` and disable the reuse radio so the
+       submit never tries to reuse a secret from a different
+       workspace. The `"company"` placeholder/error copy has
+       been replaced with neutral `"yourcompany"` across
+       `atlassian-workspace-url.ts`. (b) the add flow now exposes an
+       optional **Label** input; when filled, a best-effort
+       `sources_update` rename runs for each inserted row after
+       `atlassian_sources_add` so Journey A (two siblings) lands
+       with `"<label> — Jira"` / `"<label> — Confluence"`.
+    6. **Date picker size** — the native `<input type="date">` in
+       `ActionRow` dropped from `text-sm`/`py-1` to `text-xs`/`py-0.5`
+       so it aligns with the Generate button baseline instead of
+       wearing a larger jacket than the rest of the row.
+    7. **Date picker auto-close** — `onChange` now calls
+       `event.target.blur()` so the native calendar popover closes
+       reliably after a date selection (Chromium leaves it open on
+       some platforms; blurring the element dismisses the popup).
+
+- **DAY-126: source label editing folded into the per-connector
+  Edit dialog; the standalone `Aa` rename button on the source chip
+  is gone.** The "Edit GitHub source" and "Edit Atlassian source"
+  dialogs now show the **Label** field (pre-filled with the current
+  label) alongside the existing read-only URL/email fields, and
+  the credential field (PAT for GitHub, API token for Atlassian) is
+  optional in edit mode — leave it blank to keep the existing
+  Keychain entry untouched. The Save button enables on *either* a
+  changed label or a new credential, and the submit handler routes
+  each kind of dirty field to the correct backend: a credential
+  triggers the existing `*_sources_reconnect` reauthentication
+  path (with all its keychain re-write and shared-PAT fan-out
+  semantics intact), and a renamed label triggers a separate
+  label-only `sources_update` patch (`{ label, config: null },
+  pat: null`) that goes through the `label_only` escape hatch added
+  in DAY-122 / C-4. For Atlassian's shared-PAT case the label-only
+  patch is scoped to the *single* source the user opened the dialog
+  on — the user is editing one chip's name, not retitling every
+  Jira/Confluence source that happens to share a PAT — even when
+  the credential half of the same submit fans the reconnect across
+  every affected source ID. The deleted `RenameSourceDialog`
+  component (DAY-121) and its `Aa` chip button are removed because
+  they were a parallel surface that confused users about where to
+  rename a source; consolidating into the one Edit dialog the user
+  already opens is what they actually expected. GitLab and Local
+  Git sources continue to use their existing edit dialogs (which
+  already exposed the label field), so no UI change there. Test
+  changes mirror the UI: `SourcesSidebar.test.tsx` asserts the
+  `Aa` button is *not* rendered (negative regression test against
+  silently restoring it), and the GitHub/Atlassian dialog tests
+  cover all four submit shapes — credential-only, label-only,
+  both-dirty, and nothing-dirty — including the Atlassian-specific
+  "label patch goes to the opened source ID, not all affected
+  IDs" assertion. No Rust changes: the IPC contract
+  (`sources_update` + the connector-specific `*_reconnect`
+  commands) was already shaped to support this, the comments in
+  `commands.rs` are just updated to point at the new edit-dialog
+  surface instead of the deleted `RenameSourceDialog`.   Net change
+  is 446 insertions / 606 deletions across the desktop frontend.
+
+### Fixed
+
+- **DAY-125: classified transport errors with the target host in the
+  message.** `HttpClient::send` previously collapsed every terminal
+  transport failure into a single `http.transport` code with the
+  message `http error after N attempts: <reqwest::Error>`, which gave
+  the user no signal about *what* had actually broken (DNS vs TLS vs
+  connection refused vs timeout) or *which host* was unreachable. In
+  practice this turned a transient VPN drop against a self-hosted
+  GitLab into a mystery error card that looked identical to every
+  other transport failure. The SDK now classifies the terminal error
+  into one of four sub-codes — `http.transport.dns`,
+  `http.transport.tls`, `http.transport.connect`,
+  `http.transport.timeout` — and falls back to the existing
+  `http.transport` only when the error resists classification, so
+  log-parser grep patterns that keyed on the `http.transport` prefix
+  keep matching. The user-facing message now reads `couldn't reach
+  \`host.example.com\` after N attempts: …` when `reqwest` exposes a
+  URL on the error, pointing the user straight at the host their VPN
+  / DNS / firewall is blocking instead of making them open a
+  connector-debug terminal to find out.
+
+## [0.7.0] - 2026-04-24
+
+<!--
+DAY-164 back-fill: there was no [0.7.0] section on master at all
+before this entry existed — the release workflow shipped v0.7.0
+from the [Unreleased] slice containing DAY-127/DAY-126/DAY-125 and
+never closed it, so the content lived under [Unreleased] until DAY-
+155's PR #156 retroactively moved it under [0.8.0]. This block is
+reconstructed from the v0.7.0 GitHub Release body (published
+2026-04-24T21:43:30Z at tag `v0.7.0`, commit 57959fc) and matches
+the `[0.8.0]` block above byte-for-byte because that's literally
+what shipped twice.
+-->
 
 ### Changed
 
