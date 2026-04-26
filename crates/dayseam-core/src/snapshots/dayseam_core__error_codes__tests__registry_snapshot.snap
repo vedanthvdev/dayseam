@@ -69,4 +69,6 @@ expression: ALL
 - ipc.shell.url_disallowed
 - ipc.shell.url_invalid
 - ipc.shell.open_failed
+- oauth.token_expired
+- oauth.descriptor_mismatch
 - db.schema.migration_failed

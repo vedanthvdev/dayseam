@@ -20,7 +20,8 @@
 use async_trait::async_trait;
 use base64::engine::general_purpose::STANDARD as BASE64_STANDARD;
 use base64::Engine as _;
-use dayseam_core::DayseamError;
+use chrono::{DateTime, Utc};
+use dayseam_core::{error_codes, DayseamError};
 use zeroize::Zeroize;
 
 /// Local, zero-dependency token wrapper used by the SDK's built-in
@@ -101,6 +102,68 @@ pub enum AuthDescriptor {
         email: String,
         keychain_service: String,
         keychain_account: String,
+    },
+    /// OAuth 2.0 bearer-token pair (access + refresh) plus the metadata
+    /// needed to reconstruct the matching [`OAuthAuth`] strategy after a
+    /// process restart without re-running the consent dance.
+    ///
+    /// The access token and refresh token live in the OS keychain under
+    /// **separate rows** — same `keychain_service`, different
+    /// `account` strings — so a compromise of one row does not unlock
+    /// the other. Callers that read the pair use
+    /// [`dayseam_secrets::oauth::get_access_token`] and
+    /// [`dayseam_secrets::oauth::get_refresh_token`]; the naming
+    /// convention (`.oauth.access` / `.oauth.refresh` suffix on the
+    /// account field) is the caller's responsibility when the row is
+    /// first written — the descriptor just records whatever account
+    /// strings the orchestrator picked and reuses them on every load.
+    ///
+    /// DAY-200 ships this variant alongside a scaffold [`OAuthAuth`]
+    /// impl that attaches the access token as a bearer header when
+    /// non-expired and returns a specific `oauth.token_expired`
+    /// [`DayseamError::Auth`] otherwise. Code-for-token exchange and
+    /// automatic refresh land in DAY-201; no production connector uses
+    /// this variant between DAY-200 merge and DAY-202 merge (Outlook),
+    /// so the unrefreshable path is exercised by tests only.
+    OAuth {
+        /// Issuer URL the tokens were minted against. Baked into the
+        /// descriptor so a round trip through (descriptor → load tokens
+        /// → rebuild strategy) is self-contained; the desktop's IPC
+        /// layer never has to remember "which Entra tenant is this
+        /// source wired to".
+        ///
+        /// For the Dayseam Outlook connector this is
+        /// `https://login.microsoftonline.com/organizations/v2.0` — the
+        /// work/school endpoint that blocks `outlook.com` /
+        /// `hotmail.com` personal accounts by construction.
+        issuer: String,
+        /// Public client id from the Azure app registration. Not
+        /// secret (it appears in the consent-URL query string) but
+        /// committing-to: rotating it invalidates every existing user
+        /// consent and re-prompts for re-auth.
+        client_id: String,
+        /// Delegated scopes granted at consent time. Recorded so a
+        /// refresh call can re-ask for the same set; Microsoft may
+        /// silently downgrade scopes if tenant admin policy has
+        /// changed between consent and refresh, in which case the
+        /// refresh response's `scope` field will differ and the
+        /// orchestrator surfaces a "reconnect" prompt.
+        scopes: Vec<String>,
+        /// Keychain service name shared by the access + refresh rows.
+        /// Conventionally `"dayseam.outlook"` for the v0.9 connector
+        /// and `"dayseam.<provider>"` for any future OAuth provider.
+        keychain_service: String,
+        /// Keychain account for the access-token row. The SDK does not
+        /// itself encode the `.oauth.access` suffix — the orchestrator
+        /// picks and records the full account string when writing the
+        /// row, and the descriptor reflects whatever was written so
+        /// reads always match writes.
+        access_keychain_account: String,
+        /// Keychain account for the refresh-token row. Must be
+        /// *different* from `access_keychain_account` so the two
+        /// tokens sit under distinct rows — see struct-level docs for
+        /// why isolation matters.
+        refresh_keychain_account: String,
     },
 }
 
@@ -365,6 +428,144 @@ impl AuthStrategy for BasicAuth {
         request: reqwest::RequestBuilder,
     ) -> Result<reqwest::RequestBuilder, DayseamError> {
         Ok(request.header("Authorization", self.header_value.expose()))
+    }
+
+    fn descriptor(&self) -> AuthDescriptor {
+        self.descriptor.clone()
+    }
+}
+
+/// OAuth 2.0 bearer-token authentication. DAY-200 ships this as a
+/// **scaffold** — [`OAuthAuth::authenticate`] attaches the stored
+/// access token as a `Bearer` header when the token is still within
+/// its lifetime and returns a specific
+/// [`error_codes::OAUTH_TOKEN_EXPIRED`] [`DayseamError::Auth`] when it
+/// isn't. Token refresh and the initial code-for-token exchange land
+/// in DAY-201.
+///
+/// No production connector reaches this code between DAY-200 merge
+/// and DAY-202 merge (Outlook) — the first OAuth connector's
+/// first-run consent path produces a non-expired token by
+/// construction, and DAY-201 replaces the expired-error branch with a
+/// refresh-then-bearer happy path before any connector actually calls
+/// `authenticate()` with an aged token. The expired-error branch is
+/// exercised by unit tests only in this PR, and is kept as a real
+/// error (not an `unreachable!`) so tests can prove the error code is
+/// stable and DAY-201's patch is a straight substitution rather than
+/// an enum rewrite.
+///
+/// Both tokens are wrapped in [`SecretString`] the instant they cross
+/// the constructor boundary: `Debug` renders them as `***`, `Drop`
+/// zeroes them. `OAuthAuth` intentionally does not implement `Clone`
+/// (matching [`PatAuth`] and [`BasicAuth`]): duplicating a token pair
+/// should be a deliberate act, not a side-effect of passing the
+/// strategy to a helper. Callers that need two live copies reach into
+/// the keychain a second time through
+/// [`dayseam_secrets::oauth::get_access_token`] and
+/// [`dayseam_secrets::oauth::get_refresh_token`].
+///
+/// The `access_expires_at` field is the **absolute** UTC instant at
+/// which the token is considered expired — `authenticate()` treats
+/// `now >= access_expires_at` as expired with zero skew compensation.
+/// A negative-skew policy (refresh proactively when `expires_at - now
+/// < N`) is a DAY-201 decision; baking a skew window into the
+/// scaffold would be a premature call that DAY-201 would then have to
+/// unpick.
+pub struct OAuthAuth {
+    access_token: SecretString,
+    refresh_token: SecretString,
+    access_expires_at: DateTime<Utc>,
+    descriptor: AuthDescriptor,
+}
+
+impl OAuthAuth {
+    /// Construct an `OAuthAuth` from a freshly loaded token pair plus
+    /// its matching descriptor. Returns an
+    /// [`error_codes::OAUTH_DESCRIPTOR_MISMATCH`] if `descriptor` is
+    /// not the [`AuthDescriptor::OAuth`] variant — the guard makes it
+    /// impossible to accidentally wire a PAT descriptor to an OAuth
+    /// strategy on a round trip through storage.
+    ///
+    /// Token bytes are consumed by the two `into()` calls and are not
+    /// held in a named binding past this function; what survives is
+    /// the two [`SecretString`] fields.
+    pub fn new(
+        access_token: impl Into<String>,
+        refresh_token: impl Into<String>,
+        access_expires_at: DateTime<Utc>,
+        descriptor: AuthDescriptor,
+    ) -> Result<Self, DayseamError> {
+        if !matches!(&descriptor, AuthDescriptor::OAuth { .. }) {
+            return Err(DayseamError::InvalidConfig {
+                code: error_codes::OAUTH_DESCRIPTOR_MISMATCH.to_string(),
+                message: format!(
+                    "OAuthAuth requires AuthDescriptor::OAuth, got a different variant: {descriptor:?}"
+                ),
+            });
+        }
+        Ok(Self {
+            access_token: SecretString::new(access_token.into()),
+            refresh_token: SecretString::new(refresh_token.into()),
+            access_expires_at,
+            descriptor,
+        })
+    }
+
+    /// Whether the stored access token is past its `expires_at`
+    /// instant. Uses the provided `now` rather than [`Utc::now`] so
+    /// tests can exercise the boundary deterministically without
+    /// threading a `Clock` through the constructor — the DAY-201
+    /// refresh implementation is the right place to wire a real
+    /// [`crate::Clock`] in if needed.
+    fn is_expired(&self, now: DateTime<Utc>) -> bool {
+        now >= self.access_expires_at
+    }
+}
+
+// Manual Debug — derives would delegate to `SecretString`'s own
+// `Debug`, which already prints `***`; we also reference the fields
+// directly here so the compiler can't mistake them for dead code, and
+// so a future refactor that swaps either field's type back to a bare
+// `String` has to rewrite this impl rather than silently start
+// leaking tokens via `tracing` spans.
+impl std::fmt::Debug for OAuthAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("OAuthAuth")
+            .field("access_token", &self.access_token)
+            .field("refresh_token", &self.refresh_token)
+            .field("access_expires_at", &self.access_expires_at)
+            .field("descriptor", &self.descriptor)
+            .finish()
+    }
+}
+
+#[async_trait]
+impl AuthStrategy for OAuthAuth {
+    fn name(&self) -> &'static str {
+        "oauth2"
+    }
+
+    async fn authenticate(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::RequestBuilder, DayseamError> {
+        // DAY-200 scaffold: no refresh logic. DAY-201 will replace the
+        // conditional below with a call into `refresh_if_expired(&mut
+        // self, ...)`; the error path here is the short-term contract
+        // for "someone reached for a token this build can't refresh".
+        // Tests exercise both branches so the DAY-201 patch is a
+        // straight code swap, not a behaviour change.
+        if self.is_expired(Utc::now()) {
+            return Err(DayseamError::Auth {
+                code: error_codes::OAUTH_TOKEN_EXPIRED.to_string(),
+                message:
+                    "access token expired; automatic refresh is not yet wired in this SDK build"
+                        .to_string(),
+                retryable: false,
+                action_hint: Some("re-authenticate via the source's Reconnect flow".to_string()),
+            });
+        }
+        Ok(request.bearer_auth(self.access_token.expose()))
     }
 
     fn descriptor(&self) -> AuthDescriptor {
@@ -718,5 +919,262 @@ mod tests {
             BASE64_STANDARD.encode(format!("{email}:{token}"))
         );
         assert_eq!(header, expected);
+    }
+
+    // --------------------------------------------------------------
+    // DAY-200 — OAuthAuth scaffold
+    // --------------------------------------------------------------
+
+    use chrono::Duration as ChronoDuration;
+
+    fn sample_oauth_descriptor() -> AuthDescriptor {
+        AuthDescriptor::OAuth {
+            issuer: "https://login.microsoftonline.com/organizations/v2.0".into(),
+            client_id: "00000000-0000-0000-0000-000000000000".into(),
+            scopes: vec![
+                "offline_access".into(),
+                "Calendars.Read".into(),
+                "User.Read".into(),
+            ],
+            keychain_service: "dayseam.outlook".into(),
+            access_keychain_account: "user@contoso.com.oauth.access".into(),
+            refresh_keychain_account: "user@contoso.com.oauth.refresh".into(),
+        }
+    }
+
+    /// The happy path for the DAY-200 scaffold: an unexpired token
+    /// renders into a standard `Authorization: Bearer <token>` header.
+    /// `reqwest::RequestBuilder::bearer_auth` produces the canonical
+    /// spelling, so we just assert the output header value matches.
+    #[tokio::test]
+    async fn oauth_auth_attaches_bearer_when_not_expired() {
+        let strat = OAuthAuth::new(
+            "access-token-abc",
+            "refresh-token-xyz",
+            Utc::now() + ChronoDuration::hours(1),
+            sample_oauth_descriptor(),
+        )
+        .expect("valid descriptor");
+        let client = reqwest::Client::new();
+        let req = client.get("https://graph.microsoft.com/v1.0/me/calendar");
+        let out = strat.authenticate(req).await.expect("bearer attaches");
+        let built = out.build().expect("build");
+        assert_eq!(
+            built
+                .headers()
+                .get("Authorization")
+                .map(|v| v.to_str().unwrap()),
+            Some("Bearer access-token-abc"),
+            "expected canonical Bearer header from reqwest::bearer_auth"
+        );
+        assert_eq!(strat.name(), "oauth2");
+    }
+
+    /// The expired-token path returns a specific
+    /// [`error_codes::OAUTH_TOKEN_EXPIRED`] error. DAY-201 will swap
+    /// this branch for a refresh-then-bearer happy path, so pinning
+    /// the error code here means DAY-201's migration is a straight
+    /// substitution — the test breaks loudly if the replacement
+    /// accidentally changes the emitted code (e.g. to a
+    /// connector-specific one) without a matching UI copy update.
+    #[tokio::test]
+    async fn oauth_auth_errors_when_expired_with_stable_code() {
+        let strat = OAuthAuth::new(
+            "stale-access-token",
+            "refresh-token",
+            Utc::now() - ChronoDuration::seconds(1),
+            sample_oauth_descriptor(),
+        )
+        .expect("valid descriptor");
+        let client = reqwest::Client::new();
+        let err = strat
+            .authenticate(client.get("https://graph.microsoft.com/v1.0/me"))
+            .await
+            .expect_err("expired token must error");
+        match err {
+            DayseamError::Auth {
+                code,
+                retryable,
+                action_hint,
+                ..
+            } => {
+                assert_eq!(code, error_codes::OAUTH_TOKEN_EXPIRED);
+                assert!(
+                    !retryable,
+                    "an expired token is a re-auth trigger, not a retry"
+                );
+                assert!(
+                    action_hint.is_some(),
+                    "UI needs a non-empty action_hint to render the Reconnect card"
+                );
+            }
+            other => panic!("expected Auth variant, got {other:?}"),
+        }
+    }
+
+    /// Exactly-at-expiry is treated as expired (`now >=
+    /// access_expires_at`, not strictly greater-than), matching the
+    /// boundary Microsoft's `expires_in` field implies when the
+    /// token's second of grace has already ticked over.
+    #[tokio::test]
+    async fn oauth_auth_treats_exact_expiry_as_expired() {
+        let now = Utc::now();
+        let strat = OAuthAuth::new(
+            "token",
+            "refresh",
+            now, // exactly now — must be treated as expired
+            sample_oauth_descriptor(),
+        )
+        .expect("valid descriptor");
+        let client = reqwest::Client::new();
+        let err = strat
+            .authenticate(client.get("https://graph.microsoft.com/v1.0/me"))
+            .await
+            .expect_err("exact-expiry must error");
+        assert_eq!(err.code(), error_codes::OAUTH_TOKEN_EXPIRED);
+    }
+
+    /// `OAuthAuth::new` returns an [`error_codes::OAUTH_DESCRIPTOR_MISMATCH`]
+    /// error if handed a non-OAuth descriptor — the guard catches
+    /// orchestrator bugs where a PAT or Basic descriptor was
+    /// accidentally routed through the OAuth constructor on a round
+    /// trip through storage. Surfaced as `InvalidConfig` (a
+    /// programming error) rather than `Auth` (a user-facing credential
+    /// failure).
+    #[test]
+    fn oauth_auth_rejects_non_oauth_descriptors() {
+        for bad in [
+            AuthDescriptor::None,
+            AuthDescriptor::Pat {
+                keychain_service: "svc".into(),
+                keychain_account: "acct".into(),
+            },
+            AuthDescriptor::Basic {
+                email: "u@e.com".into(),
+                keychain_service: "svc".into(),
+                keychain_account: "acct".into(),
+            },
+        ] {
+            let err = OAuthAuth::new("a", "r", Utc::now() + ChronoDuration::hours(1), bad.clone())
+                .expect_err(&format!("expected rejection for {bad:?}"));
+            match err {
+                DayseamError::InvalidConfig { code, .. } => {
+                    assert_eq!(code, error_codes::OAUTH_DESCRIPTOR_MISMATCH);
+                }
+                other => panic!("expected InvalidConfig for {bad:?}, got {other:?}"),
+            }
+        }
+    }
+
+    /// `Debug` on `OAuthAuth` must redact both tokens — a regression
+    /// here would show up in every `tracing` span that carries an
+    /// `OAuthAuth` handle. The descriptor's non-secret fields
+    /// (`client_id`, `issuer`, keychain handles) are expected to
+    /// render; the access and refresh token *values* must not.
+    #[test]
+    fn oauth_auth_debug_does_not_leak_either_token() {
+        let strat = OAuthAuth::new(
+            "super-secret-access-token-value",
+            "super-secret-refresh-token-value",
+            Utc::now() + ChronoDuration::hours(1),
+            sample_oauth_descriptor(),
+        )
+        .expect("valid descriptor");
+        let rendered = format!("{strat:?}");
+        assert!(
+            !rendered.contains("super-secret-access-token-value"),
+            "access token leaked via Debug: {rendered}"
+        );
+        assert!(
+            !rendered.contains("super-secret-refresh-token-value"),
+            "refresh token leaked via Debug: {rendered}"
+        );
+        assert!(
+            rendered.contains("***"),
+            "missing redaction marker in: {rendered}"
+        );
+        // Descriptor fields are *not* secret — the public client_id
+        // shows in the consent-URL query string and is expected to
+        // render in debug output. If a future refactor moves
+        // client_id into the secret area, this assertion forces a
+        // conscious decision.
+        assert!(
+            rendered.contains("00000000-0000-0000-0000-000000000000"),
+            "descriptor's public client_id should still render: {rendered}"
+        );
+    }
+
+    /// Descriptor round-trip: an `OAuthAuth` built around a given
+    /// `AuthDescriptor::OAuth` round-trips into an equal descriptor
+    /// via `descriptor()`. DAY-201's refresh code will rebuild the
+    /// strategy from the descriptor alone plus the keychain rows it
+    /// points at, so this identity is load-bearing.
+    #[test]
+    fn oauth_auth_descriptor_round_trips() {
+        let desc = sample_oauth_descriptor();
+        let strat = OAuthAuth::new(
+            "a",
+            "r",
+            Utc::now() + ChronoDuration::hours(1),
+            desc.clone(),
+        )
+        .expect("valid descriptor");
+        assert_eq!(strat.descriptor(), desc);
+    }
+
+    /// Two `OAuthAuth` instances with the same descriptor but
+    /// different live tokens still round-trip into equal descriptors
+    /// — mirrors the `basic_auth_same_keychain_handle_produces_equal_descriptors`
+    /// invariant for the OAuth shape. The durable identity is the
+    /// descriptor; the tokens themselves are ephemeral.
+    #[test]
+    fn oauth_auth_same_descriptor_produces_equal_descriptors() {
+        let desc = sample_oauth_descriptor();
+        let a = OAuthAuth::new(
+            "access-A",
+            "refresh-A",
+            Utc::now() + ChronoDuration::hours(1),
+            desc.clone(),
+        )
+        .expect("a");
+        let b = OAuthAuth::new(
+            "access-B",
+            "refresh-B",
+            Utc::now() + ChronoDuration::hours(2),
+            desc.clone(),
+        )
+        .expect("b");
+        assert_eq!(
+            a.descriptor(),
+            b.descriptor(),
+            "same descriptor, different tokens ⇒ equal descriptor round-trip"
+        );
+    }
+
+    /// Two descriptors with different access accounts (e.g. two
+    /// Outlook connections for two different work users on the same
+    /// tenant) must serialise distinctly — without this guard, the
+    /// orchestrator's per-source secret-ref uniqueness check could
+    /// silently unify the rows and hand user-A's access token to
+    /// user-B's connector instance.
+    #[test]
+    fn oauth_auth_different_account_strings_stay_independent() {
+        let alice = AuthDescriptor::OAuth {
+            issuer: "https://login.microsoftonline.com/organizations/v2.0".into(),
+            client_id: "client-id".into(),
+            scopes: vec!["Calendars.Read".into()],
+            keychain_service: "dayseam.outlook".into(),
+            access_keychain_account: "alice@acme.com.oauth.access".into(),
+            refresh_keychain_account: "alice@acme.com.oauth.refresh".into(),
+        };
+        let bob = AuthDescriptor::OAuth {
+            issuer: "https://login.microsoftonline.com/organizations/v2.0".into(),
+            client_id: "client-id".into(),
+            scopes: vec!["Calendars.Read".into()],
+            keychain_service: "dayseam.outlook".into(),
+            access_keychain_account: "bob@acme.com.oauth.access".into(),
+            refresh_keychain_account: "bob@acme.com.oauth.refresh".into(),
+        };
+        assert_ne!(alice, bob);
     }
 }

@@ -17,6 +17,7 @@
 
 pub mod error;
 pub mod memory;
+pub mod oauth;
 pub mod secret;
 pub mod store;
 

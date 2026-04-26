@@ -6,8 +6,8 @@
 //! * [`SourceConnector`] — the trait connector crates implement.
 //! * [`SyncRequest`] / [`SyncResult`] / [`SyncStats`] / [`Checkpoint`] —
 //!   the shapes of a `sync` call.
-//! * [`AuthStrategy`] / [`PatAuth`] / [`BasicAuth`] / [`NoneAuth`] /
-//!   [`AuthDescriptor`] — durable per-source auth.
+//! * [`AuthStrategy`] / [`PatAuth`] / [`BasicAuth`] / [`OAuthAuth`] /
+//!   [`NoneAuth`] / [`AuthDescriptor`] — durable per-source auth.
 //! * [`ConnCtx`] — the per-run context threaded into every connector
 //!   call, carrying the run id, identity, progress/log senders, raw
 //!   store, clock, HTTP client, and cancellation token.
@@ -31,7 +31,7 @@ pub mod mock;
 pub mod raw_store;
 pub mod sync;
 
-pub use auth::{AuthDescriptor, AuthStrategy, BasicAuth, NoneAuth, PatAuth};
+pub use auth::{AuthDescriptor, AuthStrategy, BasicAuth, NoneAuth, OAuthAuth, PatAuth};
 pub use clock::{Clock, SystemClock};
 pub use connector::SourceConnector;
 pub use ctx::ConnCtx;

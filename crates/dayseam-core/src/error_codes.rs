@@ -501,6 +501,39 @@ pub const IPC_SHELL_URL_INVALID: &str = "ipc.shell.url_invalid";
 /// bubbles into a toast without retry.
 pub const IPC_SHELL_OPEN_FAILED: &str = "ipc.shell.open_failed";
 
+// -------- OAuth 2.0 (cross-connector) --------------------------------------
+//
+// Added in DAY-200 alongside `AuthDescriptor::OAuth` + `OAuthAuth`.
+// These codes sit outside any individual connector's prefix because
+// the strategy lives in `connectors-sdk` and will be shared across
+// future OAuth-using connectors (Outlook v0.9, Slack/Teams/Linear
+// post-v0.9). Connector-specific OAuth failures (admin-consent
+// rejection, tenant-policy scope downgrade, etc.) still get their
+// own `<connector>.oauth.*` codes so the UI can render
+// provider-specific help text — these cross-connector codes cover
+// the SDK-level invariants that have nothing to do with which IdP
+// is on the other end of the wire.
+
+/// The SDK's [`OAuthAuth::authenticate`] was asked to sign a request
+/// using a token whose `access_expires_at` is in the past, and the
+/// SDK build it's running in does not yet have refresh wired up.
+/// DAY-200 scaffold returns this; DAY-201 replaces the emitter with
+/// a real refresh flow, at which point this code only fires when
+/// *both* the access *and* refresh tokens are past their usable
+/// lifetime (the terminal re-auth condition). Surfaced as
+/// [`DayseamError::Auth`] with `retryable: false` so the UI
+/// immediately routes the user to a Reconnect card rather than a
+/// transient-looking toast.
+pub const OAUTH_TOKEN_EXPIRED: &str = "oauth.token_expired";
+
+/// The SDK's [`OAuthAuth::new`] was handed a descriptor that is not
+/// the [`AuthDescriptor::OAuth`] variant — a defensive guard that
+/// catches orchestrator bugs where a PAT or Basic descriptor is
+/// accidentally routed through the OAuth constructor on a round trip
+/// through storage. Surfaced as [`DayseamError::InvalidConfig`]
+/// because it's a programming error, not a user-facing failure.
+pub const OAUTH_DESCRIPTOR_MISMATCH: &str = "oauth.descriptor_mismatch";
+
 // -------- Database ---------------------------------------------------------
 
 /// `sqlx::migrate!` failed to apply a pending migration. Always fatal
@@ -579,6 +612,8 @@ pub const ALL: &[&str] = &[
     IPC_SHELL_URL_DISALLOWED,
     IPC_SHELL_URL_INVALID,
     IPC_SHELL_OPEN_FAILED,
+    OAUTH_TOKEN_EXPIRED,
+    OAUTH_DESCRIPTOR_MISMATCH,
     DB_SCHEMA_MIGRATION_FAILED,
 ];
 
