@@ -397,3 +397,43 @@ pub struct GithubValidationResult {
     /// dialog falls back to `login` when `None`.
     pub name: Option<String>,
 }
+
+/// Successful return shape of the `outlook_validate_credentials` IPC
+/// command (DAY-203). Mirrors the internal
+/// `connector_outlook::auth::OutlookUserInfo` but lives here because
+/// only `dayseam-core` types are routed through `ts-rs` (and the
+/// upstream struct intentionally does not implement `Serialize` to
+/// keep the walker crate free of IPC concerns).
+///
+/// The `AddOutlookSourceDialog` renders
+/// `display_name.unwrap_or(&user_principal_name)` in the "Signed in
+/// as …" confirmation ribbon and stashes `user_object_id` so the
+/// subsequent `outlook_sources_add` call can seed the
+/// [`crate::SourceIdentityKind::OutlookUserObjectId`] self-identity
+/// without a second `/me` round-trip. `(tenant_id, user_object_id)`
+/// is the stable anchor; the UPN can rebind (e.g. renamed mailbox)
+/// and is kept only for human-readable display and for the
+/// duplicate-source guard in DAY-203's
+/// `SourceRepo::find_by_outlook_identity`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct OutlookValidationResult {
+    /// AAD tenant GUID extracted from the access token's `tid`
+    /// claim. Stored on the [`SourceConfig::Outlook::tenant_id`]
+    /// field and used as the token endpoint's authority segment
+    /// (`/{tenant_id}/oauth2/v2.0/token`) on every refresh.
+    pub tenant_id: String,
+    /// User Principal Name returned by `GET /me` (e.g.
+    /// `"alice@contoso.com"`). Surfaced in the dialog's
+    /// confirmation ribbon and stored on
+    /// [`SourceConfig::Outlook::user_principal_name`].
+    pub user_principal_name: String,
+    /// Display name returned by `GET /me`. Optional — Graph may
+    /// omit it for service accounts or tenants that hide it.
+    pub display_name: Option<String>,
+    /// Immutable AAD object id returned by `GET /me`.`id`. Seeded
+    /// into `SourceIdentity` under
+    /// [`crate::SourceIdentityKind::OutlookUserObjectId`] so the
+    /// walker's self-filter survives a UPN rename.
+    pub user_object_id: String,
+}

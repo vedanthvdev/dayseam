@@ -1,7 +1,9 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use dayseam_db::LogRepo;
-use dayseam_desktop::ipc::{atlassian, broadcast_forwarder, commands, github, oauth, scheduler};
+use dayseam_desktop::ipc::{
+    atlassian, broadcast_forwarder, commands, github, oauth, outlook, scheduler,
+};
 use dayseam_desktop::state::AppState;
 use dayseam_desktop::{scheduler_task, startup, tracing_init};
 use tauri::menu::{AboutMetadataBuilder, MenuBuilder, MenuItemBuilder, SubmenuBuilder};
@@ -346,6 +348,8 @@ fn main() {
         oauth::oauth_begin_login,
         oauth::oauth_cancel_login,
         oauth::oauth_session_status,
+        outlook::outlook_validate_credentials,
+        outlook::outlook_sources_add,
         commands::dev_emit_toast,
         commands::dev_start_demo_run,
     ]);
@@ -390,6 +394,8 @@ fn main() {
         oauth::oauth_begin_login,
         oauth::oauth_cancel_login,
         oauth::oauth_session_status,
+        outlook::outlook_validate_credentials,
+        outlook::outlook_sources_add,
     ]);
 
     // DAY-149: switch from the one-shot `.run(context)` convenience

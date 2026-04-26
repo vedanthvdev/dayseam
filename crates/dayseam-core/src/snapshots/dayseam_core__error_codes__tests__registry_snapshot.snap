@@ -64,6 +64,11 @@ expression: ALL
 - ipc.local_repo.not_found
 - ipc.report_draft.not_found
 - ipc.source.config_kind_mismatch
+- ipc.outlook.session_not_found
+- ipc.outlook.session_not_ready
+- ipc.outlook.keychain_write_failed
+- ipc.outlook.tenant_unresolved
+- ipc.outlook.source_already_exists
 - ipc.sink.invalid_config
 - ipc.persons.invalid_display_name
 - ipc.shell.url_disallowed
@@ -84,6 +89,7 @@ expression: ALL
 - oauth.login.not_configured
 - outlook.auth.invalid_credentials
 - outlook.auth.missing_scope
+- outlook.consent_required
 - outlook.resource_not_found
 - outlook.rate_limited
 - outlook.upstream_5xx

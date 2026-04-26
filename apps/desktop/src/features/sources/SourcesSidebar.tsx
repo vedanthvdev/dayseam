@@ -65,6 +65,7 @@ import { AddLocalGitSourceDialog } from "./AddLocalGitSourceDialog";
 import { AddGitlabSourceDialog } from "./AddGitlabSourceDialog";
 import { AddAtlassianSourceDialog } from "./AddAtlassianSourceDialog";
 import { AddGithubSourceDialog } from "./AddGithubSourceDialog";
+import { AddOutlookSourceDialog } from "./AddOutlookSourceDialog";
 import { ApproveReposDialog } from "./ApproveReposDialog";
 import { SourceErrorCard } from "./SourceErrorCard";
 
@@ -160,6 +161,10 @@ function isGithub(source: Source): boolean {
   return "GitHub" in source.config;
 }
 
+function isOutlook(source: Source): boolean {
+  return "Outlook" in source.config;
+}
+
 
 export function SourcesSidebar({ reportActions }: SourcesSidebarProps = {}) {
   const { sources, loading, error, refresh, healthcheck, remove } = useSources();
@@ -242,6 +247,7 @@ export function SourcesSidebar({ reportActions }: SourcesSidebarProps = {}) {
   // detects that state itself and steps into Journey C.
   const [addAtlassianOpen, setAddAtlassianOpen] = useState(false);
   const [addGithubOpen, setAddGithubOpen] = useState(false);
+  const [addOutlookOpen, setAddOutlookOpen] = useState(false);
   // The two-option "Add source" menu. Closed by default; a click on
   // either item opens the relevant dialog and closes the menu.
   const [addMenuOpen, setAddMenuOpen] = useState(false);
@@ -279,6 +285,14 @@ export function SourcesSidebar({ reportActions }: SourcesSidebarProps = {}) {
   // both entry points.
   const editingGithub =
     editing !== null && isGithub(editing) ? editing : null;
+  // Outlook "edit" in v0.9 is reauthorize-only — the `(tenant_id,
+  // user_principal_name)` tuple is bound to the source identity rows
+  // from DAY-203, so "renaming" means deleting + re-adding. Same
+  // dialog handles both the ✎ chip and the Reconnect chip; the
+  // dialog detects reconnect mode when `reconnect.source` is set
+  // and flips its copy accordingly.
+  const editingOutlook =
+    editing !== null && isOutlook(editing) ? editing : null;
 
   const addMenuRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
@@ -362,6 +376,20 @@ export function SourcesSidebar({ reportActions }: SourcesSidebarProps = {}) {
     [healthcheck, refresh],
   );
 
+  const handleOutlookReconnected = useCallback(
+    (affectedId: string) => {
+      // The Outlook reconnect flow re-runs the whole OAuth loopback
+      // and, on success, rotates the two keychain rows backing the
+      // reconnected source. We fire a healthcheck immediately so the
+      // red chip clears rather than waiting for the next poll — the
+      // flow is identical to GitHub's single-source-per-token model.
+      void healthcheck(affectedId);
+      setEditing(null);
+      void refresh();
+    },
+    [healthcheck, refresh],
+  );
+
   const handleConfirmDelete = useCallback(async () => {
     if (!deleting) return;
     setDeleteInFlight(true);
@@ -424,6 +452,15 @@ export function SourcesSidebar({ reportActions }: SourcesSidebarProps = {}) {
       onClick: () => {
         setAddMenuOpen(false);
         setAddGithubOpen(true);
+      },
+    },
+    {
+      kind: "Outlook",
+      label: "Add Outlook calendar",
+      testId: "sources-add-menu-outlook",
+      onClick: () => {
+        setAddMenuOpen(false);
+        setAddOutlookOpen(true);
       },
     },
   ];
@@ -653,6 +690,25 @@ export function SourcesSidebar({ reportActions }: SourcesSidebarProps = {}) {
           // Reconnect mode resolves through `onReconnected`.
         }}
         onReconnected={handleGithubReconnected}
+      />
+
+      <AddOutlookSourceDialog
+        open={addOutlookOpen}
+        onClose={() => setAddOutlookOpen(false)}
+        onAdded={() => {
+          setAddOutlookOpen(false);
+          void refresh();
+        }}
+      />
+
+      <AddOutlookSourceDialog
+        open={editingOutlook !== null}
+        onClose={() => setEditing(null)}
+        reconnect={editingOutlook ? { source: editingOutlook } : null}
+        onAdded={() => {
+          // Reconnect mode resolves through `onReconnected`.
+        }}
+        onReconnected={handleOutlookReconnected}
       />
 
       {approving ? (

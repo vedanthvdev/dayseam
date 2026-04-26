@@ -1125,6 +1125,7 @@ dependencies = [
 name = "dayseam-desktop"
 version = "0.8.3"
 dependencies = [
+ "async-trait",
  "base64 0.22.1",
  "chrono",
  "connector-atlassian-common",

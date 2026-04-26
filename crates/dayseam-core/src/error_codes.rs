@@ -473,6 +473,52 @@ pub const IPC_GITHUB_INVALID_API_BASE_URL: &str = "ipc.github.invalid_api_base_u
 /// when this fires.
 pub const IPC_GITHUB_KEYCHAIN_WRITE_FAILED: &str = "ipc.github.keychain_write_failed";
 
+/// DAY-203. `outlook_validate_credentials` / `outlook_sources_add`
+/// was called with a session id the in-memory OAuth registry has
+/// no record of — either it was cancelled already, completed +
+/// consumed by a prior `outlook_sources_add` call, or never
+/// existed (a stale id carried in from a crashed dialog). Distinct
+/// from [`OAUTH_LOGIN_SESSION_NOT_FOUND`] so the UI can route to
+/// Outlook-specific "let's start over" copy instead of the generic
+/// sign-in timeout card. Surfaced as
+/// [`DayseamError::InvalidConfig`].
+pub const IPC_OUTLOOK_SESSION_NOT_FOUND: &str = "ipc.outlook.session_not_found";
+
+/// DAY-203. `outlook_validate_credentials` was called while the
+/// session is still `Pending` — the user clicked "Add source"
+/// before the IdP loopback callback arrived. The UI should only
+/// enable Validate/Add once `oauth_session_status` reports
+/// `Completed`, so this code is defensive against a dialog bug or
+/// a bespoke caller. Surfaced as [`DayseamError::InvalidConfig`].
+pub const IPC_OUTLOOK_SESSION_NOT_READY: &str = "ipc.outlook.session_not_ready";
+
+/// DAY-203. Writing the Outlook access or refresh token to the OS
+/// keychain failed. Same rollback-and-retry semantics as
+/// [`IPC_GITLAB_KEYCHAIN_WRITE_FAILED`]: `outlook_sources_add`
+/// tears down the partial keychain row and the partial DB row (if
+/// any) before returning, so a retry starts from a clean slate.
+pub const IPC_OUTLOOK_KEYCHAIN_WRITE_FAILED: &str = "ipc.outlook.keychain_write_failed";
+
+/// DAY-203. We could not read a non-empty `tid` claim out of the
+/// access token minted by the PKCE token-exchange — the JWT did
+/// not have three segments, the payload segment was not valid
+/// base64url, the decoded bytes were not JSON, or the JSON had no
+/// `tid` field. Every failure mode collapses here because the
+/// user-facing remediation is the same: retry the sign-in. See
+/// [`apps/desktop/src-tauri/src/ipc/outlook_jwt.rs`] for the
+/// detailed rationale. Surfaced as
+/// [`DayseamError::InvalidConfig`].
+pub const IPC_OUTLOOK_TENANT_UNRESOLVED: &str = "ipc.outlook.tenant_unresolved";
+
+/// DAY-203. `outlook_sources_add` was called for a
+/// `(tenant_id, user_principal_name)` tuple that already has a
+/// row in the `sources` table. The UI surfaces this as "This
+/// calendar is already connected" with a link to the existing
+/// source card rather than silently producing a duplicate that
+/// would race its twin on every sync. Surfaced as
+/// [`DayseamError::InvalidConfig`].
+pub const IPC_OUTLOOK_SOURCE_ALREADY_EXISTS: &str = "ipc.outlook.source_already_exists";
+
 /// `sinks_add` was called with a `config` whose body fails the IPC
 /// layer's structural check (e.g. a `MarkdownFile` sink with an
 /// empty `dest_dirs` list, a non-absolute path, or a path with `..`
@@ -680,6 +726,17 @@ pub const OUTLOOK_AUTH_INVALID_CREDENTIALS: &str = "outlook.auth.invalid_credent
 /// generic Reconnect chip.
 pub const OUTLOOK_AUTH_MISSING_SCOPE: &str = "outlook.auth.missing_scope";
 
+/// DAY-203. Azure AD rejected the sign-in because the tenant is
+/// configured to require admin-level consent for the app, and no
+/// admin has granted it yet. Surfaces on the `/authorize` callback
+/// as `error=consent_required` / `error=interaction_required` and
+/// is distinct from [`OUTLOOK_AUTH_MISSING_SCOPE`]: a missing scope
+/// means the user got a token the tenant then downgrades; consent
+/// required means the user never got any token at all. Surfaced as
+/// [`DayseamError::Auth`] so the dialog routes to the "contact
+/// your IT admin with this admin-consent link" copy.
+pub const OUTLOOK_CONSENT_REQUIRED: &str = "outlook.consent_required";
+
 /// Graph returned `404 Not Found` for a resource the connector
 /// expected to exist (most commonly a calendar that was deleted
 /// between this walk and the previous one). Distinct from the
@@ -797,6 +854,11 @@ pub const ALL: &[&str] = &[
     IPC_LOCAL_REPO_NOT_FOUND,
     IPC_REPORT_DRAFT_NOT_FOUND,
     IPC_SOURCE_CONFIG_KIND_MISMATCH,
+    IPC_OUTLOOK_SESSION_NOT_FOUND,
+    IPC_OUTLOOK_SESSION_NOT_READY,
+    IPC_OUTLOOK_KEYCHAIN_WRITE_FAILED,
+    IPC_OUTLOOK_TENANT_UNRESOLVED,
+    IPC_OUTLOOK_SOURCE_ALREADY_EXISTS,
     IPC_SINK_INVALID_CONFIG,
     IPC_INVALID_DISPLAY_NAME,
     IPC_SHELL_URL_DISALLOWED,
@@ -817,6 +879,7 @@ pub const ALL: &[&str] = &[
     OAUTH_LOGIN_NOT_CONFIGURED,
     OUTLOOK_AUTH_INVALID_CREDENTIALS,
     OUTLOOK_AUTH_MISSING_SCOPE,
+    OUTLOOK_CONSENT_REQUIRED,
     OUTLOOK_RESOURCE_NOT_FOUND,
     OUTLOOK_RATE_LIMITED,
     OUTLOOK_UPSTREAM_5XX,

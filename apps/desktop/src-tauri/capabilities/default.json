@@ -43,6 +43,8 @@
     "allow-oauth-begin-login",
     "allow-oauth-cancel-login",
     "allow-oauth-session-status",
+    "allow-outlook-validate-credentials",
+    "allow-outlook-sources-add",
     "dialog:allow-open"
   ]
 }

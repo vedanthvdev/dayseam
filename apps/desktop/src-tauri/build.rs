@@ -112,6 +112,8 @@ fn main() {
         "oauth_begin_login",
         "oauth_cancel_login",
         "oauth_session_status",
+        "outlook_validate_credentials",
+        "outlook_sources_add",
     ];
     const DEV_COMMANDS: &[&str] = &[
         "settings_get",
@@ -152,6 +154,8 @@ fn main() {
         "oauth_begin_login",
         "oauth_cancel_login",
         "oauth_session_status",
+        "outlook_validate_credentials",
+        "outlook_sources_add",
         "dev_emit_toast",
         "dev_start_demo_run",
     ];

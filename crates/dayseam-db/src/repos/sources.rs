@@ -202,6 +202,45 @@ impl SourceRepo {
         Ok(orphaned)
     }
 
+    /// Find the single `sources` row (if any) whose
+    /// `SourceConfig::Outlook` carries a matching `tenant_id` + UPN
+    /// pair. Used by DAY-203's `outlook_sources_add` to reject a
+    /// second add-attempt for a calendar already connected on this
+    /// device (two identical rows would double-count meetings in
+    /// every downstream report).
+    ///
+    /// Matches the `SourceConfig::Outlook` JSON shape directly via
+    /// SQLite's `json_extract`; `SourceConfig` serialises its variant
+    /// as `{"Outlook": { tenant_id, user_principal_name }}` so both
+    /// fields live under the `$.Outlook.*` path. Comparisons are
+    /// case-sensitive on `tenant_id` (a GUID) and case-insensitive
+    /// on `user_principal_name` (an email-shaped string; Microsoft
+    /// treats UPN case as cosmetic). Returns at most one row — the
+    /// rare case where two rows somehow share an identity (migration
+    /// bug, hand-edited DB) is treated as "the first hit wins" so
+    /// the caller's duplicate guard still fires.
+    pub async fn find_by_outlook_identity(
+        &self,
+        tenant_id: &str,
+        user_principal_name: &str,
+    ) -> DbResult<Option<Source>> {
+        let row = sqlx::query(
+            "SELECT id, kind, label, config_json, secret_ref, created_at, last_sync_at, last_health_json
+             FROM sources
+             WHERE kind = ?
+               AND json_extract(config_json, '$.Outlook.tenant_id') = ?
+               AND LOWER(json_extract(config_json, '$.Outlook.user_principal_name')) = LOWER(?)
+             LIMIT 1",
+        )
+        .bind(source_kind_to_db(&SourceKind::Outlook))
+        .bind(tenant_id)
+        .bind(user_principal_name)
+        .fetch_optional(&self.pool)
+        .await?;
+
+        row.map(row_to_source).transpose()
+    }
+
     /// Count `secrets` rows — here defined as distinct `secret_ref`
     /// JSON blobs currently referenced by at least one `sources` row.
     /// This is the positive counterpart that the DAY-81 orphan
