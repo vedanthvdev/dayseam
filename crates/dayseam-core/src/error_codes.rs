@@ -514,16 +514,19 @@ pub const IPC_SHELL_OPEN_FAILED: &str = "ipc.shell.open_failed";
 // the SDK-level invariants that have nothing to do with which IdP
 // is on the other end of the wire.
 
-/// The SDK's [`OAuthAuth::authenticate`] was asked to sign a request
-/// using a token whose `access_expires_at` is in the past, and the
-/// SDK build it's running in does not yet have refresh wired up.
-/// DAY-200 scaffold returns this; DAY-201 replaces the emitter with
-/// a real refresh flow, at which point this code only fires when
-/// *both* the access *and* refresh tokens are past their usable
-/// lifetime (the terminal re-auth condition). Surfaced as
-/// [`DayseamError::Auth`] with `retryable: false` so the UI
-/// immediately routes the user to a Reconnect card rather than a
-/// transient-looking toast.
+/// Reserved for the narrow post-DAY-201 case where an
+/// `OAuthAuth` handle is observed with an expired access token and
+/// **no refresh path can fire** — either the persister hasn't been
+/// wired yet on a freshly loaded strategy, or a test has
+/// deliberately constructed an `OAuthAuth` without a refresh
+/// endpoint to exercise the terminal branch. In the normal DAY-201
+/// flow, `OAuthAuth::authenticate` first calls
+/// `refresh_if_expired`, which either succeeds (no error emitted)
+/// or fails with [`OAUTH_REFRESH_REJECTED`] (terminal re-auth
+/// condition). This code stays in the registry because the
+/// `insta` snapshot anchors a stable contract for the UI copy —
+/// removing it later would be a breaking change for any consumer
+/// that had code paths bound to it.
 pub const OAUTH_TOKEN_EXPIRED: &str = "oauth.token_expired";
 
 /// The SDK's [`OAuthAuth::new`] was handed a descriptor that is not
@@ -533,6 +536,33 @@ pub const OAUTH_TOKEN_EXPIRED: &str = "oauth.token_expired";
 /// through storage. Surfaced as [`DayseamError::InvalidConfig`]
 /// because it's a programming error, not a user-facing failure.
 pub const OAUTH_DESCRIPTOR_MISMATCH: &str = "oauth.descriptor_mismatch";
+
+/// The OAuth token endpoint rejected our refresh-token request with
+/// `invalid_grant` (or an equivalent 4xx that IdP's grammar says is
+/// terminal). The refresh token is dead — the user consented a
+/// while ago, has since revoked the app, rotated their password, or
+/// the tenant admin removed the consent. DAY-201 surfaces this as
+/// [`DayseamError::Auth`] with `retryable: false` and an
+/// `action_hint` pointing at the Reconnect flow. Distinct from
+/// [`OAUTH_TOKEN_EXPIRED`]: that one means "the access token expired
+/// but we still have a refresh we just haven't spent yet"; this one
+/// means "we tried to spend the refresh and the IdP said no".
+pub const OAUTH_REFRESH_REJECTED: &str = "oauth.refresh_rejected";
+
+/// A refresh response came back `200 OK` but the `scope` field in
+/// the JSON was a *subset* of the scopes we originally consented to.
+/// Microsoft Graph and other IdPs do this when a tenant admin
+/// tightens the app's permission grant between consent and refresh:
+/// the refresh succeeds, but the new access token can no longer do
+/// what the connector was built around. DAY-201 does **not** treat
+/// this as fatal at refresh time (we still hand back the narrower
+/// token so an in-flight sync can finish what it was doing);
+/// instead the orchestrator compares the granted-scope set with the
+/// connector's declared requirement and, if the intersection is
+/// short, surfaces a non-fatal reconnect nudge to the user on the
+/// next sync boundary. The code is defined here so the refresh path
+/// and the orchestrator can bind against the same string.
+pub const OAUTH_SCOPE_DOWNGRADED: &str = "oauth.scope_downgraded";
 
 // -------- Database ---------------------------------------------------------
 
@@ -614,6 +644,8 @@ pub const ALL: &[&str] = &[
     IPC_SHELL_OPEN_FAILED,
     OAUTH_TOKEN_EXPIRED,
     OAUTH_DESCRIPTOR_MISMATCH,
+    OAUTH_REFRESH_REJECTED,
+    OAUTH_SCOPE_DOWNGRADED,
     DB_SCHEMA_MIGRATION_FAILED,
 ];
 

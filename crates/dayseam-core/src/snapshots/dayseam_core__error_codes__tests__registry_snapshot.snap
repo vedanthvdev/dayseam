@@ -71,4 +71,6 @@ expression: ALL
 - ipc.shell.open_failed
 - oauth.token_expired
 - oauth.descriptor_mismatch
+- oauth.refresh_rejected
+- oauth.scope_downgraded
 - db.schema.migration_failed

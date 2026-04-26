@@ -36,6 +36,14 @@ rand = "0.8"
 # `connector-atlassian-common` (DAY-75) will need for its
 # `cloudId` discovery path.
 base64 = "0.22"
+# DAY-201. PKCE S256 code-challenge derivation needs a SHA-256
+# primitive on the SDK's stack frame (not on the token endpoint's):
+# the verifier is generated locally, hashed locally, and only the
+# challenge leaves the process. `sha2` is the standard RustCrypto
+# implementation and is already pulled in transitively by
+# `reqwest`'s rustls stack, so this is an existing graph node
+# surfaced by name rather than a new dependency.
+sha2 = "0.10"
 # `zeroize` here is deliberately pulled in directly rather than via
 # `dayseam-secrets`. The layering test in tests/no_cross_crate_leak.rs
 # forbids connectors-sdk from depending on dayseam-secrets; we still
