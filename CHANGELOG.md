@@ -130,6 +130,33 @@ release's chore commit from master's linear history; v0.8.1's
 
 ### Changed
 
+- **DAY-171: Marketing site is no longer in this monorepo.**
+  `dayseam/dayseam.github.io` is now the canonical home of the
+  public Astro site; `apps/website/` has been removed from this
+  repo. The short version of the split is logistical: GitHub Pages
+  only serves the org-root URL `https://dayseam.github.io/` from a
+  repo named literally `dayseam.github.io`, so the site has to
+  live in that repo anyway. DAY-169's proposed two-repo mirror
+  architecture (rsync from here into the Pages repo on every
+  `master` push that touched `apps/website/**`) is superseded by
+  this change — the Pages repo is already fully self-contained
+  (its own `deploy.yml`, its own `package.json`, the fixed
+  `SITE_URL=https://dayseam.github.io` canonical URL, and the
+  standalone-flavoured README and CREDITS), so keeping a
+  duplicate copy here would just be two places to edit the same
+  code and one cross-repo PAT to rotate for no benefit. The
+  `Build website (astro build)` step has been removed from
+  `.github/workflows/ci.yml` along with the `@dayseam/website`
+  package, the workspace automatically drops from
+  `pnpm-workspace.yaml`'s `apps/*` glob, and PR #167 (DAY-169,
+  two-repo mirror) has been closed as superseded. Contributors
+  wanting to change the site should open PRs against
+  `dayseam/dayseam.github.io` directly from now on. The
+  `ConnectorLogo.tsx` brand-colour comment still pins the
+  palette to the site's own `connectors.ts`; they remain
+  hand-synced across the two repos until an eventual
+  `@dayseam/ui` can ship to both places.
+
 - **DAY-170: Sources sidebar now owns report-generation.** The
   separate `ActionRow` section (date picker + duplicate source
   toggles + Generate button) has been removed and folded into

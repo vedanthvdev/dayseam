@@ -86,15 +86,12 @@ jobs:
         run: pnpm -r typecheck
       - name: Test
         run: pnpm --recursive --if-present run test
-      # DAY-166. Running `astro check` under `pnpm -r typecheck` only
-      # exercises TypeScript; a full `astro build` is what catches
-      # Vite/Rollup-level regressions (missing public assets, invalid
-      # SSR/island boundaries, framer-motion tree-shake breakages) at
-      # PR time rather than once we're trying to deploy. The step is
-      # cheap (~2s on a warm cache) and gated to the marketing-site
-      # package so it does not block on the desktop crate build.
-      - name: Build website (astro build)
-        run: pnpm --filter @dayseam/website build
+      # DAY-171 removed the former "Build website (astro build)" step.
+      # The marketing site no longer lives in this monorepo — its
+      # canonical home is now `dayseam/dayseam.github.io`, which runs
+      # `astro check && astro build` in its own deploy workflow on
+      # every push to `main`. A duplicate astro build here would only
+      # guard code this repo no longer owns.
 
   # Release-engineering shell tests. These exercise the helpers the
   # release workflow depends on (version bumping, PREV resolution,

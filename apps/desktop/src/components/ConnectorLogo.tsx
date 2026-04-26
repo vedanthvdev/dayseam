@@ -65,7 +65,14 @@ interface MarkDef {
 // service's own dark-mode / light-mode renderings so a user who
 // recognises the brand anywhere else in their day recognises it here.
 //
-// Colour policy, matching `apps/website/src/data/connectors.ts`:
+// Colour policy, intentionally aligned with the marketing site's own
+// connector grid (canonical home: dayseam/dayseam.github.io under
+// `src/data/connectors.ts`). The two files duplicate the per-connector
+// hexes on purpose — the site ships standalone from GitHub Pages so
+// pulling them into a shared package would require a published
+// `@dayseam/ui` that the Pages repo can install. When Simple Icons
+// upstream a brand tweak, change both repos in the same change set;
+// there is no CI gate spanning the two today.
 // - GitHub:     #24292F / #F0F6FC — GitHub's own fg for each surface.
 // - GitLab:     #FC6D26 / #FC6D26 — canonical tangerine, legible on
 //               both light and dark backgrounds without substitution.
