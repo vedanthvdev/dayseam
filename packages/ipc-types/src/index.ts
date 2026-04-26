@@ -33,6 +33,7 @@ export type { SecretRef } from "./generated/SecretRef";
 export type { GitlabValidationResult } from "./generated/GitlabValidationResult";
 export type { AtlassianValidationResult } from "./generated/AtlassianValidationResult";
 export type { GithubValidationResult } from "./generated/GithubValidationResult";
+export type { OutlookValidationResult } from "./generated/OutlookValidationResult";
 export {
   GITLAB_ERROR_CODES,
   type GitlabErrorCode,
@@ -45,6 +46,10 @@ export {
   GITHUB_ERROR_CODES,
   type GithubErrorCode,
 } from "./generated/githubErrorCodes";
+export {
+  OUTLOOK_ERROR_CODES,
+  type OutlookErrorCode,
+} from "./generated/outlookErrorCodes";
 
 export type { Sink } from "./generated/Sink";
 export type { SinkCapabilities } from "./generated/SinkCapabilities";
@@ -134,6 +139,7 @@ import type { ActivityEvent as ActivityEventT } from "./generated/ActivityEvent"
 import type { GitlabValidationResult as GitlabValidationResultT } from "./generated/GitlabValidationResult";
 import type { AtlassianValidationResult as AtlassianValidationResultT } from "./generated/AtlassianValidationResult";
 import type { GithubValidationResult as GithubValidationResultT } from "./generated/GithubValidationResult";
+import type { OutlookValidationResult as OutlookValidationResultT } from "./generated/OutlookValidationResult";
 import type { SecretRef as SecretRefT } from "./generated/SecretRef";
 import type { ScheduleConfig as ScheduleConfigT } from "./generated/ScheduleConfig";
 import type { OAuthSessionId as OAuthSessionIdT } from "./generated/OAuthSessionId";
@@ -456,6 +462,32 @@ export interface Commands {
     args: { sessionId: OAuthSessionIdT };
     result: OAuthSessionViewT | null;
   };
+  /** DAY-203. Validate a freshly completed Outlook OAuth session
+   *  without consuming it. Reads the access token out of the in-
+   *  memory registry, extracts the tenant id from the JWT, and calls
+   *  `GET /me` on Microsoft Graph. Returns the tuple the add-source
+   *  dialog renders in the "Signed in as …" confirmation ribbon and
+   *  stashes for the subsequent `outlook_sources_add` call. Non-
+   *  consuming so the user can retry validate independently of
+   *  committing the source — a transient Graph outage between
+   *  Validate and Add shouldn't invalidate the consent. */
+  outlook_validate_credentials: {
+    args: { sessionId: OAuthSessionIdT };
+    result: OutlookValidationResultT;
+  };
+  /** DAY-203. Persist a new Outlook calendar source in one round-
+   *  trip. Re-validates the session (defensive against a client
+   *  skipping the Validate step), rejects `(tenantId, upn)` pairs
+   *  that already exist, writes the access/refresh token pair into
+   *  the Keychain, and inserts the `sources` row + matching
+   *  `source_identities` rows. Consumes the session on success so
+   *  the tokens never linger in the in-memory registry longer than
+   *  the user's commit boundary. Returns the freshly-inserted
+   *  `Source`. */
+  outlook_sources_add: {
+    args: { sessionId: OAuthSessionIdT; label: string };
+    result: SourceT;
+  };
   /** Dev-only. Compiled out of release builds via `cfg(feature = "dev-commands")`. */
   dev_emit_toast: {
     args: { event: ToastEvent };
@@ -520,6 +552,8 @@ export const PROD_COMMANDS: readonly CommandName[] = [
   "oauth_begin_login",
   "oauth_cancel_login",
   "oauth_session_status",
+  "outlook_validate_credentials",
+  "outlook_sources_add",
 ] as const;
 
 /** Dev-only command identifiers. Gated behind the Rust

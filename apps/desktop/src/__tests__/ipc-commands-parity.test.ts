@@ -88,6 +88,8 @@ const commandSurface: Record<keyof Commands, true> = {
   oauth_begin_login: true,
   oauth_cancel_login: true,
   oauth_session_status: true,
+  outlook_validate_credentials: true,
+  outlook_sources_add: true,
   dev_emit_toast: true,
   dev_start_demo_run: true,
 };

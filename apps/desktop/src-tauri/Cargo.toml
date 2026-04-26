@@ -112,6 +112,21 @@ rand = "0.8"
 # accidental second reqwest copy with a different TLS backend.
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 serde = { workspace = true }
+# DAY-203. `ipc::outlook_jwt::extract_tid` base64url-decodes the
+# middle segment of a JWS-packed access token to read `tid` out of
+# the payload. We chose manual decode + `serde_json` over adding a
+# `jsonwebtoken` crate (the token we parse is one we just exchanged
+# through our own OAuth flow, so signature verification would only
+# be re-validating ourselves against a public Microsoft key). Pinned
+# at 0.22 to match the existing `dev-dependencies` row below so
+# promoting this to a runtime dep doesn't double the lockfile entry.
+base64 = "0.22"
+# DAY-203. `oauth_persister::KeychainTokenPersister` implements
+# `connectors_sdk::TokenPersister`, whose trait method uses the
+# `#[async_trait::async_trait]` macro. Using the same macro on our
+# impl is the only way the trait's lifetime-erased `'async_trait`
+# sugar matches. Shared version row with the rest of the workspace.
+async-trait = { workspace = true }
 # `IpcSecretString` zeroes PAT bytes on drop so a dropped dialog (or a
 # command that returns an error) cannot leave the PAT living in the
 # freed IPC buffer until whatever writes over it next. The
@@ -179,12 +194,10 @@ connectors-sdk = { path = "../../../crates/connectors-sdk" }
 # `tauri-plugin-updater`.
 minisign = "0.9"
 minisign-verify = "0.2"
-# Used only by `tests/updater_signature.rs` to base64-decode the
-# wrapped pubkey field in `tauri.conf.json` before handing the
-# inner key to `minisign-verify`. Pinned at 0.22 to match the
-# version `tauri-plugin-updater` already pulls into the lockfile,
-# so adding this dev-dep does not introduce a second base64 codegen.
-base64 = "0.22"
+# Note: `base64` is promoted to a runtime dependency above (DAY-203)
+# because `ipc::outlook_jwt` needs to decode JWT segments from the
+# access token. Dev tests that used to pull it in here (updater
+# signature round-trip) inherit that same crate entry.
 
 [features]
 # `custom-protocol` wires in Tauri's custom-protocol flag for release

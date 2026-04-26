@@ -278,6 +278,80 @@ async fn deleting_source_with_no_secret_ref_returns_none() {
 }
 
 #[tokio::test]
+async fn find_by_outlook_identity_matches_on_tenant_and_upn() {
+    // DAY-203 duplicate guard. `outlook_sources_add` calls this
+    // method to reject a second add-attempt for a calendar that is
+    // already connected on this device; a miss here would let two
+    // rows for the same mailbox sail through, doubling every
+    // subsequent meeting in reports.
+    let (pool, _dir) = test_pool().await;
+    let repo = SourceRepo::new(pool.clone());
+
+    let mut outlook = fixture_source();
+    outlook.id = Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap();
+    outlook.kind = SourceKind::Outlook;
+    outlook.label = "Outlook — vedanth".into();
+    outlook.config = SourceConfig::Outlook {
+        tenant_id: "00000000-0000-0000-0000-000000000000".into(),
+        user_principal_name: "Vedanth@Contoso.com".into(),
+    };
+    outlook.secret_ref = Some(SecretRef {
+        keychain_service: "dayseam.outlook".into(),
+        keychain_account: format!("source:{}", outlook.id),
+    });
+    repo.insert(&outlook).await.unwrap();
+
+    let hit = repo
+        .find_by_outlook_identity(
+            "00000000-0000-0000-0000-000000000000",
+            "vedanth@contoso.com",
+        )
+        .await
+        .unwrap()
+        .expect("case-insensitive UPN match finds the existing row");
+    assert_eq!(hit.id, outlook.id);
+
+    // Different tenant → miss (same UPN across tenants is a
+    // legitimate configuration; users with two work accounts on
+    // distinct tenants must be able to add both).
+    let miss_tenant = repo
+        .find_by_outlook_identity(
+            "11111111-1111-1111-1111-111111111111",
+            "vedanth@contoso.com",
+        )
+        .await
+        .unwrap();
+    assert!(miss_tenant.is_none());
+
+    // Different UPN → miss.
+    let miss_upn = repo
+        .find_by_outlook_identity(
+            "00000000-0000-0000-0000-000000000000",
+            "someone-else@contoso.com",
+        )
+        .await
+        .unwrap();
+    assert!(miss_upn.is_none());
+}
+
+#[tokio::test]
+async fn find_by_outlook_identity_does_not_match_non_outlook_rows() {
+    // A GitLab row whose JSON config happens to carry the string
+    // `tenant_id` (it does not, but the query must be kind-aware
+    // regardless so a future config shape cannot accidentally
+    // collide).
+    let (pool, _dir) = test_pool().await;
+    let repo = SourceRepo::new(pool.clone());
+    let gitlab = fixture_source();
+    repo.insert(&gitlab).await.unwrap();
+    let miss = repo
+        .find_by_outlook_identity("anything", "anything@example.com")
+        .await
+        .unwrap();
+    assert!(miss.is_none());
+}
+
+#[tokio::test]
 async fn deleting_nonexistent_source_is_a_no_op() {
     // Safety net — a stray `sources_delete` IPC call for an id that
     // the UI raced past a concurrent remove must not synthesize a

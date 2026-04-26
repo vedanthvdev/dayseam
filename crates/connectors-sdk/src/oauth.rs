@@ -180,6 +180,29 @@ pub struct TokenPair {
     pub granted_scopes: Vec<String>,
 }
 
+impl TokenPair {
+    /// Construct a [`TokenPair`] outside this crate. The struct is
+    /// `#[non_exhaustive]` so callers (e.g. the desktop
+    /// `build_source_auth` path that rehydrates tokens from the
+    /// Keychain, or unit tests that fake a pair into the session
+    /// registry) would otherwise have no way to make one. Adding new
+    /// fields stays source-compatible because this constructor owns
+    /// the full field list.
+    pub fn new(
+        access_token: impl Into<String>,
+        refresh_token: impl Into<String>,
+        access_expires_at: DateTime<Utc>,
+        granted_scopes: Vec<String>,
+    ) -> Self {
+        Self {
+            access_token: access_token.into(),
+            refresh_token: refresh_token.into(),
+            access_expires_at,
+            granted_scopes,
+        }
+    }
+}
+
 /// Callback shape for persisting a freshly refreshed token pair back
 /// to the OS keychain (or whatever durable store the orchestrator
 /// wires in). Lives here in `connectors-sdk` so the SDK can call it

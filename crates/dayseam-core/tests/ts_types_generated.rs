@@ -18,13 +18,13 @@ use dayseam_core::{
     error_codes, ActivityEvent, ActivityKind, Actor, Artifact, ArtifactId, ArtifactKind,
     ArtifactPayload, AtlassianValidationResult, DayseamError, EntityRef, Evidence,
     GithubValidationResult, GitlabValidationResult, Identity, Link, LocalRepo, LogEntry, LogEvent,
-    LogLevel, OAuthSessionId, OAuthSessionStatus, OAuthSessionView, PerSourceState, Person,
-    Privacy, ProgressEvent, ProgressPhase, RawRef, RenderedBullet, RenderedSection,
-    ReportCompletedEvent, ReportDraft, RunId, RunStatus, ScheduleConfig, SecretRef, Settings,
-    SettingsPatch, Sink, SinkCapabilities, SinkConfig, SinkKind, Source, SourceConfig,
-    SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind, SourcePatch, SourceRunState,
-    SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger, ThemePreference, ToastEvent,
-    ToastSeverity, WriteReceipt,
+    LogLevel, OAuthSessionId, OAuthSessionStatus, OAuthSessionView, OutlookValidationResult,
+    PerSourceState, Person, Privacy, ProgressEvent, ProgressPhase, RawRef, RenderedBullet,
+    RenderedSection, ReportCompletedEvent, ReportDraft, RunId, RunStatus, ScheduleConfig,
+    SecretRef, Settings, SettingsPatch, Sink, SinkCapabilities, SinkConfig, SinkKind, Source,
+    SourceConfig, SourceHealth, SourceIdentity, SourceIdentityKind, SourceKind, SourcePatch,
+    SourceRunState, SyncRun, SyncRunCancelReason, SyncRunStatus, SyncRunTrigger, ThemePreference,
+    ToastEvent, ToastSeverity, WriteReceipt,
 };
 use ts_rs::{Config, TS};
 
@@ -67,6 +67,7 @@ fn export_all(out_dir: &Path) {
     GitlabValidationResult::export_all(&cfg).expect("export GitlabValidationResult");
     AtlassianValidationResult::export_all(&cfg).expect("export AtlassianValidationResult");
     GithubValidationResult::export_all(&cfg).expect("export GithubValidationResult");
+    OutlookValidationResult::export_all(&cfg).expect("export OutlookValidationResult");
 
     Sink::export_all(&cfg).expect("export Sink");
     SinkKind::export_all(&cfg).expect("export SinkKind");
@@ -112,6 +113,7 @@ fn export_all(out_dir: &Path) {
     export_gitlab_error_codes(out_dir);
     export_atlassian_error_codes(out_dir);
     export_github_error_codes(out_dir);
+    export_outlook_error_codes(out_dir);
 }
 
 /// Regenerate `gitlabErrorCodes.ts` so the frontend parity test always sees
@@ -206,6 +208,48 @@ fn export_github_error_codes(out_dir: &std::path::Path) {
     body.push_str("] as const;\n\n");
     body.push_str("export type GithubErrorCode = (typeof GITHUB_ERROR_CODES)[number];\n");
     std::fs::write(out_dir.join("githubErrorCodes.ts"), body).expect("write githubErrorCodes.ts");
+}
+
+/// Regenerate `outlookErrorCodes.ts` with every `outlook.*` and
+/// `ipc.outlook.*` code from `error_codes::ALL`. DAY-203 splits the
+/// Outlook error surface across two prefixes:
+///
+/// * `outlook.*` — failures observed by the walker or the one-shot
+///   Graph probe (auth, scope, admin-consent, transport, shape drift).
+/// * `ipc.outlook.*` — failures observed by the IPC validate / add
+///   commands before the network even opens (session not found /
+///   not ready, keychain write failed, tenant not resolvable from
+///   the JWT, duplicate source).
+///
+/// `AddOutlookSourceDialog` and `SourceErrorCard` share this list
+/// through `outlookErrorCopy`, whose parity test fails the moment
+/// the Rust registry grows without a matching copy entry. The two
+/// prefixes are filtered independently and unioned so a future
+/// `outlook.graph.*` sub-family drops in without a second regex.
+fn export_outlook_error_codes(out_dir: &std::path::Path) {
+    let codes: Vec<&str> = error_codes::ALL
+        .iter()
+        .copied()
+        .filter(|c| c.starts_with("outlook.") || c.starts_with("ipc.outlook."))
+        .collect();
+    let mut body = String::new();
+    body.push_str("// AUTO-GENERATED FILE. Do not edit by hand.\n");
+    body.push_str(
+        "// Regenerated from `dayseam_core::error_codes::ALL` by the\n\
+         // `ts_types_generated` test. Includes every `outlook.*` and\n\
+         // `ipc.outlook.*` code — the two-prefix split DAY-203 uses\n\
+         // for walker/Graph-probe vs. pre-network IPC failures. Add\n\
+         // the copy entry in\n\
+         // `src/features/sources/outlookErrorCopy.ts` whenever this\n\
+         // list grows, otherwise the frontend parity test fails.\n\n",
+    );
+    body.push_str("export const OUTLOOK_ERROR_CODES = [\n");
+    for code in &codes {
+        body.push_str(&format!("  \"{code}\",\n"));
+    }
+    body.push_str("] as const;\n\n");
+    body.push_str("export type OutlookErrorCode = (typeof OUTLOOK_ERROR_CODES)[number];\n");
+    std::fs::write(out_dir.join("outlookErrorCodes.ts"), body).expect("write outlookErrorCodes.ts");
 }
 
 fn repo_root() -> PathBuf {

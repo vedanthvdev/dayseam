@@ -106,6 +106,8 @@ pub const PROD_COMMANDS: &[&str] = &[
     "oauth_begin_login",
     "oauth_cancel_login",
     "oauth_session_status",
+    "outlook_validate_credentials",
+    "outlook_sources_add",
 ];
 
 /// Dev-only Tauri command identifiers. Compiled in only when the
@@ -467,21 +469,126 @@ pub(crate) fn build_source_auth(
                 secret_ref.keychain_account.clone(),
             )))
         }
-        // DAY-202 scaffold: the Outlook connector crate lands here;
-        // the Add-Source IPC (`outlook_sources_add`) and the
-        // `OAuthAuth` persister plumbing that will hand tokens back to
-        // this arm land in DAY-203. Until then no Outlook row can be
-        // produced (`SourceConfig::Outlook` has no IPC constructor
-        // yet), so reaching this arm means either a hand-crafted DB
-        // row or a stale image — report it as a programming error so
-        // the failure is loud.
-        SourceKind::Outlook => Err(DayseamError::Internal {
-            code: "ipc.outlook.not_yet_implemented".to_string(),
-            message: format!(
-                "Outlook source {} reached build_source_auth before the DAY-203 IPC layer landed — rebuild from tip of master",
-                source.id
-            ),
-        }),
+        // DAY-203. Outlook reads *two* keychain rows — access and
+        // refresh — both under `dayseam.outlook`. We don't persist
+        // the exact account strings on the `sources` row (there's
+        // no dedicated column for a second keychain slot); instead
+        // the two accounts are derived from the stable source id
+        // via [`outlook_access_account`] / [`outlook_refresh_account`],
+        // and the `AuthDescriptor::OAuth` is reconstructed on every
+        // read from the `SourceConfig::Outlook::tenant_id` plus the
+        // compiled-in `PROVIDER_MICROSOFT_OUTLOOK` config. The
+        // rebuilt `OAuthAuth` is wired to a
+        // [`KeychainTokenPersister`] so any post-refresh rotation
+        // writes both keychain rows in lockstep (see the
+        // `persist_pair` contract in `oauth_persister`).
+        SourceKind::Outlook => {
+            let tenant_id = match &source.config {
+                SourceConfig::Outlook { tenant_id, .. } => tenant_id.clone(),
+                other => {
+                    return Err(DayseamError::Internal {
+                        code: "ipc.sources.kind_config_mismatch".to_string(),
+                        message: format!(
+                            "source {} has kind Outlook but config {:?}",
+                            source.id,
+                            other.kind()
+                        ),
+                    });
+                }
+            };
+
+            let access_account = crate::ipc::outlook::outlook_access_account(source.id);
+            let refresh_account = crate::ipc::outlook::outlook_refresh_account(source.id);
+
+            let access_secret = dayseam_secrets::oauth::get_access_token(
+                state.secrets.as_ref(),
+                crate::ipc::outlook::OUTLOOK_KEYCHAIN_SERVICE,
+                &access_account,
+            )
+            .map_err(|e| DayseamError::Internal {
+                code: "ipc.outlook.keychain_read_failed".to_string(),
+                message: format!("keychain read for {access_account} failed: {e}"),
+            })?
+            .ok_or_else(|| DayseamError::Auth {
+                code: error_codes::OUTLOOK_AUTH_INVALID_CREDENTIALS.to_string(),
+                message: format!(
+                    "keychain slot {} is empty for Outlook source {} — reconnect to re-authorize",
+                    access_account, source.id
+                ),
+                retryable: false,
+                action_hint: Some("reconnect".to_string()),
+            })?;
+            let refresh_secret = dayseam_secrets::oauth::get_refresh_token(
+                state.secrets.as_ref(),
+                crate::ipc::outlook::OUTLOOK_KEYCHAIN_SERVICE,
+                &refresh_account,
+            )
+            .map_err(|e| DayseamError::Internal {
+                code: "ipc.outlook.keychain_read_failed".to_string(),
+                message: format!("keychain read for {refresh_account} failed: {e}"),
+            })?
+            .ok_or_else(|| DayseamError::Auth {
+                code: error_codes::OUTLOOK_AUTH_INVALID_CREDENTIALS.to_string(),
+                message: format!(
+                    "keychain slot {} is empty for Outlook source {} — reconnect to re-authorize",
+                    refresh_account, source.id
+                ),
+                retryable: false,
+                action_hint: Some("reconnect".to_string()),
+            })?;
+
+            let provider = crate::oauth_config::lookup_provider(
+                crate::oauth_config::PROVIDER_MICROSOFT_OUTLOOK,
+            )?;
+            let descriptor = connectors_sdk::AuthDescriptor::OAuth {
+                issuer: format!("https://login.microsoftonline.com/{tenant_id}/v2.0"),
+                client_id: provider.client_id.clone(),
+                scopes: provider.scopes.clone(),
+                keychain_service: crate::ipc::outlook::OUTLOOK_KEYCHAIN_SERVICE.to_string(),
+                access_keychain_account: access_account.clone(),
+                refresh_keychain_account: refresh_account.clone(),
+            };
+            let token_endpoint =
+                format!("https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token");
+
+            // `OAuthAuth::refresh_if_expired` triggers `persist_pair`
+            // on any successful rotation. Wiring the desktop's
+            // keychain-backed persister here means the Keychain
+            // and in-memory state never drift, even if the app is
+            // killed between the Graph refresh reply and the next
+            // `build_source_auth`.
+            let persister: connectors_sdk::SharedPersister =
+                Arc::new(crate::oauth_persister::KeychainTokenPersister::new(
+                    Arc::clone(&state.secrets),
+                    crate::ipc::outlook::OUTLOOK_KEYCHAIN_SERVICE,
+                    access_account.clone(),
+                    refresh_account.clone(),
+                ));
+
+            // The access token carries its own `exp` but
+            // `OAuthAuth::new` needs a concrete `DateTime<Utc>`. We
+            // intentionally hand it a past timestamp so the very
+            // next `refresh_if_expired` round-trip re-fetches a
+            // pair with the correct `exp`: doing a JWT parse here
+            // would duplicate `outlook_jwt::extract_tid`'s shape
+            // without gaining anything, since a too-aggressive
+            // refresh is cheap (one cached HTTPS round-trip on the
+            // first connector call after boot) and a too-lazy
+            // refresh would need a monotonic clock we don't have.
+            let stale_expiry = chrono::Utc::now() - chrono::Duration::minutes(1);
+
+            let auth = connectors_sdk::OAuthAuth::new(
+                access_secret.expose_secret().to_string(),
+                refresh_secret.expose_secret().to_string(),
+                stale_expiry,
+                descriptor,
+                token_endpoint,
+                state.http.reqwest().clone(),
+                persister,
+                Arc::new(SystemClock),
+            )?;
+            Ok(Arc::new(auth))
+        }
     }
 }
 

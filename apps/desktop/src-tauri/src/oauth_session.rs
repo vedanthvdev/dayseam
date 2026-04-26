@@ -130,13 +130,24 @@ impl OAuthSessionRegistry {
         }
     }
 
+    /// Clone the stored [`TokenPair`] for `id` without consuming the
+    /// session. Used by DAY-203's `outlook_validate_credentials`,
+    /// which may run multiple times before the user commits the
+    /// source (e.g. the user clicks "Add source", sees a transient
+    /// Graph 5xx, cancels, and tries again). The session row and
+    /// token bytes stay server-side until `take_token_pair` fires
+    /// from `outlook_sources_add`.
+    pub async fn peek_token_pair(&self, id: &OAuthSessionId) -> Option<TokenPair> {
+        let guard = self.inner.lock().await;
+        guard.get(id).and_then(|s| s.token_pair.clone())
+    }
+
     /// Remove a session and return its stored [`TokenPair`], if any.
-    /// Intended for the DAY-203 `outlook_sources_add` IPC that
-    /// promotes a Completed session into a keychain row. Once this
-    /// function returns the session is gone from the registry, so a
-    /// second call with the same id finds nothing and the UI has a
-    /// single moment at which the token leaves process memory.
-    #[allow(dead_code)] // Used by DAY-203; kept here so the registry's consumer contract is complete.
+    /// Used by DAY-203's `outlook_sources_add` IPC that promotes a
+    /// Completed session into a keychain row. Once this function
+    /// returns the session is gone from the registry, so a second
+    /// call with the same id finds nothing and the UI has a single
+    /// moment at which the token leaves process memory.
     pub async fn take_token_pair(&self, id: &OAuthSessionId) -> Option<TokenPair> {
         let mut guard = self.inner.lock().await;
         let mut session = guard.remove(id)?;
@@ -237,5 +248,55 @@ mod tests {
     async fn cancel_on_missing_session_is_a_noop() {
         let reg = OAuthSessionRegistry::new();
         assert!(reg.cancel(&OAuthSessionId::new()).await.is_none());
+    }
+
+    fn stub_pair() -> TokenPair {
+        connectors_sdk::TokenPair::new(
+            "access".to_string(),
+            "refresh".to_string(),
+            Utc::now() + chrono::Duration::hours(1),
+            vec!["openid".to_string()],
+        )
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn peek_token_pair_does_not_consume_session() {
+        let reg = OAuthSessionRegistry::new();
+        let id = OAuthSessionId::new();
+        reg.insert(stub_session(id)).await;
+        reg.set_token_pair(&id, stub_pair()).await;
+
+        let first = reg.peek_token_pair(&id).await.expect("tokens present");
+        assert_eq!(first.access_token, "access");
+
+        // Session and pair still addressable after peek.
+        let second = reg
+            .peek_token_pair(&id)
+            .await
+            .expect("tokens still present");
+        assert_eq!(second.refresh_token, "refresh");
+        assert!(reg.get_view(&id).await.is_some());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn take_token_pair_consumes_session() {
+        let reg = OAuthSessionRegistry::new();
+        let id = OAuthSessionId::new();
+        reg.insert(stub_session(id)).await;
+        reg.set_token_pair(&id, stub_pair()).await;
+
+        let taken = reg.take_token_pair(&id).await.expect("tokens present");
+        assert_eq!(taken.access_token, "access");
+
+        assert!(reg.peek_token_pair(&id).await.is_none());
+        assert!(reg.get_view(&id).await.is_none());
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn peek_without_token_pair_returns_none() {
+        let reg = OAuthSessionRegistry::new();
+        let id = OAuthSessionId::new();
+        reg.insert(stub_session(id)).await;
+        assert!(reg.peek_token_pair(&id).await.is_none());
     }
 }

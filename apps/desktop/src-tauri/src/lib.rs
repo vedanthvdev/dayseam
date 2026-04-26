@@ -6,6 +6,7 @@
 
 pub mod ipc;
 pub mod oauth_config;
+pub mod oauth_persister;
 pub mod oauth_session;
 pub mod scheduler_task;
 pub mod startup;
