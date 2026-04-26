@@ -49,6 +49,136 @@ release's chore commit from master's linear history; v0.8.1's
 
 ### Added
 
+- **DAY-170: Desktop app visual-identity + catch-up pass.** One
+  PR groups five user-visible items under a single ticket because
+  they share a single design principle — give the app one
+  deliberate splash of colour and nothing else — and one
+  scheduler bug whose fix belongs in the same visit since it
+  touches the sources surface the rest of the pass reshaped.
+  Everything below lands behind the same `ConnectorLogo` /
+  `SourcesSidebar` / `Dialog` / scheduler code, so splitting them
+  would have meant three PRs that all had to land together
+  anyway.
+
+  *Colour policy:* the only elements in the app that render in
+  their own brand accent are the five connector glyphs
+  (`SourceChip`, the Add-source dropdown, and the identity-row
+  icon) and the Dayseam mark itself (titlebar + menu-bar tray).
+  Every other glyph stays monochrome. `ConnectorLogo` grew a
+  `colored` opt-in prop that flips the mark from `currentColor`
+  to a per-kind `light-dark(lightHex, darkHex)` accent, pulling
+  the hex pair from a pinned table (GitHub `#24292F` /
+  `#F0F6FC`; GitLab `#FC6D26` both modes; Jira `#0052CC` /
+  `#4C9AFF`; Confluence `#172B4D` / `#2684FF`; LocalGit
+  `#F05032` both modes). Using `light-dark()` + the
+  `color-scheme` the theme provider already writes to `<html>`
+  means the mark flips instantly when the user toggles the
+  app's theme, without the component having to subscribe to
+  `useTheme()`. The component also exposes the resolved accent
+  pair as `data-accent-light` / `data-accent-dark` attributes so
+  unit tests and Playwright selectors can target "the
+  GitHub-coloured chip" without parsing CSSOM back into hexes —
+  JSDOM silently drops `color: light-dark(...)` from inline
+  styles, so the data-attribute is the only observable that
+  survives a jsdom render.
+
+- **DAY-170: Minimal Dayseam mark in the TitleBar.** A new
+  `DayseamMark` component renders just the five coloured strands
+  + the `currentColor` seam from `assets/brand/dayseam-mark.svg`
+  — without the rounded charcoal background the full app icon
+  carries — at 28px to the left of the "Dayseam" wordmark. Stroke
+  width is set to 72 (rather than the canonical mark's 60) so
+  the strands stay legible at title-bar scale; the seam
+  continues to inherit `currentColor` so it tracks the title-bar
+  text colour through theme changes, and the app icon stays the
+  only place that still ships the full "on charcoal with a ring"
+  treatment (Dock, `package.json`, DMG).
+
+- **DAY-170: Coloured, background-less menu-bar tray icon.**
+  Replaces the previous "use the app bundle icon as the tray
+  icon" fallback — which dropped a tiny opaque charcoal square
+  into the user's menu bar that fought every other item in the
+  bar — with a dedicated `tray-icon.png` rasterised from a new
+  `assets/brand/dayseam-tray.svg`. The tray SVG is the Dayseam
+  mark with an increased stroke width (88) for legibility at
+  32×32, a neutral `#8E8E93` seam that reads on both light and
+  dark system menu bars, and a fully transparent background.
+  `scripts/rasterise-tray-icon.py` supersamples the SVG at 8×
+  and Lanczos-downsamples to produce `tray-icon.png` (32×32) and
+  `tray-icon@2x.png` (64×64); both PNGs are checked into
+  `apps/desktop/src-tauri/icons/` so the release build doesn't
+  depend on Python being available. Tauri's `image-png` feature
+  was enabled so `include_image!("./icons/tray-icon.png")` can
+  embed the raster into the binary at compile time. The tray
+  builder explicitly sets `icon_as_template(false)` because the
+  mark is deliberately polychrome — treating it as a template
+  image on macOS would flatten every strand to the system
+  foreground and destroy the entire point of the coloured
+  variant.
+
+- **DAY-170: Connector icons in the Identity manager.** Each
+  identity row in `IdentityManagerDialog` now renders the
+  coloured brand mark for the source kind that issued the
+  identity, so a user looking at a list of `GitEmail`,
+  `GitLabUserId`, `JiraAccountId`, and `ConfluenceAccountId`
+  rows can see which service each row points at without reading
+  the scope label. A new `identityConnector` helper maps
+  identity kinds to source kinds (preferring the bound `source`
+  when the identity is scope-bound so "GitEmail scoped to a
+  LocalGit repo" correctly renders the Git mark, not a generic
+  fallback).
+
+### Changed
+
+- **DAY-170: Sources sidebar now owns report-generation.** The
+  separate `ActionRow` section (date picker + duplicate source
+  toggles + Generate button) has been removed and folded into
+  `SourcesSidebar`. Source chips are now directly selectable via
+  a visually-hidden `<input type="checkbox">` wrapped by the
+  chip `<label>`, so the entire chip body acts as the
+  include/exclude toggle while the hover-revealed rescan / edit
+  / delete affordances continue to work. The Add-source dropdown
+  renders each entry with the connector's coloured brand mark
+  next to the text, so the "which service am I connecting?"
+  recognition moment happens in the menu rather than after the
+  dialog opens. The `ActionRow` test suite was rewritten to
+  exercise the merged surface while preserving the original
+  `action-row-*` test IDs, so every prior invariant
+  (Generate-disabled gating, date picker read-only while
+  running, Cancel vs. Generate button swap) continues to be
+  covered.
+
+### Fixed
+
+- **DAY-170: Dialog footer no longer clips on short viewports.**
+  The Preferences, Sinks, and Identities dialogs were rendered
+  as a single scrollable `<div>`, which pushed the Save / Cancel
+  / Done footer off the bottom of the screen whenever the
+  dialog's natural height exceeded the viewport. `Dialog` now
+  uses a flex-column layout where the header and footer are
+  fixed-height rows and the middle region is the only scrolling
+  surface, so the footer is always visible and reachable
+  regardless of content size. The fix is in the shared
+  `Dialog` primitive, so every current and future dialog picks
+  it up without per-dialog wiring.
+
+- **DAY-170: Catch-up banner no longer counts days that already
+  have a saved report.** The banner was keying off "did the
+  scheduler run for this day" rather than "does a report for
+  this day exist", so a user who generated today's report
+  manually (or whose `sync_run` completed before the scheduler
+  re-armed) still saw "Catch up 3 missed reports" the next
+  morning. `ScheduleState::from_sync_runs` now treats any
+  `SyncRunStatus::Completed` run as satisfying a day regardless
+  of trigger, and `build_schedule_state` additionally walks the
+  configured `MarkdownFile` sink directories and marks any day
+  whose default-filename report already exists on disk as
+  satisfied. The sink crate now re-exports
+  `report_filename_for_date` so the orchestrator and the
+  scheduler share a single source of truth for "what does a
+  saved report look like on disk" — if the default filename
+  template ever changes, both callers pick it up in lockstep.
+
 - **DAY-166: Public marketing site at `apps/website/` — Astro +
   Tailwind + one React island.** Closes-progress
   [#141](https://github.com/dayseam/dayseam/issues/141) (WEB-1

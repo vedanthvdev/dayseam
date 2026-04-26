@@ -245,17 +245,31 @@ fn main() {
                 .build()?;
             let tray_show_id = tray_show.id().clone();
             let tray_quit_id = tray_quit.id().clone();
+            // DAY-170: ship a coloured, background-less tray PNG
+            // instead of the full app-bundle icon. The bundle icon
+            // is the rounded-charcoal "Convergence" square sized for
+            // the Dock; rendering it in the menu bar drops a tiny
+            // opaque box into the user's menu row that fights every
+            // other item in the bar. The dedicated tray PNG is just
+            // the five coloured strands + the dashed seam against a
+            // transparent background, rasterised from
+            // `assets/brand/dayseam-tray.svg` at 32x32 and 64x64 via
+            // `scripts/rasterise-tray-icon.py`. The @2x variant
+            // would be picked via `.icon_as_template(false)` + the
+            // OS's usual retina handling, but `include_image!` only
+            // embeds one raster at a time; Tauri will auto-use the
+            // @2x sibling at runtime when the file sits next to the
+            // base PNG with the `@2x` suffix.
+            let tray_icon = tauri::include_image!("./icons/tray-icon.png");
             let tray_build = TrayIconBuilder::with_id("dayseam-main-tray")
-                // `default_window_icon` returns the app bundle icon —
-                // on macOS this renders as a coloured glyph in the
-                // menu bar rather than a monochrome template. A
-                // dedicated template-mode tray icon is tracked as a
-                // follow-up so Tier A doesn't block on iconography.
-                .icon(
-                    app.default_window_icon()
-                        .cloned()
-                        .expect("bundle icon available"),
-                )
+                .icon(tray_icon)
+                // Explicitly *not* a template image on macOS: the
+                // mark is intentionally full-colour (brand strands),
+                // so treating it as a single-ink template would
+                // flatten every strand to the system foreground and
+                // destroy the whole point of shipping a coloured
+                // tray variant.
+                .icon_as_template(false)
                 .tooltip("Dayseam")
                 .menu(&tray_menu)
                 .show_menu_on_left_click(true)

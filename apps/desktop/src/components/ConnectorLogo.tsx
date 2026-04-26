@@ -50,21 +50,81 @@ interface MarkDef {
   readonly path: string;
   /** Human-facing brand name for screen readers when `labelled`. */
   readonly brandName: string;
+  /** Brand accent colour for light/dark mode. Consumers opt in with
+   *  `colored` — by default the mark still inherits `currentColor`
+   *  so existing layouts keep their neutral monochrome look. */
+  readonly accent: { readonly light: string; readonly dark: string };
 }
 
+// DAY-170 brand-accent palette.
+//
+// Choices are pinned per-mode rather than "one hex that works
+// everywhere" because the two pain cases — GitHub's near-black mark
+// on a dark surface, and the Atlassian navy on a light surface — only
+// resolve when we can flip per theme. Values are drawn from each
+// service's own dark-mode / light-mode renderings so a user who
+// recognises the brand anywhere else in their day recognises it here.
+//
+// Colour policy, matching `apps/website/src/data/connectors.ts`:
+// - GitHub:     #24292F / #F0F6FC — GitHub's own fg for each surface.
+// - GitLab:     #FC6D26 / #FC6D26 — canonical tangerine, legible on
+//               both light and dark backgrounds without substitution.
+// - Jira:       #0052CC / #4C9AFF — Atlassian's Jira-primary blue in
+//               light mode; Atlassian sky in dark mode (the deeper
+//               blue goes muddy against #0a0a0a).
+// - Confluence: #172B4D / #2684FF — Atlassian's canonical Confluence
+//               navy on light surfaces; the brighter Atlassian sky
+//               in dark mode so the mark doesn't disappear and the
+//               Jira/Confluence pair stays visually distinct (Jira
+//               slightly darker, Confluence slightly lighter).
+// - LocalGit:   #F05032 / #F05032 — Git's canonical red-orange.
 const MARKS: Record<SourceKind, MarkDef> = {
-  GitHub: { path: GITHUB_PATH, brandName: "GitHub" },
-  GitLab: { path: GITLAB_PATH, brandName: "GitLab" },
-  Jira: { path: JIRA_PATH, brandName: "Jira" },
-  Confluence: { path: CONFLUENCE_PATH, brandName: "Confluence" },
+  GitHub: {
+    path: GITHUB_PATH,
+    brandName: "GitHub",
+    accent: { light: "#24292F", dark: "#F0F6FC" },
+  },
+  GitLab: {
+    path: GITLAB_PATH,
+    brandName: "GitLab",
+    accent: { light: "#FC6D26", dark: "#FC6D26" },
+  },
+  Jira: {
+    path: JIRA_PATH,
+    brandName: "Jira",
+    accent: { light: "#0052CC", dark: "#4C9AFF" },
+  },
+  Confluence: {
+    path: CONFLUENCE_PATH,
+    brandName: "Confluence",
+    accent: { light: "#172B4D", dark: "#2684FF" },
+  },
   // Use the canonical Git mark for LocalGit. Git is the wire
   // protocol the LocalGit connector walks, and there is no separate
   // "Dayseam local repo" identity to invent a mark for. When the
   // app-icon work lands a Dayseam mark, this row stays unchanged —
   // the Dayseam mark identifies the app; this mark identifies the
   // source kind.
-  LocalGit: { path: GIT_PATH, brandName: "Local Git repository" },
+  LocalGit: {
+    path: GIT_PATH,
+    brandName: "Local Git repository",
+    accent: { light: "#F05032", dark: "#F05032" },
+  },
 };
+
+/**
+ * Return the accent hex pair for `kind`. Exposed so non-SVG call
+ * sites (e.g. a chip that wants a faint coloured border, or the
+ * identity row's coloured dot) can share the single source of truth
+ * for what "the GitHub colour" is without poking at the internals
+ * of this module.
+ */
+export function connectorAccent(kind: SourceKind): {
+  light: string;
+  dark: string;
+} {
+  return MARKS[kind].accent;
+}
 
 export interface ConnectorLogoProps
   extends Omit<SVGProps<SVGSVGElement>, "children" | "viewBox" | "fill"> {
@@ -78,6 +138,31 @@ export interface ConnectorLogoProps
    *  `false` (the default) when a visible text label already names
    *  the service — otherwise the mark is redundant alt text. */
   labelled?: boolean;
+  /**
+   * When `true`, render the mark in its brand accent instead of the
+   * chip's `currentColor`. DAY-170 wired this on so the sources
+   * sidebar, the Add-source dropdown, and the identity manager can
+   * all surface the one visual signal users already know — GitHub
+   * is near-black in light mode and white in dark mode, GitLab is
+   * tangerine, and so on — without any other glyph on the page
+   * picking up bespoke colour. The flag exists as an opt-in rather
+   * than a global switch because the same component still has to
+   * serve monochrome callers (e.g. the log-drawer run rows) where a
+   * colour flash would look noisy.
+   *
+   * The colour is switched at runtime via CSS's native
+   * `light-dark()` function, relying on `color-scheme: light|dark`
+   * being set on `<html>` by `applyResolvedTheme`. That means the
+   * mark flips the instant the app's theme changes without the
+   * component needing a React subscription to `useTheme()`, and it
+   * inherits the user's system theme correctly when the preference
+   * is `system`. Tauri 2 ships a recent-enough WebView on every
+   * supported platform that `light-dark()` is safe to rely on; if
+   * the function is ever unsupported, the browser falls through to
+   * the inherited `currentColor` and the mark still renders — just
+   * in a neutral tone rather than in brand accent.
+   */
+  colored?: boolean;
 }
 
 /** Inline-SVG brand mark for the given {@link SourceKind}. See the
@@ -86,10 +171,21 @@ export function ConnectorLogo({
   kind,
   size = 14,
   labelled = false,
+  colored = false,
   className,
+  style,
   ...rest
 }: ConnectorLogoProps): JSX.Element {
   const mark = MARKS[kind];
+  const coloredStyle = colored
+    ? // Using `color` (not `fill`) so the `fill="currentColor"`
+      // below picks up the tint automatically; this keeps the rest
+      // of the component (accessibility, sizing) identical whether
+      // or not the caller wants the brand accent.
+      {
+        color: `light-dark(${mark.accent.light}, ${mark.accent.dark})`,
+      }
+    : undefined;
   return (
     <svg
       role={labelled ? "img" : undefined}
@@ -101,7 +197,25 @@ export function ConnectorLogo({
       fill="currentColor"
       xmlns="http://www.w3.org/2000/svg"
       className={className}
+      style={{ ...coloredStyle, ...style }}
       data-testid={`connector-logo-${kind}`}
+      data-colored={colored ? "true" : undefined}
+      // DAY-170: expose the resolved accent pair as data attributes
+      // when `colored` is on. This exists specifically for two
+      // consumers that cannot observe the inline `color:
+      // light-dark(...)` cleanly:
+      //   1. JSDOM-backed vitest runs, where `style.color` drops
+      //      values it doesn't parse (including `light-dark()`), so
+      //      tests would otherwise have to reach into CSSOM
+      //      internals or diff snapshots just to assert the right
+      //      brand hex landed.
+      //   2. Playwright / a11y smoke checks that want to target
+      //      "the GitHub-coloured chip" without parsing computed
+      //      styles back into hexes.
+      // The attributes are intentionally absent when `colored` is
+      // false so the monochrome render stays clean.
+      data-accent-light={colored ? mark.accent.light : undefined}
+      data-accent-dark={colored ? mark.accent.dark : undefined}
       {...rest}
     >
       {labelled ? <title>{mark.brandName}</title> : null}

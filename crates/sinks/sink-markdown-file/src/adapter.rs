@@ -36,6 +36,17 @@ use crate::markers::{self, Block, MarkerAttrs, MarkerError};
 pub(crate) const FILENAME_PREFIX: &str = "Dayseam ";
 pub(crate) const FILENAME_SUFFIX: &str = ".md";
 
+/// Public helper: return the default filename this sink would write
+/// for `date` (e.g. `Dayseam 2026-04-20.md`). Exposed so other
+/// crates — notably the desktop scheduler task — can check whether
+/// a report file for a given scheduled day already exists without
+/// duplicating the naming convention. Keeping this single
+/// definition here means changes to the pattern propagate
+/// automatically to the catch-up planner.
+pub fn report_filename_for_date(date: chrono::NaiveDate) -> String {
+    format!("{FILENAME_PREFIX}{date}{FILENAME_SUFFIX}")
+}
+
 /// The markdown-file sink itself. Cheap to clone — all state lives
 /// behind an `Arc<Inner>`.
 #[derive(Debug, Clone, Default)]

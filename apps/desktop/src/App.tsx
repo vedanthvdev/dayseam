@@ -8,7 +8,6 @@ import { IdentityManagerDialog } from "./features/identities/IdentityManagerDial
 import { FirstRunEmptyState } from "./features/onboarding/FirstRunEmptyState";
 import { useSetupChecklist } from "./features/onboarding/useSetupChecklist";
 import { PreferencesDialog } from "./features/preferences/PreferencesDialog";
-import { ActionRow } from "./features/report/ActionRow";
 import { SaveReportDialog } from "./features/report/SaveReportDialog";
 import { StreamingPreview } from "./features/report/StreamingPreview";
 import { SchedulerCatchUpBanner } from "./features/scheduler/SchedulerCatchUpBanner";
@@ -166,12 +165,18 @@ export default function App() {
         <TitleBar />
         <UpdaterBanner state={updater} />
         <SchedulerCatchUpBanner scheduler={scheduler} />
-        <ActionRow
-          status={report.status}
-          onGenerate={handleGenerate}
-          onCancel={handleCancel}
+        {/* DAY-170: the old `ActionRow` (date + Generate) has been
+            folded into `SourcesSidebar` so the whole "pick a day,
+            pick sources, run" surface fits on a single row. Source
+            selection lives on each chip itself, and the date picker
+            + Generate / Cancel buttons bookend the row. */}
+        <SourcesSidebar
+          reportActions={{
+            status: report.status,
+            onGenerate: handleGenerate,
+            onCancel: handleCancel,
+          }}
         />
-        <SourcesSidebar />
         <StreamingPreview
           status={report.status}
           progress={report.progress}

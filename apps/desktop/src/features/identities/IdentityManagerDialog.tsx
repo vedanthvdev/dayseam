@@ -15,12 +15,15 @@
 import { useCallback, useEffect, useState } from "react";
 import type {
   Person,
+  Source,
   SourceIdentity,
   SourceIdentityKind,
+  SourceKind,
 } from "@dayseam/ipc-types";
 import { useIdentities, useSources } from "../../ipc";
 import { invoke } from "../../ipc/invoke";
 import { Dialog, DialogButton } from "../../components/Dialog";
+import { ConnectorLogo } from "../../components/ConnectorLogo";
 
 interface IdentityManagerDialogProps {
   open: boolean;
@@ -33,6 +36,45 @@ const IDENTITY_KINDS: readonly { value: SourceIdentityKind; label: string }[] = 
   { value: "GitLabUsername", label: "GitLab username" },
   { value: "GitHubLogin", label: "GitHub login" },
 ];
+
+/** DAY-170: map an identity row back to the connector kind it
+ *  belongs to so we can render the right coloured brand mark next
+ *  to it — the same affordance chip rows already have, extended
+ *  inward to the identity manager so the user doesn't have to
+ *  cross-reference kind strings to figure out which service an
+ *  email or login maps to.
+ *
+ *  If the identity carries a specific `source_id` we prefer the
+ *  actual source's kind (the user scoped it, so we know for sure).
+ *  Otherwise we fall back to the identity kind's natural owner —
+ *  `GitEmail` is the only ambiguous case (it could belong to any
+ *  git-based source) and defaults to `LocalGit`, which is also the
+ *  kind git-email identities were originally introduced for.
+ *
+ *  Returns `null` for an identity kind that has no visual connector
+ *  mapping yet (future-proofing; today every `SourceIdentityKind`
+ *  resolves). `null` means "render nothing" rather than "render a
+ *  generic fallback" — we'd rather be silent than lie. */
+function identityConnector(
+  identity: SourceIdentity,
+  sources: Source[],
+): SourceKind | null {
+  if (identity.source_id !== null) {
+    const scoped = sources.find((s) => s.id === identity.source_id);
+    if (scoped) return scoped.kind;
+  }
+  switch (identity.kind) {
+    case "GitEmail":
+      return "LocalGit";
+    case "GitLabUserId":
+    case "GitLabUsername":
+      return "GitLab";
+    case "GitHubLogin":
+      return "GitHub";
+    default:
+      return null;
+  }
+}
 
 function generateIdentityId(): string {
   // `crypto.randomUUID` exists in every Tauri-supported webview; the
@@ -240,7 +282,7 @@ function IdentityRow({
   onDelete,
 }: {
   identity: SourceIdentity;
-  sources: { id: string; label: string }[];
+  sources: Source[];
   onDelete: () => void;
 }) {
   const kindLabel =
@@ -250,18 +292,37 @@ function IdentityRow({
       ? "Any source"
       : (sources.find((s) => s.id === identity.source_id)?.label ??
         "Unknown source");
+  // DAY-170: surface the coloured brand mark so the user sees at a
+  // glance that e.g. `me@acme.test` belongs to LocalGit / GitHub /
+  // GitLab — the same visual convention the sources strip uses.
+  const connector = identityConnector(identity, sources);
   return (
     <li
       className="flex items-center justify-between gap-3 py-2"
       data-testid={`identity-row-${identity.id}`}
     >
-      <div className="flex min-w-0 flex-col">
-        <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
-          {kindLabel} · {sourceLabel}
-        </span>
-        <span className="truncate font-mono text-sm text-neutral-900 dark:text-neutral-100">
-          {identity.external_actor_id}
-        </span>
+      <div className="flex min-w-0 items-center gap-2.5">
+        {connector ? (
+          // `ConnectorLogo` already emits its own
+          // `data-testid="connector-logo-<Kind>"`; scoping tests
+          // inside the row's `data-testid` wrapper keeps the assertion
+          // "this identity row carries a GitHub mark" easy to write
+          // without another layer of bespoke testids.
+          <ConnectorLogo
+            kind={connector}
+            size={16}
+            colored
+            className="shrink-0"
+          />
+        ) : null}
+        <div className="flex min-w-0 flex-col">
+          <span className="text-xs font-medium text-neutral-600 dark:text-neutral-400">
+            {kindLabel} · {sourceLabel}
+          </span>
+          <span className="truncate font-mono text-sm text-neutral-900 dark:text-neutral-100">
+            {identity.external_actor_id}
+          </span>
+        </div>
       </div>
       <button
         type="button"

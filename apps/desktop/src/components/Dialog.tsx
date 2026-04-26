@@ -127,9 +127,24 @@ export function Dialog({
         tabIndex={-1}
         onKeyDown={handleKeyDown}
         data-testid={testId}
-        className={`${SIZE_CLASSES[size]} max-h-[min(720px,90vh)] overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-xl outline-none dark:border-neutral-800 dark:bg-neutral-950`}
+        // DAY-170: the outer used to be `max-h-[min(720px,90vh)]
+        // overflow-hidden` with the body separately capped at
+        // `max-h-[min(560px,70vh)]`. On any viewport shorter than
+        // ~740px (a window dragged short; a laptop with the dock
+        // visible and a tall header) those two caps stacked meant
+        // `header + body + footer` could exceed the outer cap, and
+        // because the outer was `overflow-hidden` the bottom of the
+        // footer — specifically Save/Cancel on Preferences, Done on
+        // Sinks and Identities — was visually clipped. The fix is a
+        // flex column with the body as the single flex child: the
+        // outer still bounds the total height, header + footer are
+        // `shrink-0`, and the body takes whatever height is left
+        // via `flex-1 min-h-0`. That way the footer can never be
+        // shorter than its intrinsic height no matter how small the
+        // viewport gets.
+        className={`${SIZE_CLASSES[size]} flex max-h-[min(720px,90vh)] flex-col overflow-hidden rounded-lg border border-neutral-200 bg-white shadow-xl outline-none dark:border-neutral-800 dark:bg-neutral-950`}
       >
-        <header className="flex flex-col gap-1 border-b border-neutral-200 px-5 py-4 dark:border-neutral-800">
+        <header className="flex shrink-0 flex-col gap-1 border-b border-neutral-200 px-5 py-4 dark:border-neutral-800">
           <h2
             id={titleId}
             className="text-sm font-semibold text-neutral-900 dark:text-neutral-50"
@@ -145,7 +160,7 @@ export function Dialog({
             </p>
           ) : null}
         </header>
-        <div className="max-h-[min(560px,70vh)] overflow-y-auto px-5 py-4 text-sm text-neutral-800 dark:text-neutral-200">
+        <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4 text-sm text-neutral-800 dark:text-neutral-200">
           {children}
         </div>
         {footer ? (
@@ -159,8 +174,12 @@ export function Dialog({
           // the "Use a different API token" flow. Tightening the
           // footer strip by 4px here plus the flex-centred glyph
           // inside `DialogButton` pulls the primary back into the
-          // column the user expects.
-          <footer className="flex items-center justify-end gap-2 border-t border-neutral-200 bg-neutral-50 px-5 py-2 dark:border-neutral-800 dark:bg-neutral-900/60">
+          // column the user expects. DAY-170 added `shrink-0` so
+          // the footer always renders at its intrinsic height even
+          // when the body content is tall; before that, on short
+          // viewports the flex algorithm would shrink the footer
+          // and clip the bottom of the buttons.
+          <footer className="flex shrink-0 items-center justify-end gap-2 border-t border-neutral-200 bg-neutral-50 px-5 py-2 dark:border-neutral-800 dark:bg-neutral-900/60">
             {footer}
           </footer>
         ) : null}

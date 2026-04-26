@@ -1,7 +1,7 @@
 import { render } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { SourceKind } from "@dayseam/ipc-types";
-import { ConnectorLogo } from "../components/ConnectorLogo";
+import { connectorAccent, ConnectorLogo } from "../components/ConnectorLogo";
 
 // DAY-159. Coverage for the inline brand-mark component that
 // `SourceChip` (and future dialog / action-row surfaces) depend
@@ -92,5 +92,62 @@ describe("ConnectorLogo", () => {
     const svg = getByTestId("connector-logo-Confluence");
     expect(svg.getAttribute("class")).toContain("shrink-0");
     expect(svg.getAttribute("class")).toContain("text-blue-500");
+  });
+
+  // DAY-170. The `colored` opt-in is how the Sources sidebar, the
+  // Add-source dropdown, and the Identity manager surface the one
+  // deliberate splash of colour in the app. The unit-level contract
+  // we pin here is:
+  //
+  // 1. Default (monochrome) render must not set any inline `color`
+  //    style — callers rely on Tailwind's text-* classes flowing
+  //    through `currentColor` untouched.
+  // 2. `colored` must set a `color` via CSS `light-dark(...)` so the
+  //    mark flips between light-mode and dark-mode accent hexes in
+  //    lockstep with the `color-scheme` the theme provider writes to
+  //    `<html>`, without the component having to subscribe to the
+  //    React theme context.
+  // 3. The accent hexes exposed by `connectorAccent(kind)` must be
+  //    the exact pair embedded in the inline style string — this
+  //    guards against an edit that silently diverges the exported
+  //    helper from the rendered markup.
+  it("does not set an inline color by default (monochrome)", () => {
+    const { getByTestId } = render(<ConnectorLogo kind="GitHub" />);
+    // The returned element is an HTMLElement in Testing Library's
+    // types even though the DOM node is an SVGSVGElement at
+    // runtime; reaching .style through the HTMLElement surface is
+    // fine here because every DOM element has `style` regardless of
+    // namespace. Casting to SVGElement triggers TS2352 because the
+    // two types don't overlap in Testing Library's lib.dom surface.
+    const svg = getByTestId("connector-logo-GitHub");
+    expect(svg.style.color).toBe("");
+    expect(svg.getAttribute("data-colored")).toBeNull();
+    expect(svg.getAttribute("data-accent-light")).toBeNull();
+    expect(svg.getAttribute("data-accent-dark")).toBeNull();
+  });
+
+  it("applies the brand accent pair via light-dark() when `colored`", () => {
+    const { getByTestId } = render(<ConnectorLogo kind="Jira" colored />);
+    const svg = getByTestId("connector-logo-Jira");
+    const accent = connectorAccent("Jira");
+    // JSDOM strips `color: light-dark(...)` from inline style since
+    // it can't parse the function, so we can't assert the hexes
+    // through `style.color` or the serialised `style` attribute. The
+    // component instead exposes the resolved accent pair as
+    // `data-accent-light` / `data-accent-dark` for exactly this
+    // reason — one observable place for unit tests and Playwright
+    // to lock down "the Jira-coloured mark is the Jira-coloured
+    // mark", without reaching into CSSOM internals.
+    expect(svg.getAttribute("data-colored")).toBe("true");
+    expect(svg.getAttribute("data-accent-light")).toBe(accent.light);
+    expect(svg.getAttribute("data-accent-dark")).toBe(accent.dark);
+  });
+
+  it("exposes every kind's accent via connectorAccent()", () => {
+    for (const kind of ALL_KINDS) {
+      const accent = connectorAccent(kind);
+      expect(accent.light).toMatch(/^#[0-9A-F]{6}$/i);
+      expect(accent.dark).toMatch(/^#[0-9A-F]{6}$/i);
+    }
   });
 });
