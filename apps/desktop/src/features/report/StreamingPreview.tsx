@@ -34,6 +34,7 @@ const SOURCE_KIND_ORDER: SourceKind[] = [
   "GitLab",
   "Jira",
   "Confluence",
+  "Outlook",
 ];
 
 const SOURCE_KIND_LABEL: Record<SourceKind, string> = {
@@ -42,6 +43,7 @@ const SOURCE_KIND_LABEL: Record<SourceKind, string> = {
   GitLab: "GitLab",
   Jira: "Jira",
   Confluence: "Confluence",
+  Outlook: "Outlook",
 };
 
 const SOURCE_KIND_EMOJI: Record<SourceKind, string> = {
@@ -50,6 +52,7 @@ const SOURCE_KIND_EMOJI: Record<SourceKind, string> = {
   GitLab: "🦊",
   Jira: "📋",
   Confluence: "📄",
+  Outlook: "📅",
 };
 
 /** Group a section's bullets by `source_kind`, preserving the

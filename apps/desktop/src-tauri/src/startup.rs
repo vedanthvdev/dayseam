@@ -13,6 +13,7 @@ use connector_confluence::{ConfluenceConfig, ConfluenceSourceCfg};
 use connector_github::{GithubConfig, GithubSourceCfg};
 use connector_gitlab::GitlabSourceCfg;
 use connector_jira::{JiraConfig, JiraSourceCfg};
+use connector_outlook::{OutlookConfig, OutlookSourceCfg};
 use connectors_sdk::HttpClient;
 use dayseam_core::{
     DayseamError, LogLevel, Settings, SourceConfig, SourceIdentity, SourceIdentityKind, SourceKind,
@@ -449,6 +450,7 @@ async fn resolve_registry_config(pool: &SqlitePool) -> Result<DefaultRegistryCon
     let mut jira_sources: Vec<JiraSourceCfg> = Vec::new();
     let mut confluence_sources: Vec<ConfluenceSourceCfg> = Vec::new();
     let mut github_sources: Vec<GithubSourceCfg> = Vec::new();
+    let mut outlook_sources: Vec<OutlookSourceCfg> = Vec::new();
     for source in sources {
         match (&source.kind, &source.config) {
             (
@@ -546,6 +548,29 @@ async fn resolve_registry_config(pool: &SqlitePool) -> Result<DefaultRegistryCon
                     ),
                 }
             }
+            // DAY-202: hydrate the Outlook mux at boot the same way
+            // every other source kind above does. Unlike GitHub /
+            // GitLab / Atlassian, Outlook's `api_base_url` is a fixed
+            // compile-time constant (see `OutlookConfig::from_raw`),
+            // so there's no user-visible parse to fail; the arm is
+            // infallible today but keeps the logged-and-skipped shape
+            // for symmetry with the DOG-v0.2-02 pattern — if a future
+            // ticket widens `OutlookConfig` to a `Result`-returning
+            // builder (e.g. to validate `tenant_id` as a GUID), no
+            // startup regression follows.
+            (
+                SourceKind::Outlook,
+                SourceConfig::Outlook {
+                    tenant_id,
+                    user_principal_name,
+                },
+            ) => {
+                let config = OutlookConfig::from_raw(tenant_id, user_principal_name);
+                outlook_sources.push(OutlookSourceCfg {
+                    source_id: source.id,
+                    config,
+                });
+            }
             // Kind/config mismatch is a core-level invariant violation
             // (serde round-trip prevents it); skip defensively rather
             // than panic at startup.
@@ -562,6 +587,7 @@ async fn resolve_registry_config(pool: &SqlitePool) -> Result<DefaultRegistryCon
         jira_sources,
         confluence_sources,
         github_sources,
+        outlook_sources,
     })
 }
 

@@ -363,7 +363,8 @@ pub(crate) fn kind_token(kind: ActivityKind) -> &'static str {
         | ActivityKind::JiraIssueCreated
         | ActivityKind::ConfluencePageCreated
         | ActivityKind::ConfluencePageEdited
-        | ActivityKind::ConfluenceComment => unreachable!(
+        | ActivityKind::ConfluenceComment
+        | ActivityKind::OutlookMeetingAttended => unreachable!(
             "GitHub normaliser saw non-GitHub ActivityKind {kind:?}: kind production is local \
              to this module",
         ),

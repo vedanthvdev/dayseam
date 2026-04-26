@@ -88,6 +88,7 @@ connector-atlassian-common = { path = "../../../crates/connectors/connector-atla
 connector-jira = { path = "../../../crates/connectors/connector-jira" }
 connector-confluence = { path = "../../../crates/connectors/connector-confluence" }
 connector-github = { path = "../../../crates/connectors/connector-github" }
+connector-outlook = { path = "../../../crates/connectors/connector-outlook" }
 # Cross-platform "open this URL in the default handler" helper. Kept
 # as a direct dep of the desktop crate (not the workspace) because
 # only the Tauri shell ever needs to shell out to the OS opener — the

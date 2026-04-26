@@ -19,10 +19,11 @@
 //! grep `*.resource_gone` across all connectors at once.
 //!
 //! DAY-95 adds GitHub to the registered set, so the triplet is now a
-//! quadruplet. A regression that silently drops one family's
-//! `resource_gone` code from the registry (or adds a fifth family
-//! without extending the cross-check) stays invisible in any single
-//! connector's test surface — this file fails it loudly.
+//! quadruplet. DAY-202 adds Outlook, making it a quintuplet. A
+//! regression that silently drops one family's `resource_gone` code
+//! from the registry (or adds a sixth family without extending the
+//! cross-check) stays invisible in any single connector's test
+//! surface — this file fails it loudly.
 //!
 //! The test below is deliberately written as an equality assertion
 //! over a `HashSet`, not a `.contains(&…)` chain: an **extra** code
@@ -52,6 +53,7 @@ fn resource_gone_code_coverage_matches_registered_connectors() {
         error_codes::JIRA_RESOURCE_GONE,
         error_codes::CONFLUENCE_RESOURCE_GONE,
         error_codes::GITHUB_RESOURCE_GONE,
+        error_codes::OUTLOOK_RESOURCE_GONE,
     ]);
     assert_eq!(
         registered, expected,
@@ -75,4 +77,5 @@ fn resource_gone_wire_strings_match_constant_names() {
         "confluence.resource_gone"
     );
     assert_eq!(error_codes::GITHUB_RESOURCE_GONE, "github.resource_gone");
+    assert_eq!(error_codes::OUTLOOK_RESOURCE_GONE, "outlook.resource_gone");
 }

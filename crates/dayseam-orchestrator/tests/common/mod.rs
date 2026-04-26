@@ -88,6 +88,10 @@ pub async fn seed_source(
             SourceKind::GitHub => SourceConfig::GitHub {
                 api_base_url: "https://api.github.com".to_string(),
             },
+            SourceKind::Outlook => SourceConfig::Outlook {
+                tenant_id: "00000000-0000-0000-0000-000000000000".to_string(),
+                user_principal_name: "mock@example.com".to_string(),
+            },
         },
         secret_ref: None,
         created_at: Utc::now(),

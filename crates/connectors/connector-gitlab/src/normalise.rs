@@ -156,7 +156,8 @@ fn kind_token(kind: ActivityKind) -> &'static str {
         | ActivityKind::GitHubIssueOpened
         | ActivityKind::GitHubIssueClosed
         | ActivityKind::GitHubIssueCommented
-        | ActivityKind::GitHubIssueAssigned => unreachable!(
+        | ActivityKind::GitHubIssueAssigned
+        | ActivityKind::OutlookMeetingAttended => unreachable!(
             "GitLab normaliser saw non-GitLab ActivityKind {kind:?}: kind production is local to map_kind",
         ),
     }
@@ -210,7 +211,8 @@ fn event_external_id(event: &GitlabEvent, kind: ActivityKind) -> String {
         | ActivityKind::GitHubIssueOpened
         | ActivityKind::GitHubIssueClosed
         | ActivityKind::GitHubIssueCommented
-        | ActivityKind::GitHubIssueAssigned => unreachable!(
+        | ActivityKind::GitHubIssueAssigned
+        | ActivityKind::OutlookMeetingAttended => unreachable!(
             "GitLab normaliser saw non-GitLab ActivityKind {kind:?} in event_external_id",
         ),
     }
@@ -270,7 +272,8 @@ fn title_and_body(event: &GitlabEvent, kind: ActivityKind) -> (String, Option<St
         | ActivityKind::GitHubIssueOpened
         | ActivityKind::GitHubIssueClosed
         | ActivityKind::GitHubIssueCommented
-        | ActivityKind::GitHubIssueAssigned => {
+        | ActivityKind::GitHubIssueAssigned
+        | ActivityKind::OutlookMeetingAttended => {
             unreachable!("GitLab normaliser saw non-GitLab ActivityKind {kind:?} in title_and_body",)
         }
     };

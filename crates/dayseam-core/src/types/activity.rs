@@ -198,6 +198,21 @@ pub enum ActivityKind {
     /// `JiraIssueAssigned`: being handed a ticket is a discrete
     /// calendar event worth surfacing regardless of state change.
     GitHubIssueAssigned,
+    /// Microsoft 365 / Outlook calendar meeting the user attended
+    /// during a report window. Emitted once per Graph
+    /// `/me/calendarView` event whose
+    /// `attendees[].emailAddress.address` matches the source's
+    /// [`SourceIdentityKind::OutlookUserPrincipalName`], whose
+    /// `response.response` is `"accepted"` or `"tentativelyAccepted"`
+    /// (plus organizer-with-no-reply — see DAY-202 attendance
+    /// fallback), and whose `{start,end}` window intersects the
+    /// report day. "Attended" is the deliberate verb: Dayseam
+    /// reports what the user *did*, so we collapse the
+    /// accept/decline/tentative lifecycle into a single
+    /// past-tense event rather than firing one kind per RSVP
+    /// state. Declined meetings never produce an event. Added in
+    /// DAY-202 (v0.9 Outlook calendar scaffold).
+    OutlookMeetingAttended,
 }
 
 impl ActivityKind {
@@ -236,6 +251,7 @@ impl ActivityKind {
             ActivityKind::GitHubIssueClosed,
             ActivityKind::GitHubIssueCommented,
             ActivityKind::GitHubIssueAssigned,
+            ActivityKind::OutlookMeetingAttended,
         ]
     }
 }
@@ -336,6 +352,13 @@ pub enum EntityKind {
     /// enrichment rules differ (PRs annotate Jira transitions;
     /// issues do not).
     GitHubIssue,
+    /// A Microsoft Graph calendar event — the `event.id` opaque
+    /// string returned by `/me/calendarView`. One
+    /// `OutlookMeetingAttended` activity produces one `EntityRef`
+    /// with this kind so evidence-popover URL templates can deep-link
+    /// back to the meeting in outlook.office.com without a connector
+    /// re-probe. Added in DAY-202 (v0.9 Outlook calendar scaffold).
+    OutlookEvent,
     /// A cross-source "account / tenant / workspace" container —
     /// the GitHub account, the GitLab group, the Atlassian cloud
     /// instance, the Slack workspace. The v0.3 capstone
@@ -373,6 +396,7 @@ impl EntityKind {
             EntityKind::GitHubRepo => "github_repo",
             EntityKind::GitHubPullRequest => "github_pull_request",
             EntityKind::GitHubIssue => "github_issue",
+            EntityKind::OutlookEvent => "outlook_event",
             EntityKind::Workspace => "workspace",
             EntityKind::Other(s) => s.as_str(),
         }
@@ -402,6 +426,7 @@ impl EntityKind {
             "github_repo" => EntityKind::GitHubRepo,
             "github_pull_request" => EntityKind::GitHubPullRequest,
             "github_issue" => EntityKind::GitHubIssue,
+            "outlook_event" => EntityKind::OutlookEvent,
             "workspace" => EntityKind::Workspace,
             other => EntityKind::Other(other.to_string()),
         }
@@ -513,7 +538,7 @@ mod tests {
         let kinds = ActivityKind::all();
         assert_eq!(
             kinds.len(),
-            26,
+            27,
             "ActivityKind::all() must list every declared variant exactly once"
         );
         let mut set = std::collections::HashSet::new();
@@ -544,6 +569,7 @@ mod tests {
             (EntityKind::GitHubRepo, "github_repo"),
             (EntityKind::GitHubPullRequest, "github_pull_request"),
             (EntityKind::GitHubIssue, "github_issue"),
+            (EntityKind::OutlookEvent, "outlook_event"),
             (EntityKind::Workspace, "workspace"),
         ];
         for (variant, expected) in cases {

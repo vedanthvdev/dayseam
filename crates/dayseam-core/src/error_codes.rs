@@ -642,6 +642,88 @@ pub const OAUTH_LOGIN_PROVIDER_UNKNOWN: &str = "oauth.login.provider_unknown";
 /// checklist instead.
 pub const OAUTH_LOGIN_NOT_CONFIGURED: &str = "oauth.login.not_configured";
 
+// -------- Outlook (Microsoft 365 / Graph) ----------------------------------
+//
+// Added in DAY-202. Mirrors the GitHub prefix family — `outlook.auth.*`
+// for credential failures, `outlook.rate_limited` for 429s,
+// `outlook.upstream_5xx` for transient server failures,
+// `outlook.upstream_shape_changed` for contract drift (e.g. Graph
+// returning a new event schema we can't normalise). The SDK-level
+// `oauth.*` codes above cover the token-refresh failure modes;
+// anything connector-specific (tenant admin pulled the app's
+// permission grant, the user's mailbox is a shared mailbox Graph
+// won't expand attendees for, etc.) lives here.
+//
+// The IPC-adjacent `ipc.outlook.*` codes (shape checks we perform
+// before touching the network or the database) land in DAY-203
+// alongside the `outlook_validate_credentials` /
+// `outlook_sources_add` commands that raise them.
+
+/// Microsoft Graph returned `401 Unauthorized` on a request a valid
+/// access token should have satisfied. DAY-201 gave us automatic
+/// refresh for expired access tokens; this code means either the
+/// refresh also failed (in which case the SDK surfaces
+/// [`OAUTH_REFRESH_REJECTED`] first and this code never fires), or
+/// the tenant admin revoked the app between `authenticate` and the
+/// next Graph call. Surfaced as [`DayseamError::Auth`] with an
+/// `action_hint` pointing at the Reconnect flow.
+pub const OUTLOOK_AUTH_INVALID_CREDENTIALS: &str = "outlook.auth.invalid_credentials";
+
+/// Graph returned `403 Forbidden` on a request whose token carries
+/// the scopes the connector declared, but the tenant's conditional-
+/// access / app-role policy denies the specific endpoint (commonly
+/// `Calendars.Read` narrowed to `Calendars.Read.Shared` by a tenant
+/// admin). The refresh token is still good; the user needs a
+/// tenant-admin action to widen the grant. Surfaced as
+/// [`DayseamError::Auth`] with a distinct action hint so the UI
+/// can tell the user "contact your IT admin" rather than the
+/// generic Reconnect chip.
+pub const OUTLOOK_AUTH_MISSING_SCOPE: &str = "outlook.auth.missing_scope";
+
+/// Graph returned `404 Not Found` for a resource the connector
+/// expected to exist (most commonly a calendar that was deleted
+/// between this walk and the previous one). Distinct from the
+/// generic HTTP transport family because a 404 from Graph usually
+/// means "keep going, the missing row is not fatal" — the walker
+/// drops the shard and continues. Surfaced so observers can tell
+/// apart a connector-level data-shape issue from a transient
+/// network 404.
+pub const OUTLOOK_RESOURCE_NOT_FOUND: &str = "outlook.resource_not_found";
+
+/// Graph returned `429 Too Many Requests` after exhausting the
+/// retry budget the walker is willing to spend inside one sync. The
+/// SDK's HTTP client honours `Retry-After` on the first hit; this
+/// code fires only when the same day's walk keeps getting throttled
+/// beyond a sensible number of retries, which points at a
+/// multi-client collision (the user is signed into Graph from
+/// several tools). Surfaced as a non-fatal
+/// [`DayseamError::Transient`] so the next scheduled walk retries
+/// from scratch.
+pub const OUTLOOK_RATE_LIMITED: &str = "outlook.rate_limited";
+
+/// Graph returned a `5xx` the walker couldn't classify as an
+/// auth / scope / not-found failure. Transient by default so the
+/// next scheduled walk picks up where this one left off; chronic
+/// 5xxs are visible via the source's `SourceHealth.last_error`.
+pub const OUTLOOK_UPSTREAM_5XX: &str = "outlook.upstream_5xx";
+
+/// Graph returned a successful response whose JSON did not match
+/// the shape the walker normalises — e.g. a required field is
+/// missing, a datetime parses as a string we can't interpret, or
+/// an enum carries a value we don't have a branch for. The
+/// specific offending field is captured in the error's `message`
+/// so the author of the walker update has a trail. Surfaced as
+/// [`DayseamError::Internal`] rather than auth: it is a contract
+/// drift on Graph's side, not a user-actionable failure.
+pub const OUTLOOK_UPSTREAM_SHAPE_CHANGED: &str = "outlook.upstream_shape_changed";
+
+/// Graph returned `410 Gone` or an equivalent shape telling us the
+/// mailbox itself has been removed — the account was terminated in
+/// the tenant between walks. Terminal on this source; the UI
+/// surfaces a Disconnect hint rather than a Reconnect one because
+/// reconnecting the same credential cannot resurrect the mailbox.
+pub const OUTLOOK_RESOURCE_GONE: &str = "outlook.resource_gone";
+
 // -------- Database ---------------------------------------------------------
 
 /// `sqlx::migrate!` failed to apply a pending migration. Always fatal
@@ -733,6 +815,13 @@ pub const ALL: &[&str] = &[
     OAUTH_LOGIN_AUTHORIZATION_ERROR,
     OAUTH_LOGIN_PROVIDER_UNKNOWN,
     OAUTH_LOGIN_NOT_CONFIGURED,
+    OUTLOOK_AUTH_INVALID_CREDENTIALS,
+    OUTLOOK_AUTH_MISSING_SCOPE,
+    OUTLOOK_RESOURCE_NOT_FOUND,
+    OUTLOOK_RATE_LIMITED,
+    OUTLOOK_UPSTREAM_5XX,
+    OUTLOOK_UPSTREAM_SHAPE_CHANGED,
+    OUTLOOK_RESOURCE_GONE,
     DB_SCHEMA_MIGRATION_FAILED,
 ];
 

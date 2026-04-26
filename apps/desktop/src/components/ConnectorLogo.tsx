@@ -45,6 +45,14 @@ const CONFLUENCE_PATH =
 const GIT_PATH =
   "M23.546 10.93L13.067.452c-.604-.603-1.582-.603-2.188 0L8.708 2.627l2.76 2.76c.645-.215 1.379-.07 1.889.441.516.515.658 1.258.438 1.9l2.658 2.66c.645-.223 1.387-.078 1.9.435.721.72.721 1.884 0 2.604-.719.719-1.881.719-2.6 0-.539-.541-.674-1.337-.404-1.996L12.86 8.955v6.525c.176.086.342.203.488.348.713.721.713 1.883 0 2.6-.719.721-1.889.721-2.609 0-.719-.719-.719-1.879 0-2.598.182-.18.387-.316.605-.406V8.835c-.217-.091-.424-.222-.6-.401-.545-.545-.676-1.342-.396-2.009L7.636 3.7.45 10.881c-.6.605-.6 1.584 0 2.189l10.48 10.477c.604.604 1.582.604 2.186 0l10.43-10.43c.605-.603.605-1.582 0-2.187";
 
+// DAY-202. Microsoft Outlook mark (Simple Icons, CC0). Used by the
+// Outlook connector landing in v0.9. No source rows can render this
+// mark until DAY-203 adds the Add-Source dialog; the entry exists
+// here so the `Record<SourceKind, MarkDef>` stays exhaustive and the
+// frontend typechecks.
+const OUTLOOK_PATH =
+  "M7.88 12.04q0 .45-.11.87-.1.41-.33.74-.22.33-.58.52-.37.2-.87.2t-.85-.2q-.35-.21-.57-.55-.22-.33-.33-.75-.1-.42-.1-.86t.1-.87q.1-.43.34-.76.22-.34.59-.54.36-.2.87-.2t.86.2q.35.21.57.55.22.34.31.77.1.43.1.88zM24 12v9.38q0 .46-.33.8-.33.32-.8.32H7.13q-.46 0-.8-.33-.32-.33-.32-.8V18H1q-.41 0-.7-.3-.3-.29-.3-.7V7q0-.41.3-.7Q.58 6 1 6h6.5V2.55q0-.44.3-.75.3-.3.75-.3h12.9q.44 0 .75.3.3.3.3.75V10.85l1.24.72h.01q.1.07.18.18.07.12.07.25zm-6-8.25v3h3v-3zm0 4.5v3h3v-3zm0 4.5v1.83l3.05-1.83zm-5.25-9v3h3.75v-3zm0 4.5v3h3.75v-3zm0 4.5v2.03l2.41 1.5 1.34-.8v-2.73zM9 3.75V6h2l.13.01.12.04v-2.3zM5.98 15.98q.9 0 1.6-.3.7-.32 1.19-.86.48-.55.73-1.28.25-.74.25-1.61 0-.83-.25-1.55-.24-.71-.71-1.24t-1.15-.83q-.68-.3-1.55-.3-.92 0-1.64.3-.71.3-1.2.85-.5.54-.75 1.3-.25.74-.25 1.63 0 .85.26 1.56.26.72.74 1.23.48.52 1.17.81.69.3 1.56.3zM7.5 21h12.39L12 16.08V17q0 .41-.3.7-.29.3-.7.3H7.5zm15-.13v-7.24l-5.9 3.54Z";
+
 interface MarkDef {
   /** The path `d` attribute of the brand mark. */
   readonly path: string;
@@ -116,6 +124,16 @@ const MARKS: Record<SourceKind, MarkDef> = {
     path: GIT_PATH,
     brandName: "Local Git repository",
     accent: { light: "#F05032", dark: "#F05032" },
+  },
+  // DAY-202. Microsoft Outlook brand accent is #0078D4 — the
+  // canonical Microsoft product blue, which reads cleanly on both
+  // light and dark surfaces without a per-mode swap. No call site
+  // renders this entry yet; the Add-Source dialog that introduces
+  // Outlook rows lands in DAY-203.
+  Outlook: {
+    path: OUTLOOK_PATH,
+    brandName: "Microsoft Outlook",
+    accent: { light: "#0078D4", dark: "#0078D4" },
   },
 };
 

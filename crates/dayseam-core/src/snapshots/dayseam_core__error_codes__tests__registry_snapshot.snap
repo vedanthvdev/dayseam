@@ -82,4 +82,11 @@ expression: ALL
 - oauth.login.authorization_error
 - oauth.login.provider_unknown
 - oauth.login.not_configured
+- outlook.auth.invalid_credentials
+- outlook.auth.missing_scope
+- outlook.resource_not_found
+- outlook.rate_limited
+- outlook.upstream_5xx
+- outlook.upstream_shape_changed
+- outlook.resource_gone
 - db.schema.migration_failed

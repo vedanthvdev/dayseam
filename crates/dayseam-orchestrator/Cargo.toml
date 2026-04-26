@@ -19,6 +19,7 @@ sinks-sdk = { path = "../sinks-sdk" }
 connector-confluence = { path = "../connectors/connector-confluence" }
 connector-github = { path = "../connectors/connector-github" }
 connector-gitlab = { path = "../connectors/connector-gitlab" }
+connector-outlook = { path = "../connectors/connector-outlook" }
 connector-jira = { path = "../connectors/connector-jira" }
 connector-local-git = { path = "../connectors/connector-local-git" }
 sink-markdown-file = { path = "../sinks/sink-markdown-file" }

@@ -116,9 +116,25 @@ fn event_is_self(event: &ActivityEvent, identities: &[&SourceIdentity]) -> bool 
             | SourceIdentityKind::GitLabUsername
             | SourceIdentityKind::GitHubLogin
             | SourceIdentityKind::GitHubUserId
-            | SourceIdentityKind::AtlassianAccountId => {
+            | SourceIdentityKind::AtlassianAccountId
+            | SourceIdentityKind::OutlookUserObjectId => {
                 event.actor.external_id.as_deref() == Some(id.external_actor_id.as_str())
             }
+            // Outlook UPN matches against `actor.email` because the
+            // calendar-event walker normalises Graph's
+            // `attendee.emailAddress.address` (the UPN form) onto
+            // the actor's email slot — the connector does not have
+            // the AAD object id for every attendee, so UPN is the
+            // secondary identity that lets the self-filter fire
+            // for shared-mailbox and resource-calendar cases where
+            // only the email surfaces. Case-insensitive match
+            // mirrors the [`SourceIdentityKind::GitEmail`] branch
+            // because AAD treats UPNs as case-insensitive.
+            SourceIdentityKind::OutlookUserPrincipalName => event
+                .actor
+                .email
+                .as_deref()
+                .is_some_and(|e| e.eq_ignore_ascii_case(&id.external_actor_id)),
         }
     })
 }

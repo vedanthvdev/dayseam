@@ -140,6 +140,23 @@ pub enum SourceIdentityKind {
     /// products, so a Jira source and a Confluence source for the same
     /// workspace share one `SourceIdentity` row. Added in DAY-73.
     AtlassianAccountId,
+    /// Microsoft AAD user object GUID returned by
+    /// `GET https://graph.microsoft.com/v1.0/me.id`. Immutable for
+    /// the lifetime of the account within its tenant — survives UPN
+    /// renames, so this is the authoritative match key the walker
+    /// uses when deciding whether a calendar-event attendee is the
+    /// signed-in user. Added in DAY-202 (v0.9 Outlook connector
+    /// core-types).
+    OutlookUserObjectId,
+    /// Microsoft User Principal Name (UPN) — the email-like string
+    /// returned by `GET /me.userPrincipalName`. Mutable upstream (a
+    /// tenant rename changes every UPN), so the walker prefers
+    /// [`Self::OutlookUserObjectId`] for self-filtering. This
+    /// variant exists so attendee-email matching can still light up
+    /// for the self-actor when Graph returns `attendee.emailAddress.address`
+    /// but omits the object id (the common case for shared
+    /// mailboxes). Added in DAY-202.
+    OutlookUserPrincipalName,
 }
 
 #[cfg(test)]

@@ -24,6 +24,7 @@ use connector_github::{GithubMux, GithubSourceCfg};
 use connector_gitlab::{GitlabMux, GitlabSourceCfg};
 use connector_jira::{JiraMux, JiraSourceCfg};
 use connector_local_git::LocalGitConnector;
+use connector_outlook::{OutlookMux, OutlookSourceCfg};
 use connectors_sdk::SourceConnector;
 use dayseam_core::{SinkKind, SourceKind};
 use sink_markdown_file::MarkdownFileSink;
@@ -174,6 +175,13 @@ pub struct DefaultRegistryConfig {
     /// DAY-96 lands the events-endpoint + search walker); DAY-99
     /// wires the Add-Source dialog to populate this.
     pub github_sources: Vec<GithubSourceCfg>,
+    /// Configured Outlook sources (one entry per
+    /// `SourceConfig::Outlook` row). The [`OutlookMux`] registered
+    /// for [`SourceKind::Outlook`] dispatches per `source_id` to the
+    /// right tenant + UPN at sync time. Empty on a brand-new install;
+    /// DAY-203's `outlook_sources_add` IPC populates this through
+    /// `upsert` after the OAuth handshake completes.
+    pub outlook_sources: Vec<OutlookSourceCfg>,
 }
 
 /// Build the pair of registries used in production. Tests that need
@@ -221,6 +229,17 @@ pub fn default_registries(cfg: DefaultRegistryConfig) -> (ConnectorRegistry, Sin
         SourceKind::GitHub,
         Arc::new(GithubMux::new(cfg.local_tz, cfg.github_sources)),
     );
+    // DAY-202: first OAuth-backed mux. Same "register-empty, upsert-
+    // later" contract — on a fresh install the Outlook mux carries
+    // zero sources and the Add-Source flow upserts through
+    // `OutlookMux::upsert` as the user completes the PKCE handshake.
+    // The mux carries `local_tz` so the walker can translate the
+    // user's requested local day into the UTC `calendarView` window
+    // Graph expects.
+    connectors.insert(
+        SourceKind::Outlook,
+        Arc::new(OutlookMux::new(cfg.local_tz, cfg.outlook_sources)),
+    );
 
     let mut sinks = SinkRegistry::new();
     sinks.insert(
@@ -267,20 +286,18 @@ mod tests {
             jira_sources: Vec::new(),
             confluence_sources: Vec::new(),
             github_sources: Vec::new(),
+            outlook_sources: Vec::new(),
         };
         let (connectors, sinks) = default_registries(cfg);
-        // DAY-95 extension of DAY-83 Task 11.1 — hydration smoke. The
-        // shipping connector set is now **exactly**
-        // {LocalGit, GitLab, Jira, Confluence, GitHub}. Asserting
-        // the full kind set (rather than individual
-        // `.get(kind).is_some()` probes) catches both directions of
-        // regression: a kind that silently drops out (→ orchestrator
-        // fan-out skips it), and a spurious extra kind that gets
-        // wired in without a matching `DefaultRegistryConfig` field
-        // (→ a connector mux running with a default config that
-        // ignores the user's sources). Using `HashSet` keeps the
-        // assertion insensitive to the HashMap iteration order the
-        // `.kinds()` method returns.
+        // DAY-202 extension: the shipping connector set is now
+        // **exactly** {LocalGit, GitLab, Jira, Confluence, GitHub,
+        // Outlook}. Asserting the full kind set (rather than
+        // individual `.get(kind).is_some()` probes) catches both
+        // directions of regression: a kind that silently drops out
+        // (→ orchestrator fan-out skips it), and a spurious extra
+        // kind that gets wired in without a matching
+        // `DefaultRegistryConfig` field (→ a connector mux running
+        // with a default config that ignores the user's sources).
         use std::collections::HashSet;
         let connector_kinds: HashSet<SourceKind> = connectors.kinds().into_iter().collect();
         assert_eq!(
@@ -291,8 +308,9 @@ mod tests {
                 SourceKind::Jira,
                 SourceKind::Confluence,
                 SourceKind::GitHub,
+                SourceKind::Outlook,
             ]),
-            "default_registries must hydrate exactly the five shipping connector kinds",
+            "default_registries must hydrate exactly the six shipping connector kinds",
         );
         let sink_kinds: HashSet<SinkKind> = sinks.kinds().into_iter().collect();
         assert_eq!(
@@ -343,6 +361,17 @@ mod tests {
             .get(SourceKind::GitHub)
             .expect("GitHub kind registered");
         assert_eq!(github.kind(), SourceKind::GitHub);
+        // DAY-202: parallel invariant for the Outlook mux. The
+        // scaffold registers the kind with an empty mux so DAY-203's
+        // `outlook_sources_add` IPC can upsert a fresh Outlook source
+        // after the OAuth handshake completes without re-registering;
+        // the self-reports-as-Outlook check guards against the same
+        // copy-paste regression the GitHub / Confluence / Jira mux
+        // invariants defend against.
+        let outlook = connectors
+            .get(SourceKind::Outlook)
+            .expect("Outlook kind registered");
+        assert_eq!(outlook.kind(), SourceKind::Outlook);
         assert!(sinks.get(SinkKind::MarkdownFile).is_some());
     }
 
@@ -380,6 +409,7 @@ mod tests {
             SourceKind::Jira,
             SourceKind::Confluence,
             SourceKind::GitHub,
+            SourceKind::Outlook,
         ];
         // Compiler-checked exhaustiveness: if `SourceKind` grows a
         // variant, this match fails to compile and forces the author
@@ -392,7 +422,8 @@ mod tests {
                 | SourceKind::GitLab
                 | SourceKind::Jira
                 | SourceKind::Confluence
-                | SourceKind::GitHub => {}
+                | SourceKind::GitHub
+                | SourceKind::Outlook => {}
             }
         }
 
@@ -406,6 +437,7 @@ mod tests {
             jira_sources: Vec::new(),
             confluence_sources: Vec::new(),
             github_sources: Vec::new(),
+            outlook_sources: Vec::new(),
         };
         let (connectors, _) = default_registries(cfg);
 

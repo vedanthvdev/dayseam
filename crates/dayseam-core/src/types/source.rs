@@ -55,6 +55,18 @@ pub enum SourceKind {
     /// there's no shared-credential-across-products situation to
     /// model, because GitHub is single-product. Added in DAY-93.
     GitHub,
+    /// Microsoft 365 / Outlook calendar — the v0.9 sixth connector.
+    ///
+    /// One OAuth 2.0 PKCE consent authenticates one work/school
+    /// account against Microsoft Graph. Unlike GitHub's single-PAT
+    /// model, Outlook carries an access/refresh token pair in the
+    /// keychain; the access token rotates every ~60–90 minutes and
+    /// the refresh token rotates on every successful refresh
+    /// (per Microsoft's rotation policy). `AuthDescriptor::OAuth`
+    /// is the durable shape the orchestrator rebuilds at boot, and
+    /// `OAuthAuth` in `connectors-sdk` does the refresh dance
+    /// single-flighted. Added in DAY-202.
+    Outlook,
 }
 
 /// Per-kind configuration. The enum is externally tagged so the on-disk
@@ -146,6 +158,41 @@ pub enum SourceConfig {
     GitHub {
         api_base_url: String,
     },
+    /// Microsoft 365 / Outlook calendar.
+    ///
+    /// `tenant_id` is the AAD tenant GUID the connector targets
+    /// (e.g. `"consumers"` for personal MSA, a GUID string for a
+    /// work tenant). The Graph walker uses `graph.microsoft.com` as
+    /// a global endpoint — it does not vary by tenant — but the
+    /// tenant id is the stable identifier we bind the source's
+    /// self-identity against, and it is also the authority segment
+    /// used on `/{tenant}/oauth2/v2.0/token` during the refresh
+    /// dance. Storing it per-source (rather than inferring from the
+    /// id token on each refresh) keeps the orchestrator pure: the
+    /// `AuthDescriptor::OAuth` rebuild at boot is a straight DB
+    /// read, no network round-trip required.
+    ///
+    /// `user_principal_name` is the UPN (e.g. `"alice@contoso.com"`)
+    /// the walker filters on when seeding the self-identity. Unlike
+    /// GitHub's numeric id anchor, Outlook does not have an
+    /// immutable numeric primary key we can address — the stable
+    /// anchor is the pair `(tenant_id, user_object_id)`, where
+    /// `user_object_id` is captured separately as
+    /// `SourceIdentityKind::OutlookUserObjectId`. The UPN lives on
+    /// the config for human-readable display and to scope
+    /// keychain account names.
+    ///
+    /// The access + refresh tokens themselves live behind the
+    /// source's `secret_ref` — specifically, two sibling keychain
+    /// entries (one per token) under the same service — and never
+    /// touch this row. The IPC auth builder rebuilds the
+    /// `OAuthAuth` strategy from the descriptor at request time.
+    ///
+    /// Added in DAY-202 (v0.9 Outlook calendar scaffold).
+    Outlook {
+        tenant_id: String,
+        user_principal_name: String,
+    },
 }
 
 impl SourceConfig {
@@ -160,6 +207,7 @@ impl SourceConfig {
             SourceConfig::Jira { .. } => SourceKind::Jira,
             SourceConfig::Confluence { .. } => SourceKind::Confluence,
             SourceConfig::GitHub { .. } => SourceKind::GitHub,
+            SourceConfig::Outlook { .. } => SourceKind::Outlook,
         }
     }
 }
@@ -182,6 +230,7 @@ impl SourceKind {
             SourceKind::Jira => "Jira",
             SourceKind::Confluence => "Confluence",
             SourceKind::GitHub => "GitHub",
+            SourceKind::Outlook => "Outlook",
         }
     }
 
@@ -198,6 +247,7 @@ impl SourceKind {
             SourceKind::Jira => "📋",
             SourceKind::Confluence => "📄",
             SourceKind::GitHub => "🐙",
+            SourceKind::Outlook => "📅",
         }
     }
 
@@ -226,6 +276,7 @@ impl SourceKind {
             SourceKind::GitLab,
             SourceKind::Jira,
             SourceKind::Confluence,
+            SourceKind::Outlook,
         ]
     }
 }

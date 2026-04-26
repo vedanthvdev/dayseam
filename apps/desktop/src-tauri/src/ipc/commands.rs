@@ -467,6 +467,21 @@ pub(crate) fn build_source_auth(
                 secret_ref.keychain_account.clone(),
             )))
         }
+        // DAY-202 scaffold: the Outlook connector crate lands here;
+        // the Add-Source IPC (`outlook_sources_add`) and the
+        // `OAuthAuth` persister plumbing that will hand tokens back to
+        // this arm land in DAY-203. Until then no Outlook row can be
+        // produced (`SourceConfig::Outlook` has no IPC constructor
+        // yet), so reaching this arm means either a hand-crafted DB
+        // row or a stale image — report it as a programming error so
+        // the failure is loud.
+        SourceKind::Outlook => Err(DayseamError::Internal {
+            code: "ipc.outlook.not_yet_implemented".to_string(),
+            message: format!(
+                "Outlook source {} reached build_source_auth before the DAY-203 IPC layer landed — rebuild from tip of master",
+                source.id
+            ),
+        }),
     }
 }
 

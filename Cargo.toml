@@ -14,6 +14,7 @@ members = [
     "crates/connectors/connector-jira",
     "crates/connectors/connector-confluence",
     "crates/connectors/connector-github",
+    "crates/connectors/connector-outlook",
     "crates/sinks-sdk",
     "crates/sinks/sink-markdown-file",
     "crates/dayseam-orchestrator",

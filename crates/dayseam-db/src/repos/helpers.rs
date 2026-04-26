@@ -35,6 +35,7 @@ pub(crate) fn source_kind_to_db(k: &SourceKind) -> &'static str {
         SourceKind::Jira => "Jira",
         SourceKind::Confluence => "Confluence",
         SourceKind::GitHub => "GitHub",
+        SourceKind::Outlook => "Outlook",
     }
 }
 
@@ -45,6 +46,7 @@ pub(crate) fn source_kind_from_db(s: &str) -> Result<SourceKind, DbError> {
         "Jira" => Ok(SourceKind::Jira),
         "Confluence" => Ok(SourceKind::Confluence),
         "GitHub" => Ok(SourceKind::GitHub),
+        "Outlook" => Ok(SourceKind::Outlook),
         other => Err(DbError::InvalidData {
             column: "sources.kind".into(),
             message: format!("unknown SourceKind `{other}`"),
@@ -80,6 +82,7 @@ pub(crate) fn activity_kind_to_db(k: &ActivityKind) -> &'static str {
         ActivityKind::GitHubIssueClosed => "GitHubIssueClosed",
         ActivityKind::GitHubIssueCommented => "GitHubIssueCommented",
         ActivityKind::GitHubIssueAssigned => "GitHubIssueAssigned",
+        ActivityKind::OutlookMeetingAttended => "OutlookMeetingAttended",
     }
 }
 
@@ -111,6 +114,7 @@ pub(crate) fn activity_kind_from_db(s: &str) -> Result<ActivityKind, DbError> {
         "GitHubIssueClosed" => ActivityKind::GitHubIssueClosed,
         "GitHubIssueCommented" => ActivityKind::GitHubIssueCommented,
         "GitHubIssueAssigned" => ActivityKind::GitHubIssueAssigned,
+        "OutlookMeetingAttended" => ActivityKind::OutlookMeetingAttended,
         other => {
             return Err(DbError::InvalidData {
                 column: "activity_events.kind".into(),
@@ -231,6 +235,8 @@ pub(crate) fn source_identity_kind_to_db(k: &SourceIdentityKind) -> &'static str
         SourceIdentityKind::GitHubLogin => "GitHubLogin",
         SourceIdentityKind::GitHubUserId => "GitHubUserId",
         SourceIdentityKind::AtlassianAccountId => "AtlassianAccountId",
+        SourceIdentityKind::OutlookUserObjectId => "OutlookUserObjectId",
+        SourceIdentityKind::OutlookUserPrincipalName => "OutlookUserPrincipalName",
     }
 }
 
@@ -242,6 +248,8 @@ pub(crate) fn source_identity_kind_from_db(s: &str) -> Result<SourceIdentityKind
         "GitHubLogin" => Ok(SourceIdentityKind::GitHubLogin),
         "GitHubUserId" => Ok(SourceIdentityKind::GitHubUserId),
         "AtlassianAccountId" => Ok(SourceIdentityKind::AtlassianAccountId),
+        "OutlookUserObjectId" => Ok(SourceIdentityKind::OutlookUserObjectId),
+        "OutlookUserPrincipalName" => Ok(SourceIdentityKind::OutlookUserPrincipalName),
         other => Err(DbError::InvalidData {
             column: "source_identities.kind".into(),
             message: format!("unknown SourceIdentityKind `{other}`"),

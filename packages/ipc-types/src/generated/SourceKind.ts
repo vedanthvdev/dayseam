@@ -13,4 +13,4 @@
  * core-types amendment. The connector scaffolds in DAY-76 / DAY-79
  * add the matching [`SourceConfig`] variants.
  */
-export type SourceKind = "GitLab" | "LocalGit" | "Jira" | "Confluence" | "GitHub";
+export type SourceKind = "GitLab" | "LocalGit" | "Jira" | "Confluence" | "GitHub" | "Outlook";
